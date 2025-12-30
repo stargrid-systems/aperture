@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["aperture", "aperture-http", "aperture-rpc", "aperture-storage"]
+
+[workspace.package]
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+repository = "https://github.com/stargrid-systems/aperture"
+rust-version = "1.93"
+
+[workspace.dependencies]
+aperture-rpc = { version = "0.1.0", path = "aperture-rpc" }
+aperture-storage = { version = "0.1.0", path = "aperture-storage" }
+
+axum = { version = "0.8", default-features = false }
+facet = { version = "0.32", default-features = false }
+facet-args = { version = "0.32", default-features = false }
+rapace = { version = "0.5", default-features = false }
+tracing = { version = "0.1", default-features = false }
+turso = { version = "0.3", default-features = false }

@@ -1,0 +1,13 @@
+[package]
+name = "aperture-storage"
+version = "0.1.0"
+description = "Aperture storage layer."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+turso = { workspace = true }
