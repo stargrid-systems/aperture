@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = [
+    "aperture",
+    "aperture-core",
+    "aperture-http",
+    "aperture-rpc",
+    "aperture-storage",
+]
+
+[workspace.package]
+authors = ["Simon Berger <simon@siku2.io>"]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+repository = "https://github.com/stargrid-systems/aperture"
+rust-version = "1.93"
+
+[workspace.dependencies]
+aperture-core = { version = "0.1.0", path = "aperture-core" }
+aperture-rpc = { version = "0.1.0", path = "aperture-rpc" }
+aperture-storage = { version = "0.1.0", path = "aperture-storage" }
+
+astral-tokio-tar = { version = "0.5", default-features = false }
+async-compression = { version = "0.4", default-features = false }
+axum = { version = "0.8", default-features = false }
+bytes = { version = "1", default-features = false }
+facet = { version = "0.41", default-features = false }
+facet-args = { version = "0.41", default-features = false }
+facet-error = { version = "0.41", default-features = false }
+facet-json = { version = "0.41", default-features = false }
+miette = { version = "7", default-features = false }
+oci-client = { version = "0.15", default-features = false }
+rapace = { version = "0.5", default-features = false }
+tokio = { version = "1", default-features = false }
+tower-http = { version = "0.6", default-features = false }
+tracing = { version = "0.1", default-features = false }
+turso = { version = "0.3", default-features = false }
+
+[patch.crates-io]
+rapace = { git = "https://github.com/bearcove/rapace.git", rev = "4cd1ad2cd46672804423f1d7a2035ef57b3ddd89" }
