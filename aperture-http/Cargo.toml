@@ -1,0 +1,27 @@
+[package]
+name = "aperture-http"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aperture-core = { workspace = true }
+astral-tokio-tar = { workspace = true }
+async-compression = { workspace = true, features = ["gzip", "tokio"] }
+axum = { workspace = true }
+bytes = { workspace = true }
+facet = { workspace = true }
+facet-error = { workspace = true }
+facet-json = { workspace = true }
+miette = { workspace = true }
+oci-client = { workspace = true, features = ["rustls-tls"] }
+tokio = { workspace = true }
+tower-http = { workspace = true, features = ["fs"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true, features = ["tokio", "http2"] }
