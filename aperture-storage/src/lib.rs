@@ -4,6 +4,4 @@ struct Storage {
     connection: Connection,
 }
 
-impl Storage {
-
-}
+impl Storage {}
