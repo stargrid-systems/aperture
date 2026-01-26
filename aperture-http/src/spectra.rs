@@ -53,6 +53,7 @@ impl Spectra {
 
     pub fn service(&self) -> ServeDir<ServeFile> {
         let live_dir = self.path.join(LIVE_DIR);
+        // TODO: attach middleware that sets etag header based on the image digest.
         let fallback = ServeFile::new(live_dir.join("200.html"));
         ServeDir::new(live_dir)
             .append_index_html_on_directories(true)

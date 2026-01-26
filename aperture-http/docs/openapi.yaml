@@ -1,0 +1,13 @@
+openapi: "3.1.1"
+info:
+  title: "Aperture"
+  license:
+    name: "GNU Affero General Public License v3.0 or later"
+    identifier: "AGPL-3.0-or-later"
+  version: "1.0.0"
+
+servers:
+  - url: "http://localhost:8080/api/v1"
+
+paths:
+  /cellguard: {}
