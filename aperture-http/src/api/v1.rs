@@ -4,7 +4,7 @@ use axum::routing::get;
 pub fn router() -> Router {
     Router::new()
         .without_v07_checks()
-        .route("version", get(get_version))
+        .route("/version", get(get_version))
 }
 
 async fn get_version() -> &'static str {
