@@ -87,7 +87,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "aperture"
 version = "0.1.0"
 dependencies = [
- "facet",
+ "facet 0.43.2",
  "facet-args",
  "miette",
 ]
@@ -105,7 +105,7 @@ dependencies = [
  "async-compression",
  "axum",
  "bytes",
- "facet",
+ "facet 0.43.2",
  "facet-error",
  "facet-json",
  "miette",
@@ -723,8 +723,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e338357cf598728b41e45744d024bdc063338214992361766928a1421bd7541d"
 dependencies = [
  "autocfg",
- "facet-core",
- "facet-macros",
+ "facet-core 0.43.2",
+ "facet-macros 0.43.2",
+]
+
+[[package]]
+name = "facet"
+version = "0.46.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df488bcda61dde160301ee6bce43d42397db599ffc689381a1873b5f035135f9"
+dependencies = [
+ "autocfg",
+ "facet-core 0.46.5",
+ "facet-macros 0.46.5",
 ]
 
 [[package]]
@@ -733,8 +744,8 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f4b053f55e2294523c4e8f0b950ee83e7388dfce12ea384d5ec813e239f244f"
 dependencies = [
- "facet",
- "facet-core",
+ "facet 0.43.2",
+ "facet-core 0.43.2",
  "facet-reflect",
  "heck",
  "owo-colors",
@@ -749,7 +760,19 @@ checksum = "a63e0ade4c53b40220614b8fc2a0a0ce21975941b553081521a195c848b2e9c2"
 dependencies = [
  "autocfg",
  "const-fnv1a-hash",
- "iddqd",
+ "iddqd 0.3.18",
+ "impls",
+]
+
+[[package]]
+name = "facet-core"
+version = "0.46.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c33cf9d80307e9a29f93e5a65ddb65b227b5fa082d649c65d4083345f5d398d0"
+dependencies = [
+ "autocfg",
+ "const-fnv1a-hash",
+ "iddqd 0.4.2",
  "impls",
 ]
 
@@ -759,17 +782,17 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "637aa74d6510e43019c8bb764fce5e999d7cdc1d068a9b993bb2f2325fb533af"
 dependencies = [
- "facet-core",
+ "facet-core 0.43.2",
  "facet-reflect",
 ]
 
 [[package]]
 name = "facet-error"
-version = "0.43.2"
+version = "0.46.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb1b895a18277dc1993136d37489e67394482bcd08085166772f27d7e21434c1"
+checksum = "7fe2c2ae249c219485cb7759cbdc78045cd3a2d7f025235af960e6e0740074f4"
 dependencies = [
- "facet",
+ "facet 0.46.5",
 ]
 
 [[package]]
@@ -778,7 +801,7 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ae2f526d1c4797fffe1e41ccb53104473f947b1f146d0e91a7290658078e22b"
 dependencies = [
- "facet-core",
+ "facet-core 0.43.2",
  "facet-dessert",
  "facet-path",
  "facet-reflect",
@@ -791,8 +814,8 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e761fe27fd484eeef93c996d2dfeadfc04f84c8191ea7f061be864da821778f7"
 dependencies = [
- "facet",
- "facet-core",
+ "facet 0.43.2",
+ "facet-core 0.43.2",
  "facet-format",
  "facet-reflect",
  "memchr",
@@ -804,7 +827,18 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83ea29147986d0e184600cec533c41d6065c3c3d4b5b5745a8403494ca216b09"
 dependencies = [
- "facet-macro-types",
+ "facet-macro-types 0.43.2",
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
+name = "facet-macro-parse"
+version = "0.46.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5ab349bd1823fbfa129e595a826ef7fb4d1b9c7215428b28de18044d009dbc1"
+dependencies = [
+ "facet-macro-types 0.46.5",
  "proc-macro2",
  "quote",
 ]
@@ -821,12 +855,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "facet-macro-types"
+version = "0.46.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79622a74665b47d1744998dd0d15b73eb0eecdfeb16630b436c5f03365b02e55"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unsynn",
+]
+
+[[package]]
 name = "facet-macros"
 version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a784f2fa36d3165b95639af790249dee0d8efdef7d53f9417cace91697e2e3"
 dependencies = [
- "facet-macros-impl",
+ "facet-macros-impl 0.43.2",
+]
+
+[[package]]
+name = "facet-macros"
+version = "0.46.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6656fc7457975f5e1c86791b7a810c40ba53993823ae655f7c331e808c4b5ff"
+dependencies = [
+ "facet-macros-impl 0.46.5",
 ]
 
 [[package]]
@@ -835,8 +889,22 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8f45c6380398bf74e59b97a20012de571502c609e580d84579d1140e491c1c"
 dependencies = [
- "facet-macro-parse",
- "facet-macro-types",
+ "facet-macro-parse 0.43.2",
+ "facet-macro-types 0.43.2",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "unsynn",
+]
+
+[[package]]
+name = "facet-macros-impl"
+version = "0.46.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f462bad2b5a574b2c94e9ad54162704ceacf3200741b4f0fb88020936b9003ec"
+dependencies = [
+ "facet-macro-parse 0.46.5",
+ "facet-macro-types 0.46.5",
  "proc-macro2",
  "quote",
  "strsim",
@@ -849,7 +917,7 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfbb5bdb426428005af0658b46e0c8d73c42b73c59a2a9e47cb52fa2f4dbc8b8"
 dependencies = [
- "facet-core",
+ "facet-core 0.43.2",
 ]
 
 [[package]]
@@ -858,7 +926,7 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4418c9fceaac9adcd055cc3732954d79b5d67ef04fb855dd219f2b314ba26cff"
 dependencies = [
- "facet-core",
+ "facet-core 0.43.2",
 ]
 
 [[package]]
@@ -867,7 +935,7 @@ version = "0.43.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e658ff4822b1ece03ab0cfeee867d41e7483b593be63345468806994d6fcd942"
 dependencies = [
- "facet-core",
+ "facet-core 0.43.2",
  "facet-reflect",
 ]
 
@@ -1433,6 +1501,18 @@ dependencies = [
  "foldhash 0.2.0",
  "hashbrown 0.16.1",
  "rustc-hash 2.1.2",
+]
+
+[[package]]
+name = "iddqd"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7721c885a97a7c67bc8645958710f3f43b5e7ad8644ce6f43b188a77f05fda7"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
