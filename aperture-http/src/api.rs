@@ -1,15 +1,9 @@
-use axum::Router;
-use axum::http::{StatusCode, Uri};
+use utoipa_axum::router::OpenApiRouter;
 
-mod v1;
+use crate::AppState;
 
-pub fn router() -> Router {
-    Router::new()
-        .without_v07_checks()
-        .nest("/v1", self::v1::router())
-        .fallback(fallback)
-}
+pub mod v1;
 
-async fn fallback(_uri: Uri) -> (StatusCode, &'static str) {
-    (StatusCode::NOT_FOUND, "No route found")
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().nest("/v1", self::v1::router())
 }

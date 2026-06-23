@@ -1,49 +1,83 @@
-use std::env;
-use std::sync::LazyLock;
+use std::future::Future;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 
-use facet::Facet;
-use facet_args::HelpConfig;
+use clap::{Args, Parser, Subcommand};
+use miette::IntoDiagnostic;
 
-#[derive(Facet)]
-struct Args {
-    #[facet(facet_args::subcommand)]
+/// Stargrid hardware application gateway.
+#[derive(Debug, Parser)]
+#[command(name = "aperture", version, about)]
+struct Cli {
+    #[command(subcommand)]
     command: Command,
 }
 
-#[derive(Facet)]
-#[repr(u8)]
+#[derive(Debug, Subcommand)]
 enum Command {
+    /// Print version information.
     Version,
-    Run,
+    /// Run the gateway HTTP server.
+    Run(RunArgs),
+    /// Pre-download components (the Spectra frontend) for offline use.
+    Prefetch(PrefetchArgs),
+    /// Print the OpenAPI specification as JSON.
+    Openapi,
 }
 
-static HELP_CONFIG: LazyLock<HelpConfig> = LazyLock::new(|| HelpConfig {
-    program_name: Some(env!("CARGO_PKG_NAME").to_owned()),
-    version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-    description: Some(env!("CARGO_PKG_DESCRIPTION").to_owned()),
-    width: 80,
-});
-
-fn parse_args() -> Result<Args, miette::Report> {
-    let args = env::args().skip(1).collect::<Vec<_>>();
-    // I feel like this shouldn't be necessary...
-    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-    match facet_args::from_slice_with_config(&args, &HELP_CONFIG) {
-        Ok(args) => Ok(args),
-        Err(err) => Err(err.into()),
-    }
+#[derive(Debug, Args)]
+struct RunArgs {
+    /// Address to bind the HTTP server to. Defaults to the IPv6 loopback.
+    #[arg(long, env = "APERTURE_ADDR", default_value = "[::1]:8000")]
+    addr: SocketAddr,
+    /// Directory for runtime data and cached components.
+    #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
+    data_dir: PathBuf,
 }
 
-fn main() -> Result<(), miette::Report> {
-    let args = parse_args()?;
-    match args.command {
+#[derive(Debug, Args)]
+struct PrefetchArgs {
+    /// Directory for runtime data and cached components.
+    #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
+    data_dir: PathBuf,
+}
+
+fn main() -> miette::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
         Command::Version => {
-            // let client = ApertureV1Client::new(session);
+            let core = aperture_core::Core::new();
+            println!("aperture {}", core.version().aperture);
+            Ok(())
         }
-        Command::Run => {
-            let server = aperture::Server::new();
-            // TODO
+        Command::Openapi => {
+            let doc = aperture::openapi();
+            let json = serde_json::to_string_pretty(&doc).into_diagnostic()?;
+            println!("{json}");
+            Ok(())
+        }
+        Command::Run(args) => {
+            init_tracing();
+            block_on(aperture::serve(args.addr, args.data_dir))
+        }
+        Command::Prefetch(args) => {
+            init_tracing();
+            block_on(aperture::prefetch(args.data_dir))
         }
     }
-    Ok(())
+}
+
+fn block_on<F: Future<Output = miette::Result<()>>>(future: F) -> miette::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .into_diagnostic()?;
+    runtime.block_on(future)
+}
+
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 }

@@ -23,7 +23,7 @@ const MAX_BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 pub async fn download_to(path: &Path, image: &Reference) -> miette::Result<()> {
     let client = Client::default();
     let (manifest, _digest) = client
-        .pull_image_manifest(&image, &RegistryAuth::Anonymous)
+        .pull_image_manifest(image, &RegistryAuth::Anonymous)
         .await
         .into_diagnostic()?;
     let layer_desc = find_layer(&manifest).wrap_err("no spectra layer found in image")?;
@@ -33,7 +33,7 @@ pub async fn download_to(path: &Path, image: &Reference) -> miette::Result<()> {
 
     let pull_fut = async {
         client
-            .pull_blob(&image, &layer_desc, write)
+            .pull_blob(image, &layer_desc, write)
             .await
             .into_diagnostic()
     };
