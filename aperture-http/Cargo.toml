@@ -12,16 +12,12 @@ rust-version.workspace = true
 aperture-core = { workspace = true }
 astral-tokio-tar = { workspace = true }
 async-compression = { workspace = true, features = ["gzip", "tokio"] }
-axum = { workspace = true }
-bytes = { workspace = true }
-facet = { workspace = true }
-facet-error = { workspace = true }
-facet-json = { workspace = true }
+axum = { workspace = true, features = ["json"] }
 miette = { workspace = true }
 oci-client = { workspace = true, features = ["rustls-tls"] }
-tokio = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 tower-http = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
-
-[dev-dependencies]
-axum = { workspace = true, features = ["tokio", "http2"] }
+utoipa = { workspace = true, features = ["macros", "axum_extras"] }
+utoipa-axum = { workspace = true }

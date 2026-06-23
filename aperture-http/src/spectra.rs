@@ -41,7 +41,7 @@ impl Spectra {
         let download_dir = self.path.join(DOWNLOAD_DIR);
         let _ = fs::remove_dir_all(&download_dir).await;
         fs::create_dir_all(&download_dir).await.into_diagnostic()?;
-        self::oci::download_to(&download_dir, &image).await?;
+        self::oci::download_to(&download_dir, image).await?;
 
         tracing::info!("download complete, updating live directory");
         let live_dir = self.path.join(LIVE_DIR);
