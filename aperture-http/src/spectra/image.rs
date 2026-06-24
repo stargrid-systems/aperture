@@ -36,6 +36,10 @@ impl SpectraImage {
         })
     }
 
+    fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
     /// Picks the stored file to serve for `request_path`, honouring the
     /// accepted encodings and falling back to the SPA shell.
     pub(super) fn resolve(
@@ -89,7 +93,11 @@ pub(super) struct Resolved {
 
 /// Opens the squashfs at `path` off the async runtime.
 pub(super) async fn open_image(path: PathBuf, digest: String) -> anyhow::Result<SpectraImage> {
-    spawn_blocking(move || SpectraImage::open(&path, &digest)).await?
+    let image = spawn_blocking(move || SpectraImage::open(&path, &digest)).await??;
+    if image.is_empty() {
+        tracing::warn!("spectra image has no servable files; check how it was packed");
+    }
+    Ok(image)
 }
 
 #[cfg(test)]
