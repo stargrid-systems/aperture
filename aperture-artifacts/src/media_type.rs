@@ -7,11 +7,6 @@ use std::fmt;
 pub struct MediaType(Box<str>);
 
 impl MediaType {
-    /// Wraps a media type string.
-    pub fn new(value: impl Into<Box<str>>) -> Self {
-        Self(value.into())
-    }
-
     /// Returns the media type as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -26,12 +21,12 @@ impl fmt::Display for MediaType {
 
 impl From<&str> for MediaType {
     fn from(value: &str) -> Self {
-        Self::new(value)
+        Self(value.into())
     }
 }
 
 impl From<String> for MediaType {
     fn from(value: String) -> Self {
-        Self::new(value)
+        Self(value.into())
     }
 }

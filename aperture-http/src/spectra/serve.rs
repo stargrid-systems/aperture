@@ -4,6 +4,7 @@ use std::io::{self, Read};
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
+use bytes::BytesMut;
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
@@ -19,7 +20,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use super::image::SpectraImage;
 use crate::AppState;
 
-const CHUNK: usize = 64 * 1024;
 const PLACEHOLDER: &str = include_str!("installing.html");
 
 /// Serves the current frontend, or a self-refreshing placeholder while it is
@@ -75,15 +75,18 @@ fn stream_file(fs: &FilesystemReader<'static>, stored: &str, tx: &mpsc::Sender<i
         return;
     };
     let mut reader = fs.file(file).reader();
-    let mut buf = vec![0u8; CHUNK];
+    let block_size = fs.block_size as usize;
+    // Reuse one block-sized buffer. `split_to` hands each chunk to the response
+    // without copying and keeps the rest of the allocation for the next read.
+    let mut buf = BytesMut::new();
     loop {
+        if buf.is_empty() {
+            buf.resize(block_size, 0);
+        }
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(read) => {
-                if tx
-                    .blocking_send(Ok(Bytes::copy_from_slice(&buf[..read])))
-                    .is_err()
-                {
+                if tx.blocking_send(Ok(buf.split_to(read).freeze())).is_err() {
                     break;
                 }
             }

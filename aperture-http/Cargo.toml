@@ -17,6 +17,7 @@ aperture-core = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 axum = { workspace = true, features = ["json"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
+bytes = { workspace = true }
 jiff = { workspace = true, features = ["std", "serde"] }
 mime_guess = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
@@ -27,4 +28,4 @@ utoipa = { workspace = true, features = ["macros", "axum_extras", "jiff_0_2"] }
 utoipa-axum = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["full"] }

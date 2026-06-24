@@ -21,4 +21,4 @@ thiserror = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util", "fs", "sync"] }
+tokio = { workspace = true, features = ["full"] }
