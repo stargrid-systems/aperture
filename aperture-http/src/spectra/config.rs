@@ -3,7 +3,7 @@
 use aperture_artifacts::MediaType;
 
 pub(super) const NAME: &str = "spectra";
-pub(super) const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.0";
+pub(super) const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.1";
 pub(super) const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
 
 /// The image and media type the Spectra frontend is pulled from.
