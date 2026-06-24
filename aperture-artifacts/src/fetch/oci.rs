@@ -5,6 +5,7 @@ use tokio::io::AsyncWriteExt as _;
 
 use super::Fetched;
 use crate::blob::{BlobStore, Digest};
+use crate::downloads::{Progress, ProgressWriter};
 use crate::error::{ArtifactError, Result};
 use crate::media_type::MediaType;
 
@@ -22,12 +23,14 @@ impl OciFetcher {
     }
 
     /// Pulls the single layer matching `media_type` from `reference` into
-    /// `store`, verifying the stored bytes against the advertised digest.
+    /// `store`, verifying the stored bytes against the advertised digest and
+    /// reporting transferred bytes into `progress`.
     pub async fn fetch(
         &self,
         reference: &Reference,
         media_type: &MediaType,
         store: &BlobStore,
+        progress: &Progress,
     ) -> Result<Fetched> {
         let (manifest, _digest) = self
             .client
@@ -39,14 +42,17 @@ impl OciFetcher {
         })?;
         let expected: Digest = layer.digest.parse()?;
         let media_type = MediaType::from(layer.media_type.as_str());
+        progress.set_total(layer.size.max(0) as u64);
 
-        let (temp, mut file) = store.temp_file().await?;
+        let (temp, file) = store.temp_file().await?;
+        let mut writer = ProgressWriter::new(file, progress);
         self.client
-            .pull_blob(reference, layer, &mut file)
+            .pull_blob(reference, layer, &mut writer)
             .await
             .map_err(|err| ArtifactError::Fetch(err.into()))?;
-        file.flush().await?;
-        drop(file);
+        writer.flush().await?;
+        writer.shutdown().await?;
+        drop(writer);
 
         let (digest, size) = store.commit(&temp).await?;
         if digest != expected {

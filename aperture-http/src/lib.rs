@@ -1,9 +1,8 @@
 //! HTTP layer for the Aperture gateway.
 //!
 //! Builds the axum application: a versioned JSON API under `/api` plus the
-//! Spectra single-page frontend served as a fallback.
+//! Spectra frontend served as a fallback.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use aperture_core::Core;
@@ -14,7 +13,8 @@ use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa_axum::router::OpenApiRouter;
 
 use self::api::router as api_routes;
-use self::spectra::Spectra;
+use self::spectra::fallback as spectra_fallback;
+pub use self::spectra::{Spectra, SpectraConfig};
 
 mod api;
 mod dto;
@@ -24,14 +24,20 @@ mod spectra;
 #[derive(Clone)]
 pub struct AppState {
     core: Arc<Core>,
+    spectra: Spectra,
 }
 
 impl AppState {
-    /// Wraps a core service for use as request state.
-    pub fn new(core: Core) -> Self {
+    /// Wraps a core service and the Spectra frontend for use as request state.
+    pub fn new(core: Core, spectra: Spectra) -> Self {
         Self {
             core: Arc::new(core),
+            spectra,
         }
+    }
+
+    pub(crate) fn spectra(&self) -> &Spectra {
+        &self.spectra
     }
 }
 
@@ -48,27 +54,17 @@ pub fn openapi() -> OpenApiSpec {
     self::api_router().split_for_parts().1
 }
 
-/// Pre-downloads the Spectra frontend into `<data_dir>/spectra` for offline
-/// use.
-pub async fn prefetch_spectra(data_dir: PathBuf) -> miette::Result<()> {
-    let mut spectra = Spectra::new(data_dir.join("spectra"));
-    spectra.prep().await
-}
-
 /// Builds the full axum application.
 ///
 /// The JSON API lives under `/api`. Everything else falls back to the Spectra
-/// frontend served from `<data_dir>/spectra`. No network access happens here.
-/// The frontend is expected to be present locally (see the prefetch command).
-pub fn app(state: AppState, data_dir: PathBuf) -> Router {
+/// frontend, which the state's [`Spectra`] serves and fetches on demand.
+pub fn app(state: AppState) -> Router {
     let (api, doc) = self::api_router().split_for_parts();
-    let spectra = Spectra::new(data_dir.join("spectra"));
-
     Router::<AppState>::new()
         .merge(api)
         .route("/api/openapi.json", get(move || openapi_doc(doc.clone())))
+        .fallback(spectra_fallback)
         .with_state(state)
-        .fallback_service(spectra.service())
 }
 
 async fn openapi_doc(doc: OpenApiSpec) -> Json<OpenApiSpec> {

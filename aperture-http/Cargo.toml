@@ -12,15 +12,18 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+aperture-artifacts = { workspace = true }
 aperture-core = { workspace = true }
-astral-tokio-tar = { workspace = true }
-async-compression = { workspace = true, features = ["gzip", "tokio"] }
+anyhow = { workspace = true, features = ["std"] }
 axum = { workspace = true, features = ["json"] }
-miette = { workspace = true }
-oci-client = { workspace = true, features = ["rustls-tls"] }
+backhand = { workspace = true, features = ["gzip", "zstd"] }
+mime_guess = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
-tokio = { workspace = true, features = ["fs", "io-util"] }
-tower-http = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
+tokio-stream = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true, features = ["macros", "axum_extras"] }
 utoipa-axum = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

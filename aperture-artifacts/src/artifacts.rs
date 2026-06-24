@@ -1,5 +1,5 @@
 //! The artifacts store: fetches artifacts into the blob store, records them in
-//! the storage catalog, and keeps the two consistent.
+//! the storage catalog, tracks ongoing downloads, and keeps the two consistent.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -11,6 +11,7 @@ use jiff::Timestamp;
 use oci_client::Reference;
 
 use crate::blob::{BlobStore, Digest};
+use crate::downloads::{DownloadProgress, Downloads, Progress};
 use crate::error::{ArtifactError, Result};
 use crate::fetch::OciFetcher;
 use crate::media_type::MediaType;
@@ -24,12 +25,22 @@ pub struct SyncReport {
     pub removed_entries: usize,
 }
 
-/// Coordinates fetching artifacts, recording them in the catalog, and keeping
-/// the catalog and blob store consistent.
+/// A present artifact located in the blob store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Located {
+    /// Absolute path of the stored blob.
+    pub path: PathBuf,
+    /// Content digest of the stored blob.
+    pub digest: Digest,
+}
+
+/// Coordinates fetching artifacts, recording them in the catalog, tracking
+/// in-flight downloads, and keeping the catalog and blob store consistent.
 pub struct Artifacts {
     storage: Storage,
     blobs: BlobStore,
     oci: OciFetcher,
+    downloads: Downloads,
 }
 
 impl Artifacts {
@@ -39,7 +50,15 @@ impl Artifacts {
             storage,
             blobs: BlobStore::new(store_root),
             oci: OciFetcher::new(),
+            downloads: Downloads::default(),
         }
+    }
+
+    /// Opens storage at `db_path` (applying migrations) and keeps blobs under
+    /// `store_root`.
+    pub async fn open(db_path: &str, store_root: PathBuf) -> Result<Self> {
+        let storage = Storage::open(db_path).await?;
+        Ok(Self::new(storage, store_root))
     }
 
     /// Read access to the storage catalog.
@@ -47,23 +66,77 @@ impl Artifacts {
         &self.storage
     }
 
-    /// Fetches the `media_type` layer of the OCI image at `source` into the
-    /// store and records it in the catalog under `name`. Every attempt, success
-    /// or failure, is logged to the download history.
-    pub async fn pull_oci(
+    /// A snapshot of the downloads currently in flight, for display.
+    pub fn active_downloads(&self) -> Vec<DownloadProgress> {
+        self.downloads.snapshot()
+    }
+
+    /// Returns the stored blob for `name`, if it is present on disk.
+    pub async fn locate(&self, name: &str) -> Result<Option<Located>> {
+        let Some(artifact) = self.storage.artifacts().get(name).await? else {
+            return Ok(None);
+        };
+        let Some(raw) = artifact.digest.as_deref() else {
+            return Ok(None);
+        };
+        let digest: Digest = raw.parse()?;
+        if !self.blobs.contains(&digest).await {
+            return Ok(None);
+        }
+        Ok(Some(Located {
+            path: self.blobs.path(&digest),
+            digest,
+        }))
+    }
+
+    /// Ensures the OCI artifact `name` is present, fetching it from `source`
+    /// only if it is missing. Concurrent calls for the same `name` coalesce
+    /// onto one download. Returns where the blob landed.
+    pub async fn ensure_oci(
         &self,
         name: &str,
         kind: ArtifactKind,
         source: &str,
         media_type: &MediaType,
-    ) -> Result<Artifact> {
+    ) -> Result<Located> {
+        if let Some(located) = self.locate(name).await? {
+            return Ok(located);
+        }
+
+        self.downloads
+            .run(name, source, |progress| async move {
+                self.download_oci(name, kind, source, media_type, &progress)
+                    .await
+            })
+            .await?;
+
+        self.locate(name).await?.ok_or_else(|| {
+            ArtifactError::Fetch(anyhow::format_err!("{name} missing after download"))
+        })
+    }
+
+    /// Fetches the `media_type` layer of the OCI image at `source` into the
+    /// store and records it in the catalog under `name`. Every attempt, success
+    /// or failure, is logged to the download history.
+    async fn download_oci(
+        &self,
+        name: &str,
+        kind: ArtifactKind,
+        source: &str,
+        media_type: &MediaType,
+        progress: &Progress,
+    ) -> Result<()> {
         let reference: Reference = source.parse().map_err(|err| {
             ArtifactError::Fetch(anyhow::format_err!("invalid reference {source:?}: {err}"))
         })?;
         let started = Timestamp::now();
         let repository = self.storage.artifacts();
 
-        match self.oci.fetch(&reference, media_type, &self.blobs).await {
+        match self
+            .oci
+            .fetch(&reference, media_type, &self.blobs, progress)
+            .await
+        {
             Ok(fetched) => {
                 let finished = Timestamp::now();
                 let artifact = Artifact {
@@ -97,7 +170,7 @@ impl Artifacts {
                         error: None,
                     })
                     .await?;
-                Ok(artifact)
+                Ok(())
             }
             Err(err) => {
                 let finished = Timestamp::now();
@@ -149,6 +222,7 @@ impl Artifacts {
                 report.removed_blobs += 1;
             }
         }
+
         Ok(report)
     }
 }

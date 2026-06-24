@@ -18,7 +18,7 @@ jiff = { workspace = true, features = ["std"] }
 oci-client = { workspace = true, features = ["rustls-tls"] }
 sha2 = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "time", "net", "io-util", "fs"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "net", "io-util", "fs", "sync"] }

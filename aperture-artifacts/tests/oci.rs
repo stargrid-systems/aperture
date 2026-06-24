@@ -12,8 +12,8 @@ async fn pulls_spectra_from_ghcr() {
 
     let artifacts = Artifacts::new(storage, root.clone());
     let media_type = MediaType::from("application/vnd.spectra.tar+gzip");
-    let artifact = artifacts
-        .pull_oci(
+    let located = artifacts
+        .ensure_oci(
             "spectra",
             ArtifactKind::Oci,
             "ghcr.io/stargrid-systems/spectra:0.2.0",
@@ -22,16 +22,29 @@ async fn pulls_spectra_from_ghcr() {
         .await
         .unwrap();
 
-    assert_eq!(artifact.name, "spectra");
-    assert_eq!(artifact.status, ArtifactStatus::Present);
-    assert!(artifact.size_bytes.unwrap_or(0) > 0);
-    assert!(artifact.digest.unwrap().starts_with("sha256:"));
+    assert!(located.path.is_file());
+    assert!(located.digest.to_string().starts_with("sha256:"));
 
     let repo = artifacts.storage().artifacts();
-    assert!(repo.get("spectra").await.unwrap().is_some());
+    let artifact = repo.get("spectra").await.unwrap().unwrap();
+    assert_eq!(artifact.status, ArtifactStatus::Present);
+    assert!(artifact.size_bytes.unwrap_or(0) > 0);
     assert_eq!(repo.downloads_for("spectra").await.unwrap().len(), 1);
 
-    // A sync with the blob present should remove nothing.
+    // A second ensure finds the blob present and does not download again.
+    artifacts
+        .ensure_oci(
+            "spectra",
+            ArtifactKind::Oci,
+            "ghcr.io/stargrid-systems/spectra:0.2.0",
+            &media_type,
+        )
+        .await
+        .unwrap();
+    assert_eq!(repo.downloads_for("spectra").await.unwrap().len(), 1);
+    assert!(artifacts.active_downloads().is_empty());
+
+    // A sync with the blob present removes nothing.
     let report = artifacts.sync().await.unwrap();
     assert_eq!(report.removed_blobs, 0);
     assert_eq!(report.removed_entries, 0);
