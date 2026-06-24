@@ -206,6 +206,18 @@ impl ArtifactRepository {
         Ok(())
     }
 
+    /// Removes the catalog entry for `name`. Does nothing if it is absent.
+    pub async fn delete(&self, name: &str) -> Result<()> {
+        self.connection
+            .execute(
+                sql!(DELETE FROM artifacts WHERE name = ?1),
+                params_from_iter([Value::Text(name.to_owned())]),
+            )
+            .await
+            .map_err(database)?;
+        Ok(())
+    }
+
     /// Returns the catalog entry for `name`, if present.
     pub async fn get(&self, name: &str) -> Result<Option<Artifact>> {
         let mut rows = self

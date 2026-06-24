@@ -115,6 +115,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aperture-artifacts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aperture-storage",
+ "jiff",
+ "oci-client",
+ "sha2",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "aperture-core"
 version = "0.1.0"
 

@@ -1,0 +1,24 @@
+[package]
+name = "aperture-artifacts"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aperture-storage = { workspace = true }
+anyhow = { workspace = true, features = ["std"] }
+jiff = { workspace = true, features = ["std"] }
+oci-client = { workspace = true, features = ["rustls-tls"] }
+sha2 = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "net", "io-util", "fs"] }

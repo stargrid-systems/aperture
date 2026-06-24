@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "aperture",
+    "aperture-artifacts",
     "aperture-core",
     "aperture-http",
     "aperture-storage",
@@ -16,6 +17,7 @@ repository = "https://github.com/stargrid-systems/aperture"
 rust-version = "1.93"
 
 [workspace.dependencies]
+aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
 aperture-core = { version = "0.1.0", path = "aperture-core" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
@@ -30,6 +32,7 @@ miette = { version = "7", default-features = false }
 oci-client = { version = "0.17", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
+sha2 = { version = "0.11", default-features = false }
 thiserror = { version = "2", default-features = false }
 tokio = { version = "1", default-features = false }
 tower-http = { version = "0.7", default-features = false }
