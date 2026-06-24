@@ -17,12 +17,13 @@ aperture-core = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 axum = { workspace = true, features = ["json"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
+jiff = { workspace = true, features = ["std", "serde"] }
 mime_guess = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
-utoipa = { workspace = true, features = ["macros", "axum_extras"] }
+utoipa = { workspace = true, features = ["macros", "axum_extras", "jiff_0_2"] }
 utoipa-axum = { workspace = true }
 
 [dev-dependencies]

@@ -1,5 +1,6 @@
 use aperture_artifacts::DownloadProgress;
 use aperture_core::VersionInfo;
+use jiff::Timestamp;
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -27,7 +28,7 @@ pub struct DownloadResponse {
     /// Where it is being fetched from.
     pub source: String,
     /// When the download started, as an ISO 8601 timestamp.
-    pub started_at: String,
+    pub started_at: Timestamp,
     /// Bytes transferred so far.
     pub done_bytes: u64,
     /// Expected total bytes, if known.
@@ -39,7 +40,7 @@ impl From<DownloadProgress> for DownloadResponse {
         Self {
             name: progress.name,
             source: progress.source,
-            started_at: progress.started_at.to_string(),
+            started_at: progress.started_at,
             done_bytes: progress.done_bytes,
             total_bytes: progress.total_bytes,
         }
