@@ -10,8 +10,10 @@ use aperture_core::Core;
 use axum::routing::get;
 use axum::{Json, Router};
 use utoipa::OpenApi;
+use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa_axum::router::OpenApiRouter;
 
+use self::api::router as api_routes;
 use self::spectra::Spectra;
 
 mod api;
@@ -38,11 +40,11 @@ impl AppState {
 struct ApiDoc;
 
 fn api_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::with_openapi(ApiDoc::openapi()).nest("/api", self::api::router())
+    OpenApiRouter::with_openapi(ApiDoc::openapi()).nest("/api", api_routes())
 }
 
 /// Returns the generated OpenAPI specification for the gateway API.
-pub fn openapi() -> utoipa::openapi::OpenApi {
+pub fn openapi() -> OpenApiSpec {
     self::api_router().split_for_parts().1
 }
 
@@ -69,6 +71,6 @@ pub fn app(state: AppState, data_dir: PathBuf) -> Router {
         .fallback_service(spectra.service())
 }
 
-async fn openapi_doc(doc: utoipa::openapi::OpenApi) -> Json<utoipa::openapi::OpenApi> {
+async fn openapi_doc(doc: OpenApiSpec) -> Json<OpenApiSpec> {
     Json(doc)
 }

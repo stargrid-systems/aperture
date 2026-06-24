@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use miette::IntoDiagnostic;
+use tokio::runtime::Builder;
 
 /// Stargrid hardware application gateway.
 #[derive(Debug, Parser)]
@@ -68,7 +69,7 @@ fn main() -> miette::Result<()> {
 }
 
 fn block_on<F: Future<Output = miette::Result<()>>>(future: F) -> miette::Result<()> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = Builder::new_multi_thread()
         .enable_all()
         .build()
         .into_diagnostic()?;

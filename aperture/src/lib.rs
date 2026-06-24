@@ -7,6 +7,7 @@ use aperture_core::Core;
 use aperture_http::AppState;
 pub use aperture_http::openapi;
 use miette::IntoDiagnostic;
+use tokio::net::TcpListener;
 
 /// Pre-downloads components (the Spectra frontend) into `data_dir` for offline
 /// use.
@@ -19,9 +20,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let state = AppState::new(Core::new());
     let app = aperture_http::app(state, data_dir);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .into_diagnostic()?;
+    let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
     axum::serve(listener, app).await.into_diagnostic()?;
     Ok(())

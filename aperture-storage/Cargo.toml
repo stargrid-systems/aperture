@@ -9,5 +9,14 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
+anyhow = { workspace = true, features = ["std"] }
+jiff = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
 turso = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
