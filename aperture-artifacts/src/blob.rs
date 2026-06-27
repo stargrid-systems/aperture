@@ -1,18 +1,18 @@
 //! Content-addressed blob store.
 
+use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt, process};
 
-use sha2::{Digest as _, Sha256};
 use tokio::fs;
-use tokio::io::{self, AsyncBufReadExt, AsyncRead, AsyncWriteExt as _};
+use tokio::io::{self, AsyncRead};
 
 use crate::error::{ArtifactError, Result};
+use crate::hash_writer::HashWriter;
 
 const ALGORITHM: &str = "sha256";
-const CHUNK: usize = 64 * 1024;
 const HEX_LEN: usize = 64;
 
 /// A content digest (sha256).
@@ -22,13 +22,15 @@ pub struct Digest {
 }
 
 impl Digest {
-    fn from_hash(hash: &[u8]) -> Self {
-        let hex = hash
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-            .into_boxed_str();
-        Self { hex }
+    pub(crate) fn from_hash(hash: &[u8]) -> Self {
+        let mut hex = String::new();
+        hex.reserve_exact(hash.len() * 2);
+        for byte in hash {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        Self {
+            hex: hex.into_boxed_str(),
+        }
     }
 
     /// Returns the hex digest without the algorithm prefix.
@@ -136,7 +138,7 @@ impl BlobStore {
 
     /// Creates an empty temporary file to stream a blob into, returning its
     /// path and an open handle. Finish the write and store it with
-    /// [`BlobStore::commit`].
+    /// [`BlobStore::place`].
     pub async fn temp_file(&self) -> Result<(PathBuf, fs::File)> {
         fs::create_dir_all(self.tmp_dir()).await?;
         let path = self.tmp_dir().join(tmp_name());
@@ -144,30 +146,12 @@ impl BlobStore {
         Ok((path, file))
     }
 
-    /// Hashes the file at `temp`, moves it into the store under its digest, and
-    /// returns the digest and byte length.
-    pub async fn commit(&self, temp: &Path) -> Result<(Digest, u64)> {
-        let file = fs::File::open(temp).await?;
-        let mut file = io::BufReader::with_capacity(CHUNK, file);
-        let mut hasher = Sha256::new();
-        let mut total = 0u64;
-        loop {
-            let buf = file.fill_buf().await?;
-            if buf.is_empty() {
-                break;
-            }
-            hasher.update(buf);
-            let read = buf.len();
-            total += read as u64;
-            file.consume(read);
-        }
-        drop(file);
-
-        let hash = hasher.finalize();
-        let digest = Digest::from_hash(&hash);
+    /// Moves the file at `temp` into the store under `digest`. The caller is
+    /// responsible for ensuring the file's content matches `digest`.
+    pub async fn place(&self, temp: &Path, digest: &Digest) -> Result<()> {
         fs::create_dir_all(self.blob_dir()).await?;
-        fs::rename(temp, self.path(&digest)).await?;
-        Ok((digest, total))
+        fs::rename(temp, self.path(digest)).await?;
+        Ok(())
     }
 
     /// Streams `reader` into the store. Returns the content digest and length.
@@ -175,11 +159,26 @@ impl BlobStore {
     where
         R: AsyncRead + Unpin,
     {
-        let (temp, mut file) = self.temp_file().await?;
-        io::copy(&mut reader, &mut file).await?;
-        file.flush().await?;
-        drop(file);
-        self.commit(&temp).await
+        let (temp, file) = self.temp_file().await?;
+        let write_result = async {
+            let mut writer = HashWriter::new(file);
+            io::copy(&mut reader, &mut writer).await?;
+            writer.finalize().await
+        }
+        .await;
+        match write_result {
+            Ok((digest, size)) => match self.place(&temp, &digest).await {
+                Ok(()) => Ok((digest, size)),
+                Err(err) => {
+                    let _ = remove_if_exists(temp).await;
+                    Err(err)
+                }
+            },
+            Err(err) => {
+                let _ = remove_if_exists(temp).await;
+                Err(err.into())
+            }
+        }
     }
 }
 

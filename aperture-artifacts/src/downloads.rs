@@ -173,6 +173,10 @@ impl<'a, W> ProgressWriter<'a, W> {
     pub(crate) fn new(inner: W, progress: &'a Progress) -> Self {
         Self { inner, progress }
     }
+
+    pub(crate) fn into_inner(self) -> W {
+        self.inner
+    }
 }
 
 impl<W: AsyncWrite + Unpin> AsyncWrite for ProgressWriter<'_, W> {

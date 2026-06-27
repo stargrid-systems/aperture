@@ -21,7 +21,7 @@ bytes = { workspace = true }
 jiff = { workspace = true, features = ["std", "serde"] }
 mime_guess = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true, features = ["macros", "axum_extras", "jiff_0_2"] }

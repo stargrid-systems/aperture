@@ -17,4 +17,5 @@ mod blob;
 mod downloads;
 mod error;
 mod fetch;
+mod hash_writer;
 mod media_type;

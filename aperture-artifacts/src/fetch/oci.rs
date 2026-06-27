@@ -1,12 +1,13 @@
 use oci_client::manifest::{OciDescriptor, OciImageManifest};
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
-use tokio::io::AsyncWriteExt as _;
+use tokio::fs;
 
 use super::Fetched;
 use crate::blob::{BlobStore, Digest};
 use crate::downloads::{Progress, ProgressWriter};
 use crate::error::{ArtifactError, Result};
+use crate::hash_writer::HashWriter;
 use crate::media_type::MediaType;
 
 /// Fetches OCI image layers from a registry into a blob store.
@@ -45,22 +46,34 @@ impl OciFetcher {
         progress.set_total(layer.size.max(0) as u64);
 
         let (temp, file) = store.temp_file().await?;
-        let mut writer = ProgressWriter::new(file, progress);
-        self.client
-            .pull_blob(reference, layer, &mut writer)
-            .await
-            .map_err(|err| ArtifactError::Fetch(err.into()))?;
-        writer.flush().await?;
-        writer.shutdown().await?;
-        drop(writer);
 
-        let (digest, size) = store.commit(&temp).await?;
+        let write_result: Result<(Digest, u64)> = async {
+            let mut writer = ProgressWriter::new(HashWriter::new(file), progress);
+            self.client
+                .pull_blob(reference, layer, &mut writer)
+                .await
+                .map_err(|err| ArtifactError::Fetch(err.into()))?;
+            writer.into_inner().finalize().await.map_err(Into::into)
+        }
+        .await;
+
+        let (digest, size) = match write_result {
+            Ok(v) => v,
+            Err(err) => {
+                let _ = fs::remove_file(&temp).await;
+                return Err(err);
+            }
+        };
+
         if digest != expected {
+            let _ = fs::remove_file(&temp).await;
             return Err(ArtifactError::DigestMismatch {
                 expected: expected.to_string(),
                 actual: digest.to_string(),
             });
         }
+
+        store.place(&temp, &digest).await?;
         Ok(Fetched {
             digest,
             media_type,

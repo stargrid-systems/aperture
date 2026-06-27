@@ -1,10 +1,11 @@
 //! Serving the current frontend over HTTP, or a placeholder while it installs.
 
 use std::io::{self, Read};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use axum::body::{Body, Bytes};
-use bytes::BytesMut;
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
@@ -12,9 +13,11 @@ use axum::http::header::{
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use backhand::{FilesystemReader, InnerNode};
+use backhand::{FilesystemReader, FilesystemReaderFile, SquashfsFileReader};
+use bytes::BytesMut;
 use tokio::sync::mpsc;
-use tokio::task::spawn_blocking;
+use tokio::task::{JoinHandle, spawn_blocking};
+use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::image::SpectraImage;
@@ -45,14 +48,10 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    let fs = Arc::clone(&image.fs);
-    let stored = resolved.stored.clone();
-    let (tx, rx) = mpsc::channel::<io::Result<Bytes>>(8);
-    spawn_blocking(move || stream_file(&fs, &stored, &tx));
-
+    let stream = SquashfsFileStream::new(Arc::clone(&image.fs), resolved.file);
     let content_type = HeaderValue::from_str(resolved.content_type.as_ref())
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
-    let mut response = Response::new(Body::from_stream(ReceiverStream::new(rx)));
+    let mut response = Response::new(Body::from_stream(stream));
     let headers = response.headers_mut();
     headers.insert(CONTENT_TYPE, content_type);
     headers.insert(ETAG, image.etag.clone());
@@ -64,17 +63,72 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
     response
 }
 
-fn stream_file(fs: &FilesystemReader<'static>, stored: &str, tx: &mpsc::Sender<io::Result<Bytes>>) {
-    let Some(node) = fs
-        .files()
-        .find(|node| node.fullpath.to_string_lossy() == stored)
-    else {
-        return;
-    };
-    let InnerNode::File(file) = &node.inner else {
-        return;
-    };
-    let mut reader = fs.file(file).reader();
+#[derive(Clone, Copy)]
+enum SquashfsState {
+    Reading,
+    Finishing,
+    Done,
+}
+
+struct SquashfsFileStream {
+    stream: ReceiverStream<Bytes>,
+    handle: JoinHandle<io::Result<()>>,
+    state: SquashfsState,
+}
+
+impl SquashfsFileStream {
+    fn new(fs: Arc<FilesystemReader<'static>>, file: SquashfsFileReader) -> Self {
+        let (tx, rx) = mpsc::channel::<Bytes>(8);
+        let handle = spawn_blocking(move || stream_file(&fs, &file, &tx));
+        Self {
+            stream: ReceiverStream::new(rx),
+            handle,
+            state: SquashfsState::Reading,
+        }
+    }
+}
+
+impl Stream for SquashfsFileStream {
+    type Item = io::Result<Bytes>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        loop {
+            match this.state {
+                SquashfsState::Done => return Poll::Ready(None),
+                SquashfsState::Reading => match Pin::new(&mut this.stream).poll_next(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Some(bytes)) => return Poll::Ready(Some(Ok(bytes))),
+                    Poll::Ready(None) => this.state = SquashfsState::Finishing,
+                },
+                SquashfsState::Finishing => match Pin::new(&mut this.handle).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Ok(Ok(()))) => {
+                        this.state = SquashfsState::Done;
+                        return Poll::Ready(None);
+                    }
+                    Poll::Ready(Ok(Err(e))) => {
+                        this.state = SquashfsState::Done;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Ready(Err(_)) => {
+                        this.state = SquashfsState::Done;
+                        return Poll::Ready(Some(Err(io::Error::other(
+                            "internal error serving file",
+                        ))));
+                    }
+                },
+            }
+        }
+    }
+}
+
+fn stream_file(
+    fs: &FilesystemReader<'static>,
+    file: &SquashfsFileReader,
+    tx: &mpsc::Sender<Bytes>,
+) -> io::Result<()> {
+    let mut reader = FilesystemReaderFile::new(fs, file).reader();
     let block_size = fs.block_size as usize;
     // Reuse one block-sized buffer. `split_to` hands each chunk to the response
     // without copying and keeps the rest of the allocation for the next read.
@@ -84,16 +138,13 @@ fn stream_file(fs: &FilesystemReader<'static>, stored: &str, tx: &mpsc::Sender<i
             buf.resize(block_size, 0);
         }
         match reader.read(&mut buf) {
-            Ok(0) => break,
+            Ok(0) => return Ok(()),
             Ok(read) => {
-                if tx.blocking_send(Ok(buf.split_to(read).freeze())).is_err() {
-                    break;
+                if tx.blocking_send(buf.split_to(read).freeze()).is_err() {
+                    return Ok(());
                 }
             }
-            Err(error) => {
-                let _ = tx.blocking_send(Err(error));
-                break;
-            }
+            Err(error) => return Err(error),
         }
     }
 }
@@ -122,7 +173,26 @@ fn accepted_encodings(headers: &HeaderMap) -> (bool, bool) {
         .get(ACCEPT_ENCODING)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    (value.contains("br"), value.contains("gzip"))
+    let mut accept_br = false;
+    let mut accept_gzip = false;
+    for entry in value.split(',') {
+        let mut parts = entry.splitn(2, ';');
+        let name = parts.next().unwrap_or("").trim();
+        let q = parts
+            .next()
+            .and_then(|p| p.trim().strip_prefix("q="))
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(1.0);
+        if q > 0.0 {
+            if name.eq_ignore_ascii_case("br") {
+                accept_br = true;
+            }
+            if name.eq_ignore_ascii_case("gzip") {
+                accept_gzip = true;
+            }
+        }
+    }
+    (accept_br, accept_gzip)
 }
 
 #[cfg(test)]

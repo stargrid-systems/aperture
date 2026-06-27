@@ -1,20 +1,20 @@
 //! Reading the Spectra frontend out of a squashfs image.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::http::HeaderValue;
-use backhand::{FilesystemReader, InnerNode};
+use backhand::{FilesystemReader, InnerNode, SquashfsFileReader};
 use mime_guess::Mime;
 use tokio::task::spawn_blocking;
 
 /// An opened squashfs image plus the index of files it holds.
 pub(super) struct SpectraImage {
     pub(super) fs: Arc<FilesystemReader<'static>>,
-    files: HashSet<String>,
+    files: HashMap<String, SquashfsFileReader>,
     pub(super) etag: HeaderValue,
 }
 
@@ -24,8 +24,13 @@ impl SpectraImage {
         let fs = FilesystemReader::from_reader(reader)?;
         let files = fs
             .files()
-            .filter(|node| matches!(node.inner, InnerNode::File(_)))
-            .map(|node| node.fullpath.to_string_lossy().into_owned())
+            .filter_map(|node| {
+                if let InnerNode::File(file) = &node.inner {
+                    Some((node.fullpath.to_string_lossy().into_owned(), file.clone()))
+                } else {
+                    None
+                }
+            })
             .collect();
         let etag = HeaderValue::from_str(&format!("\"{digest}\""))
             .unwrap_or_else(|_| HeaderValue::from_static("\"spectra\""));
@@ -59,23 +64,25 @@ impl SpectraImage {
 
     fn pick(&self, base: &str, accept_br: bool, accept_gzip: bool) -> Option<Resolved> {
         let content_type = mime_guess::from_path(base).first_or_octet_stream();
-        if accept_br && self.files.contains(&format!("{base}.br")) {
+        if accept_br
+            && let Some(file) = self.files.get(&format!("{base}.br")) {
+                return Some(Resolved {
+                    file: file.clone(),
+                    encoding: Some("br"),
+                    content_type,
+                });
+            }
+        if accept_gzip
+            && let Some(file) = self.files.get(&format!("{base}.gz")) {
+                return Some(Resolved {
+                    file: file.clone(),
+                    encoding: Some("gzip"),
+                    content_type,
+                });
+            }
+        if let Some(file) = self.files.get(base) {
             return Some(Resolved {
-                stored: format!("{base}.br"),
-                encoding: Some("br"),
-                content_type,
-            });
-        }
-        if accept_gzip && self.files.contains(&format!("{base}.gz")) {
-            return Some(Resolved {
-                stored: format!("{base}.gz"),
-                encoding: Some("gzip"),
-                content_type,
-            });
-        }
-        if self.files.contains(base) {
-            return Some(Resolved {
-                stored: base.to_owned(),
+                file: file.clone(),
                 encoding: None,
                 content_type,
             });
@@ -86,7 +93,7 @@ impl SpectraImage {
 
 /// The file picked to serve a request, with its wire encoding and type.
 pub(super) struct Resolved {
-    pub(super) stored: String,
+    pub(super) file: SquashfsFileReader,
     pub(super) encoding: Option<&'static str>,
     pub(super) content_type: Mime,
 }
@@ -113,7 +120,6 @@ mod tests {
     #[test]
     fn resolves_root_to_index() {
         let resolved = image().resolve("/", false, false).unwrap();
-        assert_eq!(resolved.stored, "/index.html");
         assert_eq!(resolved.encoding, None);
         assert!(resolved.content_type.essence_str().starts_with("text/html"));
     }
@@ -121,13 +127,12 @@ mod tests {
     #[test]
     fn falls_back_to_spa_shell() {
         let resolved = image().resolve("/deep/link", false, false).unwrap();
-        assert_eq!(resolved.stored, "/200.html");
+        assert!(resolved.content_type.essence_str().starts_with("text/html"));
     }
 
     #[test]
     fn prefers_brotli_when_accepted() {
         let resolved = image().resolve("/_nuxt/app.js", true, true).unwrap();
-        assert_eq!(resolved.stored, "/_nuxt/app.js.br");
         assert_eq!(resolved.encoding, Some("br"));
         assert!(resolved.content_type.essence_str().contains("javascript"));
     }
@@ -135,7 +140,7 @@ mod tests {
     #[test]
     fn serves_identity_without_accept_encoding() {
         let resolved = image().resolve("/_nuxt/app.js", false, false).unwrap();
-        assert_eq!(resolved.stored, "/_nuxt/app.js");
         assert_eq!(resolved.encoding, None);
+        assert!(resolved.content_type.essence_str().contains("javascript"));
     }
 }

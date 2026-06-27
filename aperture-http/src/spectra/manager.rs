@@ -3,8 +3,10 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use aperture_artifacts::{ArtifactKind, Artifacts};
+use tokio::time;
 
 use super::config::SpectraConfig;
 use super::image::{SpectraImage, open_image};
@@ -71,10 +73,12 @@ impl Spectra {
         if self.preparing.swap(true, Ordering::SeqCst) {
             return;
         }
+        // TODO: switch to a proper task management system!
         let this = self.clone();
         tokio::spawn(async move {
             if let Err(error) = this.prepare().await {
                 tracing::error!(%error, "failed to prepare spectra frontend");
+                time::sleep(Duration::from_secs(30)).await;
             }
             this.preparing.store(false, Ordering::SeqCst);
         });
