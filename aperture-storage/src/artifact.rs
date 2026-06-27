@@ -92,53 +92,40 @@ pub struct Artifact {
     pub verified_at: Option<Timestamp>,
 }
 
-/// The outcome of a single download attempt.
+/// Lifecycle state of a single download attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DownloadResult {
-    /// The download completed successfully.
-    Success,
-    /// The download failed.
-    Failure,
+pub enum DownloadStatus {
+    /// The attempt is in progress.
+    Running,
+    /// The attempt completed successfully.
+    Succeeded,
+    /// The attempt failed.
+    Failed,
+    /// The attempt was still running when the process stopped.
+    Interrupted,
 }
 
-impl DownloadResult {
+impl DownloadStatus {
     fn as_db(self) -> &'static str {
         match self {
-            Self::Success => "success",
-            Self::Failure => "failure",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
         }
     }
 
     fn from_db(value: &str) -> Result<Self> {
         match value {
-            "success" => Ok(Self::Success),
-            "failure" => Ok(Self::Failure),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            "interrupted" => Ok(Self::Interrupted),
             other => Err(StorageError::Decode(format!(
-                "unknown download result {other:?}"
+                "unknown download status {other:?}"
             ))),
         }
     }
-}
-
-/// A download attempt to record. The id is assigned by the store.
-#[derive(Debug, Clone)]
-pub struct NewDownload {
-    /// Name of the artifact this attempt is for.
-    pub artifact: String,
-    /// When the attempt started.
-    pub started_at: Timestamp,
-    /// When the attempt finished, if it did.
-    pub finished_at: Option<Timestamp>,
-    /// The outcome.
-    pub result: DownloadResult,
-    /// Resolved content digest, if the attempt got that far.
-    pub digest: Option<String>,
-    /// Number of bytes transferred.
-    pub size_bytes: Option<i64>,
-    /// Where the attempt fetched from.
-    pub source: String,
-    /// Failure detail, if any.
-    pub error: Option<String>,
 }
 
 /// A recorded download attempt, including its assigned id.
@@ -152,8 +139,8 @@ pub struct Download {
     pub started_at: Timestamp,
     /// When the attempt finished, if it did.
     pub finished_at: Option<Timestamp>,
-    /// The outcome.
-    pub result: DownloadResult,
+    /// The lifecycle state.
+    pub status: DownloadStatus,
     /// Resolved content digest, if the attempt got that far.
     pub digest: Option<String>,
     /// Number of bytes transferred.
@@ -254,24 +241,25 @@ impl ArtifactRepository {
         Ok(artifacts)
     }
 
-    /// Records a download attempt and returns its assigned id.
-    pub async fn record_download(&self, download: &NewDownload) -> Result<i64> {
+    /// Records the start of a download attempt and returns its assigned id.
+    /// The row begins in the [`DownloadStatus::Running`] state.
+    pub async fn start_download(
+        &self,
+        artifact: &str,
+        source: &str,
+        started_at: Timestamp,
+    ) -> Result<i64> {
         let params = params_from_iter([
-            Value::Text(download.artifact.clone()),
-            Value::Integer(download.started_at.as_millisecond()),
-            ts_or_null(download.finished_at),
-            Value::Text(download.result.as_db().to_owned()),
-            text_or_null(&download.digest),
-            int_or_null(download.size_bytes),
-            Value::Text(download.source.clone()),
-            text_or_null(&download.error),
+            Value::Text(artifact.to_owned()),
+            Value::Integer(started_at.as_millisecond()),
+            Value::Text(DownloadStatus::Running.as_db().to_owned()),
+            Value::Text(source.to_owned()),
         ]);
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO artifact_downloads
-                    (artifact, started_at, finished_at, result, digest, size_bytes, source, error)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    INSERT INTO artifact_downloads (artifact, started_at, status, source)
+                    VALUES (?1, ?2, ?3, ?4)
                 ),
                 params,
             )
@@ -280,13 +268,66 @@ impl ArtifactRepository {
         Ok(self.connection.last_insert_rowid())
     }
 
+    /// Records the outcome of the download attempt with `id`.
+    pub async fn finish_download(
+        &self,
+        id: i64,
+        status: DownloadStatus,
+        finished_at: Timestamp,
+        digest: Option<&str>,
+        size_bytes: Option<i64>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let params = params_from_iter([
+            Value::Text(status.as_db().to_owned()),
+            Value::Integer(finished_at.as_millisecond()),
+            text_ref_or_null(digest),
+            int_or_null(size_bytes),
+            text_ref_or_null(error),
+            Value::Integer(id),
+        ]);
+        self.connection
+            .execute(
+                sql!(
+                    UPDATE artifact_downloads
+                    SET status = ?1, finished_at = ?2, digest = ?3, size_bytes = ?4, error = ?5
+                    WHERE id = ?6
+                ),
+                params,
+            )
+            .await
+            .map_err(database)?;
+        Ok(())
+    }
+
+    /// Lists attempts still in the [`DownloadStatus::Running`] state. After a
+    /// clean start these are leftovers from a process that stopped mid-download.
+    pub async fn list_running(&self) -> Result<Vec<Download>> {
+        let mut rows = self
+            .connection
+            .query(
+                sql!(
+                    SELECT id, artifact, started_at, finished_at, status, digest, size_bytes, source, error
+                    FROM artifact_downloads WHERE status = ?1 ORDER BY id
+                ),
+                params_from_iter([Value::Text(DownloadStatus::Running.as_db().to_owned())]),
+            )
+            .await
+            .map_err(database)?;
+        let mut downloads = Vec::new();
+        while let Some(row) = rows.next().await.map_err(database)? {
+            downloads.push(row_to_download(&row)?);
+        }
+        Ok(downloads)
+    }
+
     /// Lists the download history for `artifact`, newest first.
     pub async fn downloads_for(&self, artifact: &str) -> Result<Vec<Download>> {
         let mut rows = self
             .connection
             .query(
                 sql!(
-                    SELECT id, artifact, started_at, finished_at, result, digest, size_bytes, source, error
+                    SELECT id, artifact, started_at, finished_at, status, digest, size_bytes, source, error
                     FROM artifact_downloads WHERE artifact = ?1 ORDER BY id DESC
                 ),
                 params_from_iter([Value::Text(artifact.to_owned())]),
@@ -304,6 +345,13 @@ impl ArtifactRepository {
 fn text_or_null(value: &Option<String>) -> Value {
     match value {
         Some(text) => Value::Text(text.clone()),
+        None => Value::Null,
+    }
+}
+
+fn text_ref_or_null(value: Option<&str>) -> Value {
+    match value {
+        Some(text) => Value::Text(text.to_owned()),
         None => Value::Null,
     }
 }
@@ -397,7 +445,7 @@ fn row_to_download(row: &Row) -> Result<Download> {
         artifact: req_text(row, 1)?,
         started_at: req_ts(row, 2)?,
         finished_at: opt_ts(row, 3)?,
-        result: DownloadResult::from_db(&req_text(row, 4)?)?,
+        status: DownloadStatus::from_db(&req_text(row, 4)?)?,
         digest: opt_text(row, 5)?,
         size_bytes: opt_int(row, 6)?,
         source: req_text(row, 7)?,

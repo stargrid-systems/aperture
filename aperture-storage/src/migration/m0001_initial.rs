@@ -20,7 +20,7 @@ pub(super) const SQL: &str = sql!(
         artifact TEXT NOT NULL,
         started_at INTEGER NOT NULL,
         finished_at INTEGER,
-        result TEXT NOT NULL,
+        status TEXT NOT NULL,
         digest TEXT,
         size_bytes INTEGER,
         source TEXT NOT NULL,

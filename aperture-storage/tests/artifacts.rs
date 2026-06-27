@@ -1,8 +1,6 @@
 use std::{env, fs};
 
-use aperture_storage::{
-    Artifact, ArtifactKind, ArtifactStatus, DownloadResult, NewDownload, Storage,
-};
+use aperture_storage::{Artifact, ArtifactKind, ArtifactStatus, DownloadStatus, Storage};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -69,38 +67,61 @@ async fn records_download_history_newest_first() {
     let repo = storage.artifacts();
 
     let started = at(1_700_000_000_000);
-    let first = NewDownload {
-        artifact: "spectra".to_owned(),
-        started_at: started,
-        finished_at: Some(started),
-        result: DownloadResult::Success,
-        digest: Some("sha256:abc".to_owned()),
-        size_bytes: Some(10),
-        source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
-        error: None,
-    };
-    let id1 = repo.record_download(&first).await.unwrap();
+    let source = "ghcr.io/stargrid-systems/spectra:0.2.0";
 
-    let second = NewDownload {
-        result: DownloadResult::Failure,
-        digest: None,
-        size_bytes: None,
-        error: Some("connection reset".to_owned()),
-        ..first.clone()
-    };
-    let id2 = repo.record_download(&second).await.unwrap();
+    let id1 = repo.start_download("spectra", source, started).await.unwrap();
+    repo.finish_download(
+        id1,
+        DownloadStatus::Succeeded,
+        started,
+        Some("sha256:abc"),
+        Some(10),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let id2 = repo.start_download("spectra", source, started).await.unwrap();
+    repo.finish_download(
+        id2,
+        DownloadStatus::Failed,
+        started,
+        None,
+        None,
+        Some("connection reset"),
+    )
+    .await
+    .unwrap();
 
     assert!(id2 > id1);
 
     let history = repo.downloads_for("spectra").await.unwrap();
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].id, id2);
-    assert_eq!(history[0].result, DownloadResult::Failure);
+    assert_eq!(history[0].status, DownloadStatus::Failed);
     assert_eq!(history[0].error.as_deref(), Some("connection reset"));
     assert_eq!(history[1].id, id1);
-    assert_eq!(history[1].result, DownloadResult::Success);
+    assert_eq!(history[1].status, DownloadStatus::Succeeded);
 
     assert!(repo.downloads_for("unknown").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn lists_running_downloads() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.artifacts();
+
+    let started = at(1_700_000_000_000);
+    let running = repo.start_download("spectra", "src", started).await.unwrap();
+    let done = repo.start_download("firmware", "src", started).await.unwrap();
+    repo.finish_download(done, DownloadStatus::Succeeded, started, None, None, None)
+        .await
+        .unwrap();
+
+    let still_running = repo.list_running().await.unwrap();
+    assert_eq!(still_running.len(), 1);
+    assert_eq!(still_running[0].id, running);
+    assert_eq!(still_running[0].status, DownloadStatus::Running);
 }
 
 #[tokio::test]

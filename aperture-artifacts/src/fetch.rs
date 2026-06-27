@@ -24,6 +24,8 @@ pub struct Fetched {
     pub digest: Digest,
     /// The fetched layer's media type.
     pub media_type: MediaType,
+    /// Human-readable version, if the source carries one.
+    pub version: Option<String>,
     /// Number of bytes stored.
     pub size: u64,
 }

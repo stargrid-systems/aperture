@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use aperture_artifacts::{ArtifactKind, Artifacts};
+use aperture_artifacts::{ArtifactKind, Artifacts, FetchRequest, FetchSource};
 use tokio::time;
 
 use super::config::SpectraConfig;
@@ -87,12 +87,14 @@ impl Spectra {
     async fn prepare(&self) -> anyhow::Result<()> {
         let located = self
             .artifacts
-            .ensure_oci(
-                &self.config.name,
-                ArtifactKind::Oci,
-                &self.config.source,
-                &self.config.media_type,
-            )
+            .ensure(FetchRequest {
+                name: self.config.name.clone(),
+                kind: ArtifactKind::Oci,
+                source: FetchSource::Oci {
+                    reference: self.config.source.clone(),
+                    media_type: self.config.media_type.clone(),
+                },
+            })
             .await?;
         let image = open_image(located.path, located.digest.to_string()).await?;
         self.set(Arc::new(image));

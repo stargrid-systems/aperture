@@ -1,12 +1,11 @@
 //! In-memory tracking of ongoing downloads.
 //!
-//! The tracker does two jobs at once. It coalesces concurrent requests for the
-//! same artifact onto a single download (single-flight), and it exposes live
-//! progress so the frontend can show what is being fetched right now. Completed
-//! attempts live in the persistent download history, not here.
+//! The tracker coalesces concurrent requests for the same artifact onto a
+//! single download (single-flight) and exposes live progress so the frontend
+//! can show what is being fetched right now. The durable record of every
+//! attempt lives in the storage catalog, not here.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,11 +16,9 @@ use jiff::Timestamp;
 use tokio::io::AsyncWrite;
 use tokio::sync::watch;
 
-use crate::error::{ArtifactError, Result};
-
-/// Terminal or running state of a single download.
+/// Running or terminal state of a single download.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
+pub(crate) enum Phase {
     Running,
     Succeeded,
     Failed,
@@ -57,11 +54,41 @@ impl Progress {
     }
 }
 
-struct Slot {
+/// The shared state of one in-flight download. Held in the active map and by
+/// every handle observing the download.
+pub(crate) struct Slot {
     source: String,
     started_at: Timestamp,
     progress: Arc<Progress>,
     phase: watch::Sender<Phase>,
+}
+
+impl Slot {
+    /// The byte counters to report transfer against.
+    pub(crate) fn progress(&self) -> &Arc<Progress> {
+        &self.progress
+    }
+
+    /// A receiver that observes the download's phase.
+    pub(crate) fn subscribe(&self) -> watch::Receiver<Phase> {
+        self.phase.subscribe()
+    }
+
+    /// Marks the download as finished. Wakes everyone awaiting it.
+    pub(crate) fn complete(&self, phase: Phase) {
+        let _ = self.phase.send(phase);
+    }
+
+    /// A snapshot of this download for display, labelled with `name`.
+    pub(crate) fn snapshot(&self, name: &str) -> DownloadProgress {
+        DownloadProgress {
+            name: name.to_owned(),
+            source: self.source.clone(),
+            started_at: self.started_at,
+            done_bytes: self.progress.done(),
+            total_bytes: self.progress.total(),
+        }
+    }
 }
 
 /// A snapshot of one ongoing download, for display.
@@ -79,88 +106,60 @@ pub struct DownloadProgress {
     pub total_bytes: Option<u64>,
 }
 
-/// Tracks the downloads currently in flight.
+/// The result of claiming a download slot for an artifact.
+pub(crate) enum Claim {
+    /// No download was in flight. The caller must run it and complete the slot.
+    Owner(Arc<Slot>),
+    /// A download is already in flight. The caller only observes it.
+    Joiner(Arc<Slot>),
+}
+
+/// Tracks the downloads currently in flight, keyed by artifact name.
 #[derive(Clone, Default)]
 pub(crate) struct Downloads {
     active: Arc<Mutex<HashMap<String, Arc<Slot>>>>,
 }
 
 impl Downloads {
-    /// Runs `op` as the single download for `name`, or waits for the download
-    /// already in flight for `name` and reports its outcome.
-    ///
-    /// Only the first caller runs `op`. Later callers wait for it to finish.
-    /// `op` receives a [`Progress`] handle to report bytes against.
-    pub(crate) async fn run<F, Fut>(&self, name: &str, source: &str, op: F) -> Result<()>
-    where
-        F: FnOnce(Arc<Progress>) -> Fut,
-        Fut: Future<Output = Result<()>>,
-    {
-        let role = {
-            let mut active = self.active.lock().unwrap();
-            match active.get(name) {
-                Some(slot) => Role::Joiner(slot.phase.subscribe()),
-                None => {
-                    let (phase, _) = watch::channel(Phase::Running);
-                    let slot = Arc::new(Slot {
-                        source: source.to_owned(),
-                        started_at: Timestamp::now(),
-                        progress: Arc::new(Progress::default()),
-                        phase,
-                    });
-                    active.insert(name.to_owned(), Arc::clone(&slot));
-                    Role::Owner(slot)
-                }
-            }
-        };
-
-        match role {
-            Role::Owner(slot) => {
-                let result = op(Arc::clone(&slot.progress)).await;
-                let phase = if result.is_ok() {
-                    Phase::Succeeded
-                } else {
-                    Phase::Failed
-                };
-                let _ = slot.phase.send(phase);
-                self.active.lock().unwrap().remove(name);
-                result
-            }
-            Role::Joiner(mut phase) => {
-                while *phase.borrow_and_update() == Phase::Running {
-                    if phase.changed().await.is_err() {
-                        break;
-                    }
-                }
-                match *phase.borrow() {
-                    Phase::Succeeded => Ok(()),
-                    _ => Err(ArtifactError::Fetch(anyhow::format_err!(
-                        "a concurrent download of {name} failed"
-                    ))),
-                }
-            }
+    /// Claims the slot for `name`. The first caller becomes the owner and must
+    /// run the download. Later callers join the existing one.
+    pub(crate) fn claim(&self, name: &str, source: &str) -> Claim {
+        let mut active = self.active.lock().expect("downloads poisoned");
+        if let Some(slot) = active.get(name) {
+            return Claim::Joiner(Arc::clone(slot));
         }
+        let (phase, _) = watch::channel(Phase::Running);
+        let slot = Arc::new(Slot {
+            source: source.to_owned(),
+            started_at: Timestamp::now(),
+            progress: Arc::new(Progress::default()),
+            phase,
+        });
+        active.insert(name.to_owned(), Arc::clone(&slot));
+        Claim::Owner(slot)
+    }
+
+    /// Removes the slot for `name` from the active set.
+    pub(crate) fn release(&self, name: &str) {
+        self.active.lock().expect("downloads poisoned").remove(name);
+    }
+
+    /// Returns whether a download for `name` is currently in flight.
+    pub(crate) fn is_active(&self, name: &str) -> bool {
+        self.active
+            .lock()
+            .expect("downloads poisoned")
+            .contains_key(name)
     }
 
     /// A snapshot of all downloads currently in flight.
     pub(crate) fn snapshot(&self) -> Vec<DownloadProgress> {
-        let active = self.active.lock().unwrap();
+        let active = self.active.lock().expect("downloads poisoned");
         active
             .iter()
-            .map(|(name, slot)| DownloadProgress {
-                name: name.clone(),
-                source: slot.source.clone(),
-                started_at: slot.started_at,
-                done_bytes: slot.progress.done(),
-                total_bytes: slot.progress.total(),
-            })
+            .map(|(name, slot)| slot.snapshot(name))
             .collect()
     }
-}
-
-enum Role {
-    Owner(Arc<Slot>),
-    Joiner(watch::Receiver<Phase>),
 }
 
 /// An [`AsyncWrite`] that forwards to `inner` and counts bytes into `progress`.
@@ -198,79 +197,60 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for ProgressWriter<'_, W> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicU32;
-    use std::time::Duration;
-
-    use tokio::sync::Notify;
-    use tokio::time::sleep;
-
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn coalesces_concurrent_runs() {
+    #[test]
+    fn claim_coalesces_until_released() {
         let downloads = Downloads::default();
-        let runs = Arc::new(AtomicU32::new(0));
-        let gate = Arc::new(Notify::new());
 
-        let make = || {
-            let runs = Arc::clone(&runs);
-            let gate = Arc::clone(&gate);
-            move |_progress: Arc<Progress>| async move {
-                runs.fetch_add(1, Ordering::Relaxed);
-                gate.notified().await;
-                Ok(())
-            }
+        let Claim::Owner(owner) = downloads.claim("spectra", "src") else {
+            panic!("first claim should own the slot");
         };
+        let Claim::Joiner(joiner) = downloads.claim("spectra", "src") else {
+            panic!("second claim should join the slot");
+        };
+        assert!(Arc::ptr_eq(&owner, &joiner));
+        assert!(downloads.is_active("spectra"));
 
-        let owner = tokio::spawn({
-            let downloads = downloads.clone();
-            let op = make();
-            async move { downloads.run("spectra", "src", op).await }
-        });
-        let joiner = tokio::spawn({
-            let downloads = downloads.clone();
-            let op = make();
-            async move { downloads.run("spectra", "src", op).await }
-        });
+        owner.complete(Phase::Succeeded);
+        downloads.release("spectra");
+        assert!(!downloads.is_active("spectra"));
 
-        sleep(Duration::from_millis(50)).await;
-        gate.notify_one();
-
-        owner.await.unwrap().unwrap();
-        joiner.await.unwrap().unwrap();
-        assert_eq!(runs.load(Ordering::Relaxed), 1);
-        assert!(downloads.snapshot().is_empty());
+        // A fresh claim after release owns a new slot.
+        assert!(matches!(downloads.claim("spectra", "src"), Claim::Owner(_)));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reports_live_progress() {
+    #[tokio::test]
+    async fn joiner_observes_completion() {
         let downloads = Downloads::default();
-        let gate = Arc::new(Notify::new());
+        let Claim::Owner(owner) = downloads.claim("spectra", "src") else {
+            panic!("expected owner");
+        };
+        let Claim::Joiner(joiner) = downloads.claim("spectra", "src") else {
+            panic!("expected joiner");
+        };
 
-        let running = tokio::spawn({
-            let downloads = downloads.clone();
-            let gate = Arc::clone(&gate);
-            async move {
-                downloads
-                    .run("spectra", "ghcr.io/x", move |progress| async move {
-                        progress.set_total(100);
-                        progress.add(40);
-                        gate.notified().await;
-                        Ok(())
-                    })
-                    .await
-            }
-        });
+        let mut phase = joiner.subscribe();
+        owner.complete(Phase::Succeeded);
+        while *phase.borrow_and_update() == Phase::Running {
+            phase.changed().await.unwrap();
+        }
+        assert_eq!(*phase.borrow(), Phase::Succeeded);
+    }
 
-        sleep(Duration::from_millis(50)).await;
+    #[test]
+    fn snapshot_reports_progress() {
+        let downloads = Downloads::default();
+        let Claim::Owner(owner) = downloads.claim("spectra", "ghcr.io/x") else {
+            panic!("expected owner");
+        };
+        owner.progress().set_total(100);
+        owner.progress().add(40);
+
         let snapshot = downloads.snapshot();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].name, "spectra");
         assert_eq!(snapshot[0].done_bytes, 40);
         assert_eq!(snapshot[0].total_bytes, Some(100));
-
-        gate.notify_one();
-        running.await.unwrap().unwrap();
-        assert!(downloads.snapshot().is_empty());
     }
 }

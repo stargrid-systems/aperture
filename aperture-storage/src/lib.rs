@@ -8,8 +8,7 @@
 use turso::{Builder, Connection};
 
 pub use self::artifact::{
-    Artifact, ArtifactKind, ArtifactRepository, ArtifactStatus, Download, DownloadResult,
-    NewDownload,
+    Artifact, ArtifactKind, ArtifactRepository, ArtifactStatus, Download, DownloadStatus,
 };
 use self::error::database;
 pub use self::error::{Result, StorageError};

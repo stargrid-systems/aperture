@@ -4,9 +4,13 @@
 //! content-addressed blob store, recording each fetch in the storage catalog
 //! and tracking downloads that are in flight.
 
-pub use aperture_storage::{Artifact, ArtifactKind, ArtifactStatus};
+pub use aperture_storage::{
+    Artifact, ArtifactKind, ArtifactStatus, Download, DownloadStatus, Storage,
+};
 
-pub use self::artifacts::{Artifacts, Located, SyncReport};
+pub use self::artifacts::{
+    Artifacts, DownloadHandle, FetchRequest, FetchSource, Located, SyncReport,
+};
 pub use self::blob::BlobStore;
 pub use self::digest::{Digest, DigestAlgorithm};
 pub use self::downloads::DownloadProgress;

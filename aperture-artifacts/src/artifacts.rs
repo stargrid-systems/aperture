@@ -2,18 +2,19 @@
 //! the storage catalog, tracks ongoing downloads, and keeps the two consistent.
 
 use std::collections::HashSet;
+use std::future::{Future, IntoFuture};
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
-use aperture_storage::{
-    Artifact, ArtifactKind, ArtifactStatus, DownloadResult, NewDownload, Storage,
-};
+use aperture_storage::{Artifact, ArtifactKind, ArtifactStatus, DownloadStatus, Storage};
 use jiff::Timestamp;
 use oci_client::Reference;
 use tokio::fs;
 
 use crate::blob::BlobStore;
 use crate::digest::Digest;
-use crate::downloads::{DownloadProgress, Downloads, Progress, ProgressWriter};
+use crate::downloads::{Claim, DownloadProgress, Downloads, Phase, Progress, ProgressWriter, Slot};
 use crate::error::{ArtifactError, Result};
 use crate::fetch::{FetchMeta, Fetched, OciFetcher};
 use crate::hash_writer::HashWriter;
@@ -37,9 +38,48 @@ pub struct Located {
     pub digest: Digest,
 }
 
+/// What to fetch. The source carries everything a fetcher needs.
+#[derive(Debug, Clone)]
+pub struct FetchRequest {
+    /// Logical name to record the artifact under.
+    pub name: String,
+    /// What kind of component this is.
+    pub kind: ArtifactKind,
+    /// Where and how to fetch it from.
+    pub source: FetchSource,
+}
+
+impl FetchRequest {
+    /// The source string recorded in the catalog and download history.
+    fn source_str(&self) -> &str {
+        match &self.source {
+            FetchSource::Oci { reference, .. } => reference,
+        }
+    }
+}
+
+/// Where an artifact is fetched from. Extensible to more sources later.
+#[derive(Debug, Clone)]
+pub enum FetchSource {
+    /// A layer of an OCI image.
+    Oci {
+        /// The image reference, for example `ghcr.io/org/image:tag`.
+        reference: String,
+        /// The media type of the layer to pull.
+        media_type: MediaType,
+    },
+}
+
 /// Coordinates fetching artifacts, recording them in the catalog, tracking
 /// in-flight downloads, and keeping the catalog and blob store consistent.
+///
+/// Cheap to clone: all clones share one underlying manager.
+#[derive(Clone)]
 pub struct Artifacts {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
     storage: Storage,
     blobs: BlobStore,
     oci: OciFetcher,
@@ -50,10 +90,12 @@ impl Artifacts {
     /// Creates a store backed by `storage`, keeping blobs under `store_root`.
     pub fn new(storage: Storage, store_root: PathBuf) -> Self {
         Self {
-            storage,
-            blobs: BlobStore::new(store_root),
-            oci: OciFetcher::new(),
-            downloads: Downloads::default(),
+            inner: Arc::new(Inner {
+                storage,
+                blobs: BlobStore::new(store_root),
+                oci: OciFetcher::new(),
+                downloads: Downloads::default(),
+            }),
         }
     }
 
@@ -66,16 +108,81 @@ impl Artifacts {
 
     /// Read access to the storage catalog.
     pub fn storage(&self) -> &Storage {
-        &self.storage
+        &self.inner.storage
     }
 
     /// A snapshot of the downloads currently in flight, for display.
     pub fn active_downloads(&self) -> Vec<DownloadProgress> {
-        self.downloads.snapshot()
+        self.inner.downloads.snapshot()
     }
 
     /// Returns the stored blob for `name`, if it is present on disk.
     pub async fn locate(&self, name: &str) -> Result<Option<Located>> {
+        self.inner.locate(name).await
+    }
+
+    /// Returns a handle to the artifact in `request`. If it is already present
+    /// the handle is immediately ready. Otherwise a download starts in the
+    /// background, or joins one already in flight, and the handle tracks it.
+    pub async fn fetch(&self, request: FetchRequest) -> Result<DownloadHandle> {
+        if let Some(located) = self.inner.locate(&request.name).await? {
+            return Ok(DownloadHandle::ready(located));
+        }
+
+        let slot = match self.inner.downloads.claim(&request.name, request.source_str()) {
+            Claim::Joiner(slot) => {
+                return Ok(DownloadHandle::tracking(
+                    Arc::clone(&self.inner),
+                    request.name,
+                    slot,
+                ));
+            }
+            Claim::Owner(slot) => slot,
+        };
+
+        let started = Timestamp::now();
+        let id = match self
+            .inner
+            .storage
+            .artifacts()
+            .start_download(&request.name, request.source_str(), started)
+            .await
+        {
+            Ok(id) => id,
+            Err(err) => {
+                // Never started, so wake any joiner and free the slot.
+                slot.complete(Phase::Failed);
+                self.inner.downloads.release(&request.name);
+                return Err(err.into());
+            }
+        };
+
+        let inner = Arc::clone(&self.inner);
+        let task_slot = Arc::clone(&slot);
+        let name = request.name.clone();
+        let run = request;
+        tokio::spawn(async move {
+            inner.run_download(run, id, task_slot).await;
+        });
+
+        Ok(DownloadHandle::tracking(Arc::clone(&self.inner), name, slot))
+    }
+
+    /// Fetches the artifact in `request` and waits for it to be ready.
+    pub async fn ensure(&self, request: FetchRequest) -> Result<Located> {
+        self.fetch(request).await?.await
+    }
+
+    /// Reconciles the catalog with the blob store. Marks interrupted downloads,
+    /// removes catalog entries whose blob is missing, removes blobs that no
+    /// entry references, and clears leftover temporary files.
+    pub async fn sync(&self) -> Result<SyncReport> {
+        self.inner.sync().await
+    }
+}
+
+impl Inner {
+    async fn locate(&self, name: &str) -> Result<Option<Located>> {
         let Some(artifact) = self.storage.artifacts().get(name).await? else {
             return Ok(None);
         };
@@ -92,94 +199,75 @@ impl Artifacts {
         }))
     }
 
-    /// Ensures the OCI artifact `name` is present, fetching it from `source`
-    /// only if it is missing. Concurrent calls for the same `name` coalesce
-    /// onto one download. Returns where the blob landed.
-    pub async fn ensure_oci(
-        &self,
-        name: &str,
-        kind: ArtifactKind,
-        source: &str,
-        media_type: &MediaType,
-    ) -> Result<Located> {
-        if let Some(located) = self.locate(name).await? {
-            return Ok(located);
+    /// Runs the download for `request`, records the outcome in the catalog and
+    /// the download history, then completes the slot and releases it. Runs on
+    /// its own task, so failures are logged rather than returned.
+    async fn run_download(self: Arc<Self>, request: FetchRequest, id: i64, slot: Arc<Slot>) {
+        let repository = self.storage.artifacts();
+        if let Err(err) = repository.upsert(&downloading_artifact(&request)).await {
+            tracing::error!(name = %request.name, %err, "failed to mark artifact downloading");
         }
 
-        self.downloads
-            .run(name, source, |progress| async move {
-                self.download_oci(name, kind, source, media_type, &progress)
-                    .await
-            })
-            .await?;
+        let result = self.execute(&request, slot.progress()).await;
+        let finished = Timestamp::now();
 
-        self.locate(name).await?.ok_or_else(|| {
-            ArtifactError::Fetch(anyhow::format_err!("{name} missing after download"))
-        })
-    }
-
-    /// Fetches the `media_type` layer of the OCI image at `source` into the
-    /// store and records it in the catalog under `name`. Every attempt, success
-    /// or failure, is logged to the download history.
-    async fn download_oci(
-        &self,
-        name: &str,
-        kind: ArtifactKind,
-        source: &str,
-        media_type: &MediaType,
-        progress: &Progress,
-    ) -> Result<()> {
-        let reference: Reference = source.parse().map_err(|err| {
-            ArtifactError::Fetch(anyhow::format_err!("invalid reference {source:?}: {err}"))
-        })?;
-        let started = Timestamp::now();
-        let repository = self.storage.artifacts();
-
-        match self.fetch_oci(&reference, media_type, progress).await {
+        let phase = match &result {
             Ok(fetched) => {
-                let finished = Timestamp::now();
-                let artifact = Artifact {
-                    name: name.to_owned(),
-                    kind,
-                    source: source.to_owned(),
-                    digest: Some(fetched.digest.to_string()),
-                    media_type: Some(fetched.media_type.to_string()),
-                    version: reference.tag().map(str::to_owned),
-                    size_bytes: Some(fetched.size as i64),
-                    status: ArtifactStatus::Present,
-                    downloaded_at: Some(finished),
-                    verified_at: Some(finished),
-                };
-                repository.upsert(&artifact).await?;
-                repository
-                    .record_download(&NewDownload {
-                        artifact: name.to_owned(),
-                        started_at: started,
-                        finished_at: Some(finished),
-                        result: DownloadResult::Success,
-                        digest: artifact.digest.clone(),
-                        size_bytes: artifact.size_bytes,
-                        source: source.to_owned(),
-                        error: None,
-                    })
-                    .await?;
-                Ok(())
+                let artifact = present_artifact(&request, fetched, finished);
+                if let Err(err) = repository.upsert(&artifact).await {
+                    tracing::error!(name = %request.name, %err, "failed to record artifact");
+                }
+                if let Err(err) = repository
+                    .finish_download(
+                        id,
+                        DownloadStatus::Succeeded,
+                        finished,
+                        Some(&fetched.digest.to_string()),
+                        Some(fetched.size as i64),
+                        None,
+                    )
+                    .await
+                {
+                    tracing::error!(name = %request.name, %err, "failed to finish download record");
+                }
+                Phase::Succeeded
             }
             Err(err) => {
-                let finished = Timestamp::now();
-                repository
-                    .record_download(&NewDownload {
-                        artifact: name.to_owned(),
-                        started_at: started,
-                        finished_at: Some(finished),
-                        result: DownloadResult::Failure,
-                        digest: None,
-                        size_bytes: None,
-                        source: source.to_owned(),
-                        error: Some(err.to_string()),
-                    })
-                    .await?;
-                Err(err)
+                if let Err(write_err) = repository.upsert(&failed_artifact(&request)).await {
+                    tracing::error!(name = %request.name, %write_err, "failed to mark artifact failed");
+                }
+                if let Err(write_err) = repository
+                    .finish_download(
+                        id,
+                        DownloadStatus::Failed,
+                        finished,
+                        None,
+                        None,
+                        Some(&err.to_string()),
+                    )
+                    .await
+                {
+                    tracing::error!(name = %request.name, %write_err, "failed to finish download record");
+                }
+                Phase::Failed
+            }
+        };
+
+        slot.complete(phase);
+        self.downloads.release(&request.name);
+    }
+
+    /// Dispatches a fetch to the right fetcher for its source.
+    async fn execute(&self, request: &FetchRequest, progress: &Progress) -> Result<Fetched> {
+        match &request.source {
+            FetchSource::Oci {
+                reference,
+                media_type,
+            } => {
+                let reference: Reference = reference.parse().map_err(|err| {
+                    ArtifactError::Fetch(anyhow::format_err!("invalid reference {reference:?}: {err}"))
+                })?;
+                self.fetch_oci(&reference, media_type, progress).await
             }
         }
     }
@@ -198,7 +286,10 @@ impl Artifacts {
 
         let staged: Result<(FetchMeta, Digest, u64)> = async {
             let mut writer = HashWriter::new(ProgressWriter::new(&mut *temp, progress));
-            let meta = self.oci.fetch(reference, media_type, &mut writer, progress).await?;
+            let meta = self
+                .oci
+                .fetch(reference, media_type, &mut writer, progress)
+                .await?;
             let (digest, size) = writer.finalize().await?;
             Ok((meta, digest, size))
         }
@@ -224,21 +315,46 @@ impl Artifacts {
         Ok(Fetched {
             digest,
             media_type: meta.media_type,
+            version: reference.tag().map(str::to_owned),
             size,
         })
     }
 
-    /// Reconciles the catalog with the blob store. Removes catalog entries
-    /// whose blob is missing from disk, removes blobs on disk that no entry
-    /// references, and clears leftover temporary files.
-    pub async fn sync(&self) -> Result<SyncReport> {
+    async fn sync(&self) -> Result<SyncReport> {
         self.blobs.clear_temp().await?;
 
         let repository = self.storage.artifacts();
         let mut report = SyncReport::default();
         let mut tracked: HashSet<Digest> = HashSet::new();
 
+        // A download still marked running has no owner left after a restart.
+        let now = Timestamp::now();
+        for download in repository.list_running().await? {
+            if self.downloads.is_active(&download.artifact) {
+                continue;
+            }
+            repository
+                .finish_download(
+                    download.id,
+                    DownloadStatus::Interrupted,
+                    now,
+                    None,
+                    None,
+                    Some("interrupted"),
+                )
+                .await?;
+        }
+
         for artifact in repository.list().await? {
+            // Resolve a catalog entry left mid-download by a stopped process.
+            if artifact.status == ArtifactStatus::Downloading
+                && !self.downloads.is_active(&artifact.name)
+            {
+                let mut failed = artifact.clone();
+                failed.status = ArtifactStatus::Failed;
+                repository.upsert(&failed).await?;
+                continue;
+            }
             let Some(raw) = artifact.digest.as_deref() else {
                 continue;
             };
@@ -261,5 +377,124 @@ impl Artifacts {
         }
 
         Ok(report)
+    }
+}
+
+/// A handle to a requested artifact. Cheap to clone, so several callers can
+/// observe the same download. Await it for the stored blob, or read live
+/// [`DownloadHandle::progress`] while it runs.
+#[derive(Clone)]
+pub struct DownloadHandle {
+    state: HandleState,
+}
+
+#[derive(Clone)]
+enum HandleState {
+    Ready(Located),
+    Tracking {
+        inner: Arc<Inner>,
+        name: String,
+        slot: Arc<Slot>,
+    },
+}
+
+impl DownloadHandle {
+    fn ready(located: Located) -> Self {
+        Self {
+            state: HandleState::Ready(located),
+        }
+    }
+
+    fn tracking(inner: Arc<Inner>, name: String, slot: Arc<Slot>) -> Self {
+        Self {
+            state: HandleState::Tracking { inner, name, slot },
+        }
+    }
+
+    /// The artifact's logical name.
+    pub fn name(&self) -> Option<&str> {
+        match &self.state {
+            HandleState::Ready(_) => None,
+            HandleState::Tracking { name, .. } => Some(name),
+        }
+    }
+
+    /// Live progress of the download, or `None` if it is already present.
+    pub fn progress(&self) -> Option<DownloadProgress> {
+        match &self.state {
+            HandleState::Ready(_) => None,
+            HandleState::Tracking { name, slot, .. } => Some(slot.snapshot(name)),
+        }
+    }
+
+    /// Waits for the artifact to be ready and returns where its blob landed.
+    pub async fn wait(self) -> Result<Located> {
+        match self.state {
+            HandleState::Ready(located) => Ok(located),
+            HandleState::Tracking { inner, name, slot } => {
+                let mut phase = slot.subscribe();
+                while *phase.borrow_and_update() == Phase::Running {
+                    if phase.changed().await.is_err() {
+                        break;
+                    }
+                }
+                let final_phase = *phase.borrow();
+                match final_phase {
+                    Phase::Succeeded => inner.locate(&name).await?.ok_or_else(|| {
+                        ArtifactError::Fetch(anyhow::format_err!("{name} missing after download"))
+                    }),
+                    _ => Err(ArtifactError::Fetch(anyhow::format_err!(
+                        "download of {name} failed"
+                    ))),
+                }
+            }
+        }
+    }
+}
+
+impl IntoFuture for DownloadHandle {
+    type Output = Result<Located>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Result<Located>> + Send>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.wait())
+    }
+}
+
+fn downloading_artifact(request: &FetchRequest) -> Artifact {
+    base_artifact(request, ArtifactStatus::Downloading)
+}
+
+fn failed_artifact(request: &FetchRequest) -> Artifact {
+    base_artifact(request, ArtifactStatus::Failed)
+}
+
+fn base_artifact(request: &FetchRequest, status: ArtifactStatus) -> Artifact {
+    Artifact {
+        name: request.name.clone(),
+        kind: request.kind,
+        source: request.source_str().to_owned(),
+        digest: None,
+        media_type: None,
+        version: None,
+        size_bytes: None,
+        status,
+        downloaded_at: None,
+        verified_at: None,
+    }
+}
+
+fn present_artifact(request: &FetchRequest, fetched: &Fetched, finished: Timestamp) -> Artifact {
+    Artifact {
+        name: request.name.clone(),
+        kind: request.kind,
+        source: request.source_str().to_owned(),
+        digest: Some(fetched.digest.to_string()),
+        media_type: Some(fetched.media_type.to_string()),
+        version: fetched.version.clone(),
+        size_bytes: Some(fetched.size as i64),
+        status: ArtifactStatus::Present,
+        downloaded_at: Some(finished),
+        verified_at: Some(finished),
     }
 }
