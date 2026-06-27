@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use miette::IntoDiagnostic;
-use tokio::runtime::Builder;
+use tokio::runtime;
 
 /// Stargrid hardware application gateway.
 #[derive(Debug, Parser)]
@@ -20,8 +20,6 @@ enum Command {
     Version,
     /// Run the gateway HTTP server.
     Run(RunArgs),
-    /// Pre-download components (the Spectra frontend) for offline use.
-    Prefetch(PrefetchArgs),
     /// Print the OpenAPI specification as JSON.
     Openapi,
 }
@@ -31,13 +29,6 @@ struct RunArgs {
     /// Address to bind the HTTP server to. Defaults to the IPv6 loopback.
     #[arg(long, env = "APERTURE_ADDR", default_value = "[::1]:8000")]
     addr: SocketAddr,
-    /// Directory for runtime data and cached components.
-    #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
-    data_dir: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PrefetchArgs {
     /// Directory for runtime data and cached components.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
@@ -61,15 +52,11 @@ fn main() -> miette::Result<()> {
             init_tracing();
             block_on(aperture::serve(args.addr, args.data_dir))
         }
-        Command::Prefetch(args) => {
-            init_tracing();
-            block_on(aperture::prefetch(args.data_dir))
-        }
     }
 }
 
 fn block_on<F: Future<Output = miette::Result<()>>>(future: F) -> miette::Result<()> {
-    let runtime = Builder::new_multi_thread()
+    let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .into_diagnostic()?;

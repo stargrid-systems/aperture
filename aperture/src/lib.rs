@@ -13,18 +13,6 @@ use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
 
-/// Pre-downloads the Spectra frontend into `data_dir` for offline use.
-pub async fn prefetch(data_dir: PathBuf) -> miette::Result<()> {
-    let artifacts = open_artifacts(&data_dir).await?;
-    artifacts.sync().await.into_diagnostic()?;
-
-    let spectra = Spectra::new(artifacts, SpectraConfig::default());
-    spectra
-        .prefetch()
-        .await
-        .map_err(|error| miette::miette!("{error:#}"))
-}
-
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;

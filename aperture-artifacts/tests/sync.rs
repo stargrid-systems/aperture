@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 use std::{env, fs, process};
 
-use aperture_artifacts::{
-    Artifact, ArtifactKind, ArtifactStatus, Artifacts, DownloadStatus, Storage,
-};
+use aperture_artifacts::{Artifact, ArtifactStatus, Artifacts, DownloadStatus, Storage};
 use jiff::Timestamp;
 
 fn temp_root(tag: &str) -> PathBuf {
@@ -26,7 +24,6 @@ async fn sync_reconciles_interrupted_downloads() {
     // And the matching catalog entry left mid-download.
     repo.upsert(&Artifact {
         name: "spectra".to_owned(),
-        kind: ArtifactKind::Oci,
         source: "src".to_owned(),
         digest: None,
         media_type: None,

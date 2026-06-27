@@ -5,7 +5,6 @@ use crate::macros::sql;
 pub(super) const SQL: &str = sql!(
     CREATE TABLE artifacts (
         name TEXT PRIMARY KEY NOT NULL,
-        kind TEXT NOT NULL,
         source TEXT NOT NULL,
         digest TEXT,
         media_type TEXT,

@@ -1,6 +1,6 @@
 use std::{env, fs};
 
-use aperture_storage::{Artifact, ArtifactKind, ArtifactStatus, DownloadStatus, Storage};
+use aperture_storage::{Artifact, ArtifactStatus, DownloadStatus, Storage};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -10,7 +10,6 @@ fn at(millis: i64) -> Timestamp {
 fn sample(name: &str) -> Artifact {
     Artifact {
         name: name.to_owned(),
-        kind: ArtifactKind::Oci,
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
         digest: Some("sha256:abc".to_owned()),
         media_type: Some("application/vnd.spectra.tar+gzip".to_owned()),

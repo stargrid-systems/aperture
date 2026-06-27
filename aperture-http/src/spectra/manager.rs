@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use aperture_artifacts::{ArtifactKind, Artifacts, FetchRequest, FetchSource};
+use aperture_artifacts::{Artifacts, FetchRequest, FetchSource};
 use tokio::time;
 
 use super::config::SpectraConfig;
@@ -45,17 +45,6 @@ impl Spectra {
         Ok(())
     }
 
-    /// Downloads the frontend if needed, then opens it. Awaits completion.
-    pub async fn prefetch(&self) -> anyhow::Result<()> {
-        self.prepare().await
-    }
-
-    /// Starts a background download of the frontend if it is not already
-    /// present. Returns immediately.
-    pub fn start_prefetch(&self) {
-        self.ensure_started();
-    }
-
     pub(super) fn current(&self) -> Option<Arc<SpectraImage>> {
         self.current.read().expect("spectra slot poisoned").clone()
     }
@@ -76,8 +65,8 @@ impl Spectra {
         // TODO: switch to a proper task management system!
         let this = self.clone();
         tokio::spawn(async move {
-            if let Err(error) = this.prepare().await {
-                tracing::error!(%error, "failed to prepare spectra frontend");
+            if let Err(err) = this.prepare().await {
+                tracing::error!(error = &*err, "failed to prepare spectra frontend");
                 time::sleep(Duration::from_secs(30)).await;
             }
             this.preparing.store(false, Ordering::SeqCst);
@@ -89,7 +78,6 @@ impl Spectra {
             .artifacts
             .ensure(FetchRequest {
                 name: self.config.name.clone(),
-                kind: ArtifactKind::Oci,
                 source: FetchSource::Oci {
                     reference: self.config.source.clone(),
                     media_type: self.config.media_type.clone(),

@@ -7,34 +7,6 @@ use turso::{Connection, Row, Value, params_from_iter};
 use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
 
-/// What kind of component an artifact is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArtifactKind {
-    /// An OCI image (spectra, firmware).
-    Oci,
-    /// A host tool binary (for example avrdude).
-    Tool,
-}
-
-impl ArtifactKind {
-    fn as_db(self) -> &'static str {
-        match self {
-            Self::Oci => "oci",
-            Self::Tool => "tool",
-        }
-    }
-
-    fn from_db(value: &str) -> Result<Self> {
-        match value {
-            "oci" => Ok(Self::Oci),
-            "tool" => Ok(Self::Tool),
-            other => Err(StorageError::Decode(format!(
-                "unknown artifact kind {other:?}"
-            ))),
-        }
-    }
-}
-
 /// Download and availability state of an artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactStatus {
@@ -72,8 +44,6 @@ impl ArtifactStatus {
 pub struct Artifact {
     /// Logical name, for example `spectra` or `tool/avrdude`.
     pub name: String,
-    /// What kind of component this is.
-    pub kind: ArtifactKind,
     /// Where it came from (an image reference or a URL).
     pub source: String,
     /// Content digest of the stored blob, if known.
@@ -166,7 +136,6 @@ impl ArtifactRepository {
     pub async fn upsert(&self, artifact: &Artifact) -> Result<()> {
         let params = params_from_iter([
             Value::Text(artifact.name.clone()),
-            Value::Text(artifact.kind.as_db().to_owned()),
             Value::Text(artifact.source.clone()),
             text_or_null(&artifact.digest),
             text_or_null(&artifact.media_type),
@@ -180,8 +149,8 @@ impl ArtifactRepository {
             .execute(
                 sql!(
                     INSERT OR REPLACE INTO artifacts
-                    (name, kind, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                    (name, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 ),
                 params,
             )
@@ -208,7 +177,7 @@ impl ArtifactRepository {
             .connection
             .query(
                 sql!(
-                    SELECT name, kind, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at
+                    SELECT name, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at
                     FROM artifacts WHERE name = ?1
                 ),
                 params_from_iter([Value::Text(name.to_owned())]),
@@ -227,7 +196,7 @@ impl ArtifactRepository {
             .connection
             .query(
                 sql!(
-                    SELECT name, kind, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at
+                    SELECT name, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at
                     FROM artifacts ORDER BY name
                 ),
                 (),
@@ -427,15 +396,14 @@ fn ts_from_millis(millis: i64) -> Result<Timestamp> {
 fn row_to_artifact(row: &Row) -> Result<Artifact> {
     Ok(Artifact {
         name: req_text(row, 0)?,
-        kind: ArtifactKind::from_db(&req_text(row, 1)?)?,
-        source: req_text(row, 2)?,
-        digest: opt_text(row, 3)?,
-        media_type: opt_text(row, 4)?,
-        version: opt_text(row, 5)?,
-        size_bytes: opt_int(row, 6)?,
-        status: ArtifactStatus::from_db(&req_text(row, 7)?)?,
-        downloaded_at: opt_ts(row, 8)?,
-        verified_at: opt_ts(row, 9)?,
+        source: req_text(row, 1)?,
+        digest: opt_text(row, 2)?,
+        media_type: opt_text(row, 3)?,
+        version: opt_text(row, 4)?,
+        size_bytes: opt_int(row, 5)?,
+        status: ArtifactStatus::from_db(&req_text(row, 6)?)?,
+        downloaded_at: opt_ts(row, 7)?,
+        verified_at: opt_ts(row, 8)?,
     })
 }
 

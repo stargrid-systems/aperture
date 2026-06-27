@@ -11,21 +11,39 @@ use crate::macros::sql;
 
 mod m0001_initial;
 
-/// Ordered list of migrations. Index `i` upgrades the schema from version `i`
-/// to version `i + 1`.
+/// Schema version that exists before the first migration in [`MIGRATIONS`].
+///
+/// Normally 0. When old migrations are squashed into a single baseline, bump
+/// this to the version that baseline represents. The first entry then upgrades
+/// `BASE_VERSION` to `BASE_VERSION + 1` instead of `0` to `1`.
+const BASE_VERSION: i64 = 0;
+
+/// Ordered list of migrations. Index `i` upgrades the schema from version
+/// `BASE_VERSION + i` to `BASE_VERSION + i + 1`.
 const MIGRATIONS: &[&str] = &[M0001_INITIAL];
 
 /// Applies all pending migrations to the database.
 pub(crate) async fn run(connection: &Connection) -> Result<()> {
     let current = current_version(connection).await?;
-    let target = MIGRATIONS.len() as i64;
+    let target = BASE_VERSION + MIGRATIONS.len() as i64;
     if current > target {
         return Err(StorageError::Migration(format!(
             "database schema version {current} is newer than the supported {target}"
         )));
     }
-    for (index, statements) in MIGRATIONS.iter().enumerate().skip(current as usize) {
-        apply(connection, statements, index as i64 + 1).await?;
+    // A non-empty database below the baseline predates a squash and cannot jump
+    // straight to it. It must be upgraded by an older release first.
+    if current != 0 && current < BASE_VERSION {
+        return Err(StorageError::Migration(format!(
+            "database schema version {current} is older than the baseline {BASE_VERSION}"
+        )));
+    }
+    for (index, statements) in MIGRATIONS.iter().enumerate() {
+        let version = BASE_VERSION + index as i64 + 1;
+        if version <= current {
+            continue;
+        }
+        apply(connection, statements, version).await?;
     }
     Ok(())
 }

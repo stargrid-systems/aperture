@@ -2,12 +2,13 @@
 //! the storage catalog, tracks ongoing downloads, and keeps the two consistent.
 
 use std::collections::HashSet;
+use std::error::Error;
 use std::future::{Future, IntoFuture};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use aperture_storage::{Artifact, ArtifactKind, ArtifactStatus, DownloadStatus, Storage};
+use aperture_storage::{Artifact, ArtifactStatus, DownloadStatus, Storage};
 use jiff::Timestamp;
 use oci_client::Reference;
 use tokio::fs;
@@ -43,8 +44,6 @@ pub struct Located {
 pub struct FetchRequest {
     /// Logical name to record the artifact under.
     pub name: String,
-    /// What kind of component this is.
-    pub kind: ArtifactKind,
     /// Where and how to fetch it from.
     pub source: FetchSource,
 }
@@ -205,7 +204,7 @@ impl Inner {
     async fn run_download(self: Arc<Self>, request: FetchRequest, id: i64, slot: Arc<Slot>) {
         let repository = self.storage.artifacts();
         if let Err(err) = repository.upsert(&downloading_artifact(&request)).await {
-            tracing::error!(name = %request.name, %err, "failed to mark artifact downloading");
+            tracing::error!(name = %request.name, error = &err as &dyn Error, "failed to mark artifact downloading");
         }
 
         let result = self.execute(&request, slot.progress()).await;
@@ -215,7 +214,7 @@ impl Inner {
             Ok(fetched) => {
                 let artifact = present_artifact(&request, fetched, finished);
                 if let Err(err) = repository.upsert(&artifact).await {
-                    tracing::error!(name = %request.name, %err, "failed to record artifact");
+                    tracing::error!(name = %request.name, error = &err as &dyn Error, "failed to record artifact");
                 }
                 if let Err(err) = repository
                     .finish_download(
@@ -228,13 +227,13 @@ impl Inner {
                     )
                     .await
                 {
-                    tracing::error!(name = %request.name, %err, "failed to finish download record");
+                    tracing::error!(name = %request.name, error = &err as &dyn Error, "failed to finish download record");
                 }
                 Phase::Succeeded
             }
             Err(err) => {
                 if let Err(write_err) = repository.upsert(&failed_artifact(&request)).await {
-                    tracing::error!(name = %request.name, %write_err, "failed to mark artifact failed");
+                    tracing::error!(name = %request.name, error = &write_err as &dyn Error, "failed to mark artifact failed");
                 }
                 if let Err(write_err) = repository
                     .finish_download(
@@ -247,7 +246,7 @@ impl Inner {
                     )
                     .await
                 {
-                    tracing::error!(name = %request.name, %write_err, "failed to finish download record");
+                    tracing::error!(name = %request.name, error = &write_err as &dyn Error, "failed to finish download record");
                 }
                 Phase::Failed
             }
@@ -472,7 +471,6 @@ fn failed_artifact(request: &FetchRequest) -> Artifact {
 fn base_artifact(request: &FetchRequest, status: ArtifactStatus) -> Artifact {
     Artifact {
         name: request.name.clone(),
-        kind: request.kind,
         source: request.source_str().to_owned(),
         digest: None,
         media_type: None,
@@ -487,7 +485,6 @@ fn base_artifact(request: &FetchRequest, status: ArtifactStatus) -> Artifact {
 fn present_artifact(request: &FetchRequest, fetched: &Fetched, finished: Timestamp) -> Artifact {
     Artifact {
         name: request.name.clone(),
-        kind: request.kind,
         source: request.source_str().to_owned(),
         digest: Some(fetched.digest.to_string()),
         media_type: Some(fetched.media_type.to_string()),
