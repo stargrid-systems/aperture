@@ -84,8 +84,6 @@ pub struct Artifact {
     pub version: Option<String>,
     /// Size of the stored blob in bytes.
     pub size_bytes: Option<i64>,
-    /// Path of the stored blob, relative to the store root.
-    pub blob_path: Option<String>,
     /// Current availability state.
     pub status: ArtifactStatus,
     /// When the artifact was last downloaded.
@@ -187,7 +185,6 @@ impl ArtifactRepository {
             text_or_null(&artifact.media_type),
             text_or_null(&artifact.version),
             int_or_null(artifact.size_bytes),
-            text_or_null(&artifact.blob_path),
             Value::Text(artifact.status.as_db().to_owned()),
             ts_or_null(artifact.downloaded_at),
             ts_or_null(artifact.verified_at),
@@ -196,8 +193,8 @@ impl ArtifactRepository {
             .execute(
                 sql!(
                     INSERT OR REPLACE INTO artifacts
-                    (name, kind, source, digest, media_type, version, size_bytes, blob_path, status, downloaded_at, verified_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                    (name, kind, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                 ),
                 params,
             )
@@ -224,7 +221,7 @@ impl ArtifactRepository {
             .connection
             .query(
                 sql!(
-                    SELECT name, kind, source, digest, media_type, version, size_bytes, blob_path, status, downloaded_at, verified_at
+                    SELECT name, kind, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at
                     FROM artifacts WHERE name = ?1
                 ),
                 params_from_iter([Value::Text(name.to_owned())]),
@@ -243,7 +240,7 @@ impl ArtifactRepository {
             .connection
             .query(
                 sql!(
-                    SELECT name, kind, source, digest, media_type, version, size_bytes, blob_path, status, downloaded_at, verified_at
+                    SELECT name, kind, source, digest, media_type, version, size_bytes, status, downloaded_at, verified_at
                     FROM artifacts ORDER BY name
                 ),
                 (),
@@ -388,10 +385,9 @@ fn row_to_artifact(row: &Row) -> Result<Artifact> {
         media_type: opt_text(row, 4)?,
         version: opt_text(row, 5)?,
         size_bytes: opt_int(row, 6)?,
-        blob_path: opt_text(row, 7)?,
-        status: ArtifactStatus::from_db(&req_text(row, 8)?)?,
-        downloaded_at: opt_ts(row, 9)?,
-        verified_at: opt_ts(row, 10)?,
+        status: ArtifactStatus::from_db(&req_text(row, 7)?)?,
+        downloaded_at: opt_ts(row, 8)?,
+        verified_at: opt_ts(row, 9)?,
     })
 }
 

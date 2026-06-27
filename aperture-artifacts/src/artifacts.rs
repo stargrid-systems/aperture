@@ -9,11 +9,14 @@ use aperture_storage::{
 };
 use jiff::Timestamp;
 use oci_client::Reference;
+use tokio::fs;
 
-use crate::blob::{BlobStore, Digest};
-use crate::downloads::{DownloadProgress, Downloads, Progress};
+use crate::blob::BlobStore;
+use crate::digest::Digest;
+use crate::downloads::{DownloadProgress, Downloads, Progress, ProgressWriter};
 use crate::error::{ArtifactError, Result};
-use crate::fetch::OciFetcher;
+use crate::fetch::{FetchMeta, Fetched, OciFetcher};
+use crate::hash_writer::HashWriter;
 use crate::media_type::MediaType;
 
 /// What a [`Artifacts::sync`] run removed.
@@ -132,11 +135,7 @@ impl Artifacts {
         let started = Timestamp::now();
         let repository = self.storage.artifacts();
 
-        match self
-            .oci
-            .fetch(&reference, media_type, &self.blobs, progress)
-            .await
-        {
+        match self.fetch_oci(&reference, media_type, progress).await {
             Ok(fetched) => {
                 let finished = Timestamp::now();
                 let artifact = Artifact {
@@ -147,12 +146,6 @@ impl Artifacts {
                     media_type: Some(fetched.media_type.to_string()),
                     version: reference.tag().map(str::to_owned),
                     size_bytes: Some(fetched.size as i64),
-                    blob_path: Some(
-                        self.blobs
-                            .relative_path(&fetched.digest)
-                            .to_string_lossy()
-                            .into_owned(),
-                    ),
                     status: ArtifactStatus::Present,
                     downloaded_at: Some(finished),
                     verified_at: Some(finished),
@@ -189,6 +182,50 @@ impl Artifacts {
                 Err(err)
             }
         }
+    }
+
+    /// Stages an OCI fetch into the blob store: streams the layer into a
+    /// temporary file, verifies the bytes against the advertised digest, then
+    /// places the blob under its digest. The fetcher only ever sees the sink, so
+    /// it cannot reach the store on its own.
+    async fn fetch_oci(
+        &self,
+        reference: &Reference,
+        media_type: &MediaType,
+        progress: &Progress,
+    ) -> Result<Fetched> {
+        let mut temp = self.blobs.temp_file().await?;
+
+        let staged: Result<(FetchMeta, Digest, u64)> = async {
+            let mut writer = HashWriter::new(ProgressWriter::new(&mut *temp, progress));
+            let meta = self.oci.fetch(reference, media_type, &mut writer, progress).await?;
+            let (digest, size) = writer.finalize().await?;
+            Ok((meta, digest, size))
+        }
+        .await;
+
+        let (meta, digest, size) = match staged {
+            Ok(staged) => staged,
+            Err(err) => {
+                let _ = fs::remove_file(temp.path()).await;
+                return Err(err);
+            }
+        };
+
+        if digest != meta.expected_digest {
+            let _ = fs::remove_file(temp.path()).await;
+            return Err(ArtifactError::DigestMismatch {
+                expected: meta.expected_digest.to_string(),
+                actual: digest.to_string(),
+            });
+        }
+
+        self.blobs.place(temp.path(), &digest).await?;
+        Ok(Fetched {
+            digest,
+            media_type: meta.media_type,
+            size,
+        })
     }
 
     /// Reconciles the catalog with the blob store. Removes catalog entries

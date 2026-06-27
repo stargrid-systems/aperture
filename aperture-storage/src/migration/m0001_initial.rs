@@ -11,7 +11,6 @@ pub(super) const SQL: &str = sql!(
         media_type TEXT,
         version TEXT,
         size_bytes INTEGER,
-        blob_path TEXT,
         status TEXT NOT NULL,
         downloaded_at INTEGER,
         verified_at INTEGER

@@ -18,7 +18,6 @@ fn sample(name: &str) -> Artifact {
         media_type: Some("application/vnd.spectra.tar+gzip".to_owned()),
         version: Some("0.2.0".to_owned()),
         size_bytes: Some(1234),
-        blob_path: Some("blobs/sha256/abc".to_owned()),
         status: ArtifactStatus::Present,
         downloaded_at: Some(at(1_700_000_000_000)),
         verified_at: None,

@@ -6,7 +6,7 @@ use std::task::{Context, Poll, ready};
 use sha2::{Digest as _, Sha256};
 use tokio::io::{self, AsyncWrite, AsyncWriteExt as _};
 
-use crate::blob::Digest;
+use crate::digest::{Digest, DigestAlgorithm};
 
 /// An [`AsyncWrite`] that hashes bytes as they pass through.
 pub(crate) struct HashWriter<W> {
@@ -28,7 +28,10 @@ impl<W: AsyncWrite + Unpin> HashWriter<W> {
     pub(crate) async fn finalize(mut self) -> io::Result<(Digest, u64)> {
         self.shutdown().await?;
         let hash = self.hasher.finalize();
-        Ok((Digest::from_hash(&hash), self.total))
+        Ok((
+            Digest::from_hash(DigestAlgorithm::Sha256, &hash),
+            self.total,
+        ))
     }
 }
 

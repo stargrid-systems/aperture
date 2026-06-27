@@ -1,16 +1,15 @@
 use oci_client::manifest::{OciDescriptor, OciImageManifest};
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
-use tokio::fs;
+use tokio::io::AsyncWrite;
 
-use super::Fetched;
-use crate::blob::{BlobStore, Digest};
-use crate::downloads::{Progress, ProgressWriter};
+use super::FetchMeta;
+use crate::digest::Digest;
+use crate::downloads::Progress;
 use crate::error::{ArtifactError, Result};
-use crate::hash_writer::HashWriter;
 use crate::media_type::MediaType;
 
-/// Fetches OCI image layers from a registry into a blob store.
+/// Fetches OCI image layers from a registry.
 pub struct OciFetcher {
     client: Client,
 }
@@ -23,16 +22,16 @@ impl OciFetcher {
         }
     }
 
-    /// Pulls the single layer matching `media_type` from `reference` into
-    /// `store`, verifying the stored bytes against the advertised digest and
-    /// reporting transferred bytes into `progress`.
+    /// Streams the single layer matching `media_type` from `reference` into
+    /// `sink`, reporting transferred bytes into `progress`. Returns the digest
+    /// the registry advertises so the caller can verify the stored bytes.
     pub async fn fetch(
         &self,
         reference: &Reference,
         media_type: &MediaType,
-        store: &BlobStore,
+        sink: &mut (dyn AsyncWrite + Unpin + Send),
         progress: &Progress,
-    ) -> Result<Fetched> {
+    ) -> Result<FetchMeta> {
         let (manifest, _digest) = self
             .client
             .pull_image_manifest(reference, &RegistryAuth::Anonymous)
@@ -45,39 +44,14 @@ impl OciFetcher {
         let media_type = MediaType::from(layer.media_type.as_str());
         progress.set_total(layer.size.max(0) as u64);
 
-        let (temp, file) = store.temp_file().await?;
+        self.client
+            .pull_blob(reference, layer, &mut *sink)
+            .await
+            .map_err(|err| ArtifactError::Fetch(err.into()))?;
 
-        let write_result: Result<(Digest, u64)> = async {
-            let mut writer = ProgressWriter::new(HashWriter::new(file), progress);
-            self.client
-                .pull_blob(reference, layer, &mut writer)
-                .await
-                .map_err(|err| ArtifactError::Fetch(err.into()))?;
-            writer.into_inner().finalize().await.map_err(Into::into)
-        }
-        .await;
-
-        let (digest, size) = match write_result {
-            Ok(v) => v,
-            Err(err) => {
-                let _ = fs::remove_file(&temp).await;
-                return Err(err);
-            }
-        };
-
-        if digest != expected {
-            let _ = fs::remove_file(&temp).await;
-            return Err(ArtifactError::DigestMismatch {
-                expected: expected.to_string(),
-                actual: digest.to_string(),
-            });
-        }
-
-        store.place(&temp, &digest).await?;
-        Ok(Fetched {
-            digest,
+        Ok(FetchMeta {
+            expected_digest: expected,
             media_type,
-            size,
         })
     }
 }
