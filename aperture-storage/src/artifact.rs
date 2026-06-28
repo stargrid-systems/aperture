@@ -234,8 +234,8 @@ impl ArtifactRepository {
                 .to_owned(),
         ];
         if let Some(q) = q {
-            params.push(Value::Text(format!("%{q}%")));
-            conditions.push(format!("a.key LIKE ?{}", params.len()));
+            params.push(Value::Text(format!("%{}%", escape_like(q))));
+            conditions.push(format!("a.key LIKE ?{} ESCAPE '\\'", params.len()));
         }
         let (cursor_sql, cursor_params) = keyset.condition(paginator.cursor(), params.len() + 1);
         if !cursor_sql.is_empty() {
@@ -493,6 +493,19 @@ impl ArtifactRepository {
         }
         Ok(downloads)
     }
+}
+
+/// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
+/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the SQL.
+fn escape_like(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn text_or_null(value: &Option<String>) -> Value {

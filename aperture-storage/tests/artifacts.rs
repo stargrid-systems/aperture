@@ -152,6 +152,26 @@ async fn list_keys_paginates_with_cursor() {
 }
 
 #[tokio::test]
+async fn list_keys_q_treats_wildcards_literally() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.artifacts();
+
+    repo.record_version(&version("a_b", "sha256:1", 1_000))
+        .await
+        .unwrap();
+    repo.record_version(&version("axb", "sha256:2", 1_000))
+        .await
+        .unwrap();
+
+    // `_` must match literally, not as a single-char wildcard.
+    let hits = repo.list_keys(Some("a_b"), &ListQuery::default()).await.unwrap();
+    assert_eq!(
+        hits.items.iter().map(|k| k.latest.key.as_str()).collect::<Vec<_>>(),
+        ["a_b"]
+    );
+}
+
+#[tokio::test]
 async fn list_versions_sorts_and_paginates() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.artifacts();

@@ -68,7 +68,6 @@ pub struct ArtifactSummaryResponse {
     /// Stored blob size of the newest version, in bytes.
     pub size_bytes: i64,
     /// When the newest version was downloaded.
-    #[schema(value_type = String, format = DateTime)]
     pub downloaded_at: Timestamp,
 }
 
@@ -103,10 +102,8 @@ pub struct ArtifactVersionResponse {
     /// Stored blob size in bytes.
     pub size_bytes: i64,
     /// When this version was downloaded.
-    #[schema(value_type = String, format = DateTime)]
     pub downloaded_at: Timestamp,
     /// When this version was last verified, if ever.
-    #[schema(value_type = Option<String>, format = DateTime)]
     pub verified_at: Option<Timestamp>,
 }
 
@@ -171,10 +168,8 @@ pub struct DownloadResponse {
     /// Lifecycle state.
     pub status: DownloadStatusResponse,
     /// When the attempt started.
-    #[schema(value_type = String, format = DateTime)]
     pub started_at: Timestamp,
     /// When it finished, if it did.
-    #[schema(value_type = Option<String>, format = DateTime)]
     pub finished_at: Option<Timestamp>,
     /// Resolved content digest, if it got that far.
     pub digest: Option<String>,
