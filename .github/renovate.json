@@ -1,4 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:best-practices", ":automergePatch", ":automergeLinters"]
+  "extends": ["config:best-practices", ":automergePatch", ":automergeLinters"],
+  "packageRules": [
+    {
+      "description": "Do not auto-merge Rust toolchain bumps. The nightly channel moves almost daily, so auto-merge would churn the toolchain constantly.",
+      "matchFileNames": ["rust-toolchain.toml"],
+      "automerge": false
+    }
+  ]
 }
