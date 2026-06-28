@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 aperture-artifacts = { workspace = true }
-aperture-core = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 axum = { workspace = true, features = ["json", "query"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
@@ -31,7 +30,6 @@ utoipa-axum = { workspace = true }
 
 [dev-dependencies]
 aperture-artifacts = { workspace = true }
-aperture-core = { workspace = true }
 jiff = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["full"] }

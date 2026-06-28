@@ -10,7 +10,6 @@ use aperture_artifacts::{
     Artifact, ArtifactKey, Download, DownloadProgress, DownloadStatus, ListQuery, Order,
     Page as StoragePage, VersionSort,
 };
-use aperture_core::VersionInfo;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -22,10 +21,11 @@ pub struct VersionResponse {
     pub aperture: String,
 }
 
-impl From<VersionInfo> for VersionResponse {
-    fn from(info: VersionInfo) -> Self {
+impl VersionResponse {
+    /// Builds a response reporting the given gateway version.
+    pub fn new(version: &str) -> Self {
         Self {
-            aperture: info.aperture.to_owned(),
+            aperture: version.to_owned(),
         }
     }
 }

@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, Artifacts, DownloadStatus, Storage};
-use aperture_core::Core;
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -53,7 +52,7 @@ async fn seeded_app() -> (Router, Artifacts) {
         .unwrap();
 
     let spectra = Spectra::new(Arc::new(artifacts.clone()), SpectraConfig::default());
-    let state = AppState::new(Core::new(), spectra);
+    let state = AppState::new("test", spectra);
     (app(state), artifacts)
 }
 

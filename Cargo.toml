@@ -3,7 +3,6 @@ resolver = "3"
 members = [
     "aperture",
     "aperture-artifacts",
-    "aperture-core",
     "aperture-http",
     "aperture-storage",
 ]
@@ -18,7 +17,6 @@ rust-version = "1.93"
 
 [workspace.dependencies]
 aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
-aperture-core = { version = "0.1.0", path = "aperture-core" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
 
