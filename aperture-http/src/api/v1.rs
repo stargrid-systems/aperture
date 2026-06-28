@@ -25,5 +25,5 @@ pub fn router() -> OpenApiRouter<AppState> {
     responses((status = 200, description = "Gateway version", body = VersionResponse)),
 )]
 async fn get_version(State(state): State<AppState>) -> Json<VersionResponse> {
-    Json(state.core.version().into())
+    Json(VersionResponse::new(state.version()))
 }
