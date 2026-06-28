@@ -161,6 +161,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aperture-tasks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aperture-storage",
+ "jiff",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

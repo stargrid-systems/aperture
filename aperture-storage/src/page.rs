@@ -255,6 +255,32 @@ impl Filters {
         }
     }
 
+    /// Adds `column = ?` bound to `value`, or nothing when `value` is `None`.
+    pub(crate) fn eq_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `column IN (?, ?, ...)` bound to `values`, or nothing when empty.
+    pub(crate) fn one_of(&mut self, column: &str, values: &[&str]) {
+        if values.is_empty() {
+            return;
+        }
+        self.separator();
+        let first = self.params.len() + 1;
+        for value in values {
+            self.params.push(Value::Text((*value).to_owned()));
+        }
+        let placeholders = (first..first + values.len())
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(self.sql, "{column} IN ({placeholders})");
+    }
+
     /// Adds `column LIKE ?` matching `value` as a literal substring (wildcards
     /// escaped), or nothing when `value` is `None`.
     pub(crate) fn like(&mut self, column: &str, value: Option<&str>) {
