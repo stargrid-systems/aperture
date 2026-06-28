@@ -1,17 +1,18 @@
-//! Aperture gateway: composes the core service with the HTTP layer and the
-//! artifact manager.
+//! Aperture gateway: composes the HTTP layer with the artifact manager.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
-use aperture_core::Core;
 pub use aperture_http::openapi;
 use aperture_http::{AppState, Spectra, SpectraConfig};
 use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
+
+/// Version of the Aperture gateway.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
@@ -26,7 +27,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(Core::new(), spectra);
+    let state = AppState::new(VERSION, spectra);
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;

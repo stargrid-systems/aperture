@@ -104,7 +104,6 @@ name = "aperture"
 version = "0.1.0"
 dependencies = [
  "aperture-artifacts",
- "aperture-core",
  "aperture-http",
  "axum",
  "clap",
@@ -130,16 +129,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "aperture-core"
-version = "0.1.0"
-
-[[package]]
 name = "aperture-http"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "aperture-artifacts",
- "aperture-core",
  "axum",
  "backhand",
  "bytes",

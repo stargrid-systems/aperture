@@ -38,8 +38,7 @@ fn main() -> miette::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Version => {
-            let core = aperture_core::Core::new();
-            println!("aperture {}", core.version().aperture);
+            println!("aperture {}", aperture::VERSION);
             Ok(())
         }
         Command::Openapi => {
