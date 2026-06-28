@@ -19,6 +19,6 @@ axum = { workspace = true, features = ["tokio", "http1"] }
 clap = { workspace = true, features = ["std", "derive", "env", "help", "usage", "error-context", "suggestions"] }
 miette = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "fs", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }

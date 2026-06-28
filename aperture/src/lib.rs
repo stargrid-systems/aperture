@@ -34,13 +34,47 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(VERSION, spectra, tasks);
+    let state = AppState::new(VERSION, spectra, tasks.clone());
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
-    axum::serve(listener, app).await.into_diagnostic()?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .into_diagnostic()?;
+
+    // The server has stopped accepting requests. Resolve the running tasks:
+    // resumable ones are interrupted, unresumable ones are awaited.
+    tracing::info!("draining tasks before exit");
+    tasks.shutdown().await;
     Ok(())
+}
+
+/// Resolves when the process is asked to stop, via Ctrl+C or SIGTERM.
+async fn shutdown_signal() {
+    use tokio::signal::ctrl_c;
+
+    let interrupt = async {
+        ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = interrupt => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutdown signal received");
 }
 
 /// Returns the OpenAPI specification, with the task kinds projected in.
