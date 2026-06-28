@@ -1,385 +1,563 @@
-openapi: "3.1.1"
+openapi: 3.1.0
 info:
-  title: "Aperture"
+  title: Aperture API
+  description: ''
+  contact:
+    name: Simon Berger
+    email: simon@siku2.io
   license:
-    name: "GNU Affero General Public License v3.0 or later"
-    identifier: "AGPL-3.0-or-later"
-  version: "1.0.0"
-
-servers:
-  - url: "http://localhost:8080/api/v1"
-
+    name: AGPL-3.0-or-later
+    identifier: AGPL-3.0-or-later
+  version: 0.1.0
 paths:
-  /cellguard: {}
-
-  /version:
+  /api/v1/artifacts:
     get:
-      summary: "Gateway version"
-      operationId: "getVersion"
-      tags: ["meta"]
-      responses:
-        "200":
-          description: "Gateway version"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/VersionResponse"
-
-  /artifacts:
-    get:
-      summary: "List artifacts"
-      description: "Lists stored artifact keys, each with its newest version."
-      operationId: "listArtifacts"
-      tags: ["artifacts"]
+      summary: Lists stored artifact keys, each with its newest version.
+      operationId: list_artifacts
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Order"
+      - name: limit
+        in: query
+        description: Maximum rows to return (1..=200, default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: Cursor from a previous page's `next_cursor`.
+        required: false
+        schema:
+          type: string
+      - name: order
+        in: query
+        description: Sort direction.
+        required: false
+        schema:
+          $ref: '#/components/schemas/OrderParam'
       responses:
-        "200":
-          description: "A page of artifacts"
+        '200':
+          description: Artifacts
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactSummaryPage"
-        "400":
-          description: "Invalid cursor"
-
-  /artifacts/{key}:
+                $ref: '#/components/schemas/Page_ArtifactSummaryResponse'
+  /api/v1/artifacts/{key}:
     get:
-      summary: "Get an artifact"
-      description: "Returns one artifact key with its newest version."
-      operationId: "getArtifact"
-      tags: ["artifacts"]
+      summary: Returns one artifact key with its newest version.
+      operationId: get_artifact
       parameters:
-        - $ref: "#/components/parameters/Key"
+      - name: key
+        in: path
+        description: Artifact key
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: "The artifact"
+        '200':
+          description: Artifact
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactSummaryResponse"
-        "404":
-          description: "Unknown artifact"
-
-  /artifacts/{key}/versions:
+                $ref: '#/components/schemas/ArtifactSummaryResponse'
+        '404':
+          description: Unknown artifact
+  /api/v1/artifacts/{key}/versions:
     get:
-      summary: "List artifact versions"
-      operationId: "listVersions"
-      tags: ["artifacts"]
+      summary: Lists the stored versions of an artifact.
+      operationId: list_versions
       parameters:
-        - $ref: "#/components/parameters/Key"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Order"
-        - name: "sort"
-          in: "query"
-          description: "Field to sort by. Defaults to downloaded time."
-          required: false
-          schema:
-            type: "string"
-            enum: ["downloaded_at", "size_bytes"]
+      - name: key
+        in: path
+        description: Artifact key
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: Maximum rows to return (1..=200, default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: Cursor from a previous page's `next_cursor`.
+        required: false
+        schema:
+          type: string
+      - name: order
+        in: query
+        description: Sort direction.
+        required: false
+        schema:
+          $ref: '#/components/schemas/OrderParam'
+      - name: sort
+        in: query
+        description: Field to sort by. Defaults to downloaded time.
+        required: false
+        schema:
+          $ref: '#/components/schemas/VersionSortParam'
       responses:
-        "200":
-          description: "A page of versions"
+        '200':
+          description: Versions
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactVersionPage"
-        "400":
-          description: "Invalid cursor"
-
-  /artifacts/{key}/versions/{digest}:
+                $ref: '#/components/schemas/Page_ArtifactVersionResponse'
+  /api/v1/artifacts/{key}/versions/{digest}:
     get:
-      summary: "Get an artifact version"
-      operationId: "getVersion"
-      tags: ["artifacts"]
+      summary: Returns one stored version.
+      operationId: get_version
       parameters:
-        - $ref: "#/components/parameters/Key"
-        - $ref: "#/components/parameters/Digest"
+      - name: key
+        in: path
+        description: Artifact key
+        required: true
+        schema:
+          type: string
+      - name: digest
+        in: path
+        description: Content digest
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: "The version"
+        '200':
+          description: Version
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactVersionResponse"
-        "404":
-          description: "Unknown version"
+                $ref: '#/components/schemas/ArtifactVersionResponse'
+        '404':
+          description: Unknown version
     delete:
-      summary: "Evict an artifact version"
-      description: "Evicts one stored version and its blob, if no other version needs it."
-      operationId: "deleteVersion"
-      tags: ["artifacts"]
+      summary: Evicts one stored version and its blob, if no other version needs it.
+      operationId: delete_version
       parameters:
-        - $ref: "#/components/parameters/Key"
-        - $ref: "#/components/parameters/Digest"
+      - name: key
+        in: path
+        description: Artifact key
+        required: true
+        schema:
+          type: string
+      - name: digest
+        in: path
+        description: Content digest
+        required: true
+        schema:
+          type: string
       responses:
-        "204":
-          description: "Version evicted"
-        "404":
-          description: "Unknown version"
-
-  /downloads:
+        '204':
+          description: Version evicted
+        '404':
+          description: Unknown version
+  /api/v1/downloads:
     get:
-      summary: "List downloads"
-      description: >
-        Lists download attempts, optionally filtered by status and artifact key.
-        Running attempts carry live byte progress.
-      operationId: "listDownloads"
-      tags: ["downloads"]
+      summary: 'Lists download attempts, optionally filtered by status and artifact key.
+
+        Running attempts carry live byte progress.'
+      operationId: list_downloads
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Order"
-        - name: "status"
-          in: "query"
-          description: "Only attempts in this state."
-          required: false
-          schema:
-            $ref: "#/components/schemas/DownloadStatusResponse"
-        - name: "key"
-          in: "query"
-          description: "Only attempts for this artifact key."
-          required: false
-          schema:
-            type: "string"
+      - name: limit
+        in: query
+        description: Maximum rows to return (1..=200, default 50).
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: Cursor from a previous page's `next_cursor`.
+        required: false
+        schema:
+          type: string
+      - name: order
+        in: query
+        description: Sort direction.
+        required: false
+        schema:
+          $ref: '#/components/schemas/OrderParam'
+      - name: status
+        in: query
+        description: Only attempts in this state.
+        required: false
+        schema:
+          $ref: '#/components/schemas/DownloadStatusParam'
+      - name: key
+        in: query
+        description: Only attempts for this artifact key.
+        required: false
+        schema:
+          type: string
       responses:
-        "200":
-          description: "A page of downloads"
+        '200':
+          description: Downloads
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DownloadPage"
-        "400":
-          description: "Invalid cursor"
-
+                $ref: '#/components/schemas/Page_DownloadResponse'
+  /api/v1/version:
+    get:
+      summary: Returns version information about the gateway.
+      operationId: get_version
+      responses:
+        '200':
+          description: Gateway version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
 components:
-  parameters:
-    Key:
-      name: "key"
-      in: "path"
-      description: "Artifact key."
-      required: true
-      schema:
-        type: "string"
-    Digest:
-      name: "digest"
-      in: "path"
-      description: "Content digest, for example sha256:abc..."
-      required: true
-      schema:
-        type: "string"
-    Limit:
-      name: "limit"
-      in: "query"
-      description: "Maximum rows to return."
-      required: false
-      schema:
-        type: "integer"
-        format: "int32"
-        minimum: 1
-        maximum: 200
-        default: 50
-    Cursor:
-      name: "cursor"
-      in: "query"
-      description: "Cursor from a previous page's next_cursor."
-      required: false
-      schema:
-        type: "string"
-    Order:
-      name: "order"
-      in: "query"
-      description: "Sort direction."
-      required: false
-      schema:
-        type: "string"
-        enum: ["asc", "desc"]
-
   schemas:
-    VersionResponse:
-      type: "object"
-      description: "Version information about the gateway."
-      required: ["aperture"]
-      properties:
-        aperture:
-          type: "string"
-          description: "Version of the Aperture gateway."
-
     ArtifactSummaryResponse:
-      type: "object"
-      description: "A distinct artifact key with its newest version."
-      required: ["key", "version_count", "source", "digest", "size_bytes", "downloaded_at"]
+      type: object
+      description: A distinct artifact key with its newest version, for `GET /api/v1/artifacts`.
+      required:
+      - key
+      - version_count
+      - source
+      - digest
+      - size_bytes
+      - downloaded_at
       properties:
+        digest:
+          type: string
+          description: Content digest of the newest version.
+        downloaded_at:
+          $ref: '#/components/schemas/String'
+          description: When the newest version was downloaded.
         key:
-          type: "string"
-          description: "Logical artifact key."
+          type: string
+          description: Logical artifact key.
+        size_bytes:
+          type: integer
+          format: int64
+          description: Stored blob size of the newest version, in bytes.
+        source:
+          type: string
+          description: Where the newest version came from.
+        version:
+          type:
+          - string
+          - 'null'
+          description: Human-readable version of the newest version, if known.
         version_count:
-          type: "integer"
-          format: "int64"
-          description: "How many versions of this key are stored."
-        source:
-          type: "string"
-          description: "Where the newest version came from."
-        digest:
-          type: "string"
-          description: "Content digest of the newest version."
-        version:
-          type: ["string", "null"]
-          description: "Human-readable version of the newest version, if known."
-        size_bytes:
-          type: "integer"
-          format: "int64"
-          description: "Stored blob size of the newest version, in bytes."
-        downloaded_at:
-          type: "string"
-          format: "date-time"
-          description: "When the newest version was downloaded."
-
+          type: integer
+          format: int64
+          description: How many versions of this key are stored.
     ArtifactVersionResponse:
-      type: "object"
-      description: "One stored version of an artifact."
-      required: ["key", "digest", "source", "size_bytes", "downloaded_at"]
+      type: object
+      description: One stored version of an artifact.
+      required:
+      - key
+      - digest
+      - source
+      - size_bytes
+      - downloaded_at
       properties:
-        key:
-          type: "string"
-          description: "Logical artifact key."
         digest:
-          type: "string"
-          description: "Content digest of the stored blob."
-        source:
-          type: "string"
-          description: "Where this version came from."
-        version:
-          type: ["string", "null"]
-          description: "Human-readable version, if known."
-        media_type:
-          type: ["string", "null"]
-          description: "OCI media type, if applicable."
-        size_bytes:
-          type: "integer"
-          format: "int64"
-          description: "Stored blob size in bytes."
+          type: string
+          description: Content digest of the stored blob.
         downloaded_at:
-          type: "string"
-          format: "date-time"
-          description: "When this version was downloaded."
+          $ref: '#/components/schemas/String'
+          description: When this version was downloaded.
+        key:
+          type: string
+          description: Logical artifact key.
+        media_type:
+          type:
+          - string
+          - 'null'
+          description: OCI media type, if applicable.
+        size_bytes:
+          type: integer
+          format: int64
+          description: Stored blob size in bytes.
+        source:
+          type: string
+          description: Where this version came from.
         verified_at:
-          type: ["string", "null"]
-          format: "date-time"
-          description: "When this version was last verified, if ever."
-
-    DownloadStatusResponse:
-      type: "string"
-      description: "Lifecycle state of a download attempt."
-      enum: ["running", "succeeded", "failed", "interrupted"]
-
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/String'
+            description: When this version was last verified, if ever.
+        version:
+          type:
+          - string
+          - 'null'
+          description: Human-readable version, if known.
     DownloadProgressResponse:
-      type: "object"
-      description: "Live byte progress of a running download."
-      required: ["done_bytes"]
+      type: object
+      description: Live byte progress of a running download.
+      required:
+      - done_bytes
       properties:
         done_bytes:
-          type: "integer"
-          format: "int64"
+          type: integer
+          format: int64
+          description: Bytes transferred so far.
           minimum: 0
-          description: "Bytes transferred so far."
         total_bytes:
-          type: ["integer", "null"]
-          format: "int64"
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: Expected total bytes, if known.
           minimum: 0
-          description: "Expected total bytes, if known."
-
     DownloadResponse:
-      type: "object"
-      description: "One download attempt."
-      required: ["id", "key", "source", "status", "started_at"]
+      type: object
+      description: One download attempt, returned by `GET /api/v1/downloads`.
+      required:
+      - id
+      - key
+      - source
+      - status
+      - started_at
       properties:
-        id:
-          type: "integer"
-          format: "int64"
-          description: "Attempt id."
-        key:
-          type: "string"
-          description: "Logical artifact key."
-        source:
-          type: "string"
-          description: "Where it was fetched from."
-        status:
-          $ref: "#/components/schemas/DownloadStatusResponse"
-        started_at:
-          type: "string"
-          format: "date-time"
-          description: "When the attempt started."
-        finished_at:
-          type: ["string", "null"]
-          format: "date-time"
-          description: "When it finished, if it did."
         digest:
-          type: ["string", "null"]
-          description: "Resolved content digest, if it got that far."
-        size_bytes:
-          type: ["integer", "null"]
-          format: "int64"
-          description: "Bytes transferred, recorded on completion."
+          type:
+          - string
+          - 'null'
+          description: Resolved content digest, if it got that far.
         error:
-          type: ["string", "null"]
-          description: "Failure detail, if any."
+          type:
+          - string
+          - 'null'
+          description: Failure detail, if any.
+        finished_at:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/String'
+            description: When it finished, if it did.
+        id:
+          type: integer
+          format: int64
+          description: Attempt id.
+        key:
+          type: string
+          description: Logical artifact key.
         progress:
           oneOf:
-            - type: "null"
-            - $ref: "#/components/schemas/DownloadProgressResponse"
-          description: "Live byte progress, present only while running."
-
-    ArtifactSummaryPage:
-      type: "object"
-      description: "A page of artifacts plus the cursor for the next page."
-      required: ["items", "has_more"]
+          - type: 'null'
+          - $ref: '#/components/schemas/DownloadProgressResponse'
+            description: Live byte progress, present only while running.
+        size_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: Bytes transferred, recorded on completion.
+        source:
+          type: string
+          description: Where it was fetched from.
+        started_at:
+          $ref: '#/components/schemas/String'
+          description: When the attempt started.
+        status:
+          $ref: '#/components/schemas/DownloadStatusResponse'
+          description: Lifecycle state.
+    DownloadStatusResponse:
+      type: string
+      description: Lifecycle state of a download attempt.
+      enum:
+      - running
+      - succeeded
+      - failed
+      - interrupted
+    Page_ArtifactSummaryResponse:
+      type: object
+      description: A page of results plus the cursor for the next page.
+      required:
+      - items
+      - has_more
       properties:
-        items:
-          type: "array"
-          items:
-            $ref: "#/components/schemas/ArtifactSummaryResponse"
-          description: "The rows in this page."
-        next_cursor:
-          type: ["string", "null"]
-          description: "Cursor to pass as ?cursor= to fetch the next page. Null at the end."
         has_more:
-          type: "boolean"
-          description: "Whether another page follows."
-
-    ArtifactVersionPage:
-      type: "object"
-      description: "A page of versions plus the cursor for the next page."
-      required: ["items", "has_more"]
+          type: boolean
+          description: Whether another page follows.
+        items:
+          type: array
+          items:
+            type: object
+            description: A distinct artifact key with its newest version, for `GET /api/v1/artifacts`.
+            required:
+            - key
+            - version_count
+            - source
+            - digest
+            - size_bytes
+            - downloaded_at
+            properties:
+              digest:
+                type: string
+                description: Content digest of the newest version.
+              downloaded_at:
+                $ref: '#/components/schemas/String'
+                description: When the newest version was downloaded.
+              key:
+                type: string
+                description: Logical artifact key.
+              size_bytes:
+                type: integer
+                format: int64
+                description: Stored blob size of the newest version, in bytes.
+              source:
+                type: string
+                description: Where the newest version came from.
+              version:
+                type:
+                - string
+                - 'null'
+                description: Human-readable version of the newest version, if known.
+              version_count:
+                type: integer
+                format: int64
+                description: How many versions of this key are stored.
+          description: The rows in this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Cursor to pass as `?cursor=` to fetch the next page. Null at the end.
+    Page_ArtifactVersionResponse:
+      type: object
+      description: A page of results plus the cursor for the next page.
+      required:
+      - items
+      - has_more
       properties:
-        items:
-          type: "array"
-          items:
-            $ref: "#/components/schemas/ArtifactVersionResponse"
-          description: "The rows in this page."
-        next_cursor:
-          type: ["string", "null"]
-          description: "Cursor to pass as ?cursor= to fetch the next page. Null at the end."
         has_more:
-          type: "boolean"
-          description: "Whether another page follows."
-
-    DownloadPage:
-      type: "object"
-      description: "A page of downloads plus the cursor for the next page."
-      required: ["items", "has_more"]
+          type: boolean
+          description: Whether another page follows.
+        items:
+          type: array
+          items:
+            type: object
+            description: One stored version of an artifact.
+            required:
+            - key
+            - digest
+            - source
+            - size_bytes
+            - downloaded_at
+            properties:
+              digest:
+                type: string
+                description: Content digest of the stored blob.
+              downloaded_at:
+                $ref: '#/components/schemas/String'
+                description: When this version was downloaded.
+              key:
+                type: string
+                description: Logical artifact key.
+              media_type:
+                type:
+                - string
+                - 'null'
+                description: OCI media type, if applicable.
+              size_bytes:
+                type: integer
+                format: int64
+                description: Stored blob size in bytes.
+              source:
+                type: string
+                description: Where this version came from.
+              verified_at:
+                oneOf:
+                - type: 'null'
+                - $ref: '#/components/schemas/String'
+                  description: When this version was last verified, if ever.
+              version:
+                type:
+                - string
+                - 'null'
+                description: Human-readable version, if known.
+          description: The rows in this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Cursor to pass as `?cursor=` to fetch the next page. Null at the end.
+    Page_DownloadResponse:
+      type: object
+      description: A page of results plus the cursor for the next page.
+      required:
+      - items
+      - has_more
       properties:
-        items:
-          type: "array"
-          items:
-            $ref: "#/components/schemas/DownloadResponse"
-          description: "The rows in this page."
-        next_cursor:
-          type: ["string", "null"]
-          description: "Cursor to pass as ?cursor= to fetch the next page. Null at the end."
         has_more:
-          type: "boolean"
-          description: "Whether another page follows."
+          type: boolean
+          description: Whether another page follows.
+        items:
+          type: array
+          items:
+            type: object
+            description: One download attempt, returned by `GET /api/v1/downloads`.
+            required:
+            - id
+            - key
+            - source
+            - status
+            - started_at
+            properties:
+              digest:
+                type:
+                - string
+                - 'null'
+                description: Resolved content digest, if it got that far.
+              error:
+                type:
+                - string
+                - 'null'
+                description: Failure detail, if any.
+              finished_at:
+                oneOf:
+                - type: 'null'
+                - $ref: '#/components/schemas/String'
+                  description: When it finished, if it did.
+              id:
+                type: integer
+                format: int64
+                description: Attempt id.
+              key:
+                type: string
+                description: Logical artifact key.
+              progress:
+                oneOf:
+                - type: 'null'
+                - $ref: '#/components/schemas/DownloadProgressResponse'
+                  description: Live byte progress, present only while running.
+              size_bytes:
+                type:
+                - integer
+                - 'null'
+                format: int64
+                description: Bytes transferred, recorded on completion.
+              source:
+                type: string
+                description: Where it was fetched from.
+              started_at:
+                $ref: '#/components/schemas/String'
+                description: When the attempt started.
+              status:
+                $ref: '#/components/schemas/DownloadStatusResponse'
+                description: Lifecycle state.
+          description: The rows in this page.
+        next_cursor:
+          type:
+          - string
+          - 'null'
+          description: Cursor to pass as `?cursor=` to fetch the next page. Null at the end.
+    String:
+      type: string
+    VersionResponse:
+      type: object
+      description: Version information returned by `GET /api/v1/version`.
+      required:
+      - aperture
+      properties:
+        aperture:
+          type: string
+          description: Version of the Aperture gateway.
