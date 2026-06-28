@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::{env, fs, process};
 
-use aperture_artifacts::{Artifact, ArtifactStatus, Artifacts, DownloadStatus, Storage};
+use aperture_artifacts::{Artifact, Artifacts, DownloadStatus, ListQuery, Storage, VersionSort};
 use jiff::Timestamp;
 
 fn temp_root(tag: &str) -> PathBuf {
@@ -11,43 +11,56 @@ fn temp_root(tag: &str) -> PathBuf {
 }
 
 #[tokio::test]
-async fn sync_reconciles_interrupted_downloads() {
+async fn sync_interrupts_orphaned_running_downloads() {
     let root = temp_root("interrupted");
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Artifacts::new(storage, root.clone());
-
-    let started = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
     let repo = artifacts.storage().artifacts();
 
-    // A download that was running when the process stopped.
+    let started = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
     let id = repo.start_download("spectra", "src", started).await.unwrap();
-    // And the matching catalog entry left mid-download.
-    repo.upsert(&Artifact {
-        name: "spectra".to_owned(),
-        source: "src".to_owned(),
-        digest: None,
-        media_type: None,
-        version: None,
-        size_bytes: None,
-        status: ArtifactStatus::Downloading,
-        downloaded_at: None,
-        verified_at: None,
-    })
-    .await
-    .unwrap();
 
     artifacts.sync().await.unwrap();
 
-    // The running attempt is now interrupted.
     assert!(repo.list_running().await.unwrap().is_empty());
     let history = repo.downloads_for("spectra").await.unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].id, id);
     assert_eq!(history[0].status, DownloadStatus::Interrupted);
 
-    // The stale catalog entry is resolved to failed.
-    let entry = repo.get("spectra").await.unwrap().unwrap();
-    assert_eq!(entry.status, ArtifactStatus::Failed);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn sync_removes_versions_without_blobs() {
+    let root = temp_root("orphan-version");
+    let storage = Storage::open(":memory:").await.unwrap();
+    let artifacts = Artifacts::new(storage, root.clone());
+    let repo = artifacts.storage().artifacts();
+
+    // A catalog version whose blob never made it to disk.
+    repo.record_version(&Artifact {
+        id: 0,
+        key: "spectra".to_owned(),
+        source: "src".to_owned(),
+        digest: "sha256:deadbeef".to_owned(),
+        media_type: None,
+        version: None,
+        size_bytes: 10,
+        downloaded_at: Timestamp::from_millisecond(1_700_000_000_000).unwrap(),
+        verified_at: None,
+    })
+    .await
+    .unwrap();
+
+    let report = artifacts.sync().await.unwrap();
+    assert_eq!(report.removed_entries, 1);
+
+    let versions = repo
+        .list_versions("spectra", VersionSort::DownloadedAt, &ListQuery::default())
+        .await
+        .unwrap();
+    assert!(versions.items.is_empty());
 
     let _ = fs::remove_dir_all(&root);
 }

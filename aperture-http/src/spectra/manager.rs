@@ -77,7 +77,7 @@ impl Spectra {
         let located = self
             .artifacts
             .ensure(FetchRequest {
-                name: self.config.name.clone(),
+                key: self.config.name.clone(),
                 source: FetchSource::Oci {
                     reference: self.config.source.clone(),
                     media_type: self.config.media_type.clone(),

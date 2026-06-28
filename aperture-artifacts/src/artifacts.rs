@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use aperture_storage::{Artifact, ArtifactStatus, DownloadStatus, Storage};
+use aperture_storage::{
+    Artifact, ArtifactKey, Download, DownloadStatus, ListQuery, Page, Storage, VersionSort,
+};
 use jiff::Timestamp;
 use oci_client::Reference;
 use tokio::fs;
@@ -42,8 +44,8 @@ pub struct Located {
 /// What to fetch. The source carries everything a fetcher needs.
 #[derive(Debug, Clone)]
 pub struct FetchRequest {
-    /// Logical name to record the artifact under.
-    pub name: String,
+    /// Logical key to record the artifact under.
+    pub key: String,
     /// Where and how to fetch it from.
     pub source: FetchSource,
 }
@@ -115,24 +117,81 @@ impl Artifacts {
         self.inner.downloads.snapshot()
     }
 
-    /// Returns the stored blob for `name`, if it is present on disk.
-    pub async fn locate(&self, name: &str) -> Result<Option<Located>> {
-        self.inner.locate(name).await
+    /// Returns the blob of the newest stored version of `key`, if present on
+    /// disk.
+    pub async fn locate(&self, key: &str) -> Result<Option<Located>> {
+        self.inner.locate(key).await
+    }
+
+    /// Returns the blob of the `(key, digest)` version, if present on disk.
+    pub async fn locate_version(&self, key: &str, digest: &str) -> Result<Option<Located>> {
+        self.inner.locate_version(key, digest).await
+    }
+
+    /// Lists stored artifact keys with their newest version and version count.
+    pub async fn list_artifacts(&self, query: &ListQuery) -> Result<Page<ArtifactKey>> {
+        Ok(self.inner.storage.artifacts().list_keys(query).await?)
+    }
+
+    /// Returns one artifact key with its newest version and version count.
+    pub async fn artifact(&self, key: &str) -> Result<Option<ArtifactKey>> {
+        Ok(self.inner.storage.artifacts().get_key(key).await?)
+    }
+
+    /// Lists the stored versions of `key`.
+    pub async fn list_versions(
+        &self,
+        key: &str,
+        sort: VersionSort,
+        query: &ListQuery,
+    ) -> Result<Page<Artifact>> {
+        Ok(self
+            .inner
+            .storage
+            .artifacts()
+            .list_versions(key, sort, query)
+            .await?)
+    }
+
+    /// Returns the `(key, digest)` version, if stored.
+    pub async fn version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
+        Ok(self.inner.storage.artifacts().get_version(key, digest).await?)
+    }
+
+    /// Lists download attempts, optionally filtered by status and key.
+    pub async fn list_downloads(
+        &self,
+        status: Option<DownloadStatus>,
+        key: Option<&str>,
+        query: &ListQuery,
+    ) -> Result<Page<Download>> {
+        Ok(self
+            .inner
+            .storage
+            .artifacts()
+            .list_downloads(status, key, query)
+            .await?)
+    }
+
+    /// Removes the `(key, digest)` version, and its blob if no other version
+    /// references it. Returns whether the version existed.
+    pub async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
+        self.inner.evict_version(key, digest).await
     }
 
     /// Returns a handle to the artifact in `request`. If it is already present
     /// the handle is immediately ready. Otherwise a download starts in the
     /// background, or joins one already in flight, and the handle tracks it.
     pub async fn fetch(&self, request: FetchRequest) -> Result<DownloadHandle> {
-        if let Some(located) = self.inner.locate(&request.name).await? {
+        if let Some(located) = self.inner.locate(&request.key).await? {
             return Ok(DownloadHandle::ready(located));
         }
 
-        let slot = match self.inner.downloads.claim(&request.name, request.source_str()) {
+        let slot = match self.inner.downloads.claim(&request.key, request.source_str()) {
             Claim::Joiner(slot) => {
                 return Ok(DownloadHandle::tracking(
                     Arc::clone(&self.inner),
-                    request.name,
+                    request.key,
                     slot,
                 ));
             }
@@ -144,27 +203,27 @@ impl Artifacts {
             .inner
             .storage
             .artifacts()
-            .start_download(&request.name, request.source_str(), started)
+            .start_download(&request.key, request.source_str(), started)
             .await
         {
             Ok(id) => id,
             Err(err) => {
                 // Never started, so wake any joiner and free the slot.
                 slot.complete(Phase::Failed);
-                self.inner.downloads.release(&request.name);
+                self.inner.downloads.release(&request.key);
                 return Err(err.into());
             }
         };
 
         let inner = Arc::clone(&self.inner);
         let task_slot = Arc::clone(&slot);
-        let name = request.name.clone();
+        let key = request.key.clone();
         let run = request;
         tokio::spawn(async move {
             inner.run_download(run, id, task_slot).await;
         });
 
-        Ok(DownloadHandle::tracking(Arc::clone(&self.inner), name, slot))
+        Ok(DownloadHandle::tracking(Arc::clone(&self.inner), key, slot))
     }
 
     /// Fetches the artifact in `request` and waits for it to be ready.
@@ -181,13 +240,21 @@ impl Artifacts {
 }
 
 impl Inner {
-    async fn locate(&self, name: &str) -> Result<Option<Located>> {
-        let Some(artifact) = self.storage.artifacts().get(name).await? else {
-            return Ok(None);
-        };
-        let Some(raw) = artifact.digest.as_deref() else {
-            return Ok(None);
-        };
+    async fn locate(&self, key: &str) -> Result<Option<Located>> {
+        match self.storage.artifacts().latest(key).await? {
+            Some(artifact) => self.locate_digest(&artifact.digest).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn locate_version(&self, key: &str, digest: &str) -> Result<Option<Located>> {
+        match self.storage.artifacts().get_version(key, digest).await? {
+            Some(artifact) => self.locate_digest(&artifact.digest).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn locate_digest(&self, raw: &str) -> Result<Option<Located>> {
         let digest: Digest = raw.parse()?;
         if !self.blobs.contains(&digest).await {
             return Ok(None);
@@ -198,23 +265,42 @@ impl Inner {
         }))
     }
 
-    /// Runs the download for `request`, records the outcome in the catalog and
-    /// the download history, then completes the slot and releases it. Runs on
-    /// its own task, so failures are logged rather than returned.
+    /// Removes a stored version, and its blob when no other version still
+    /// references that digest. Returns whether the version existed.
+    async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
+        let repository = self.storage.artifacts();
+        let Some(artifact) = repository.get_version(key, digest).await? else {
+            return Ok(false);
+        };
+        repository.delete_version(key, digest).await?;
+
+        let still_referenced = repository
+            .all_versions()
+            .await?
+            .iter()
+            .any(|version| version.digest == artifact.digest);
+        if !still_referenced
+            && let Ok(parsed) = artifact.digest.parse::<Digest>()
+        {
+            self.blobs.remove(&parsed).await?;
+        }
+        Ok(true)
+    }
+
+    /// Runs the download for `request`. On success it records the new version;
+    /// either way it records the outcome in the download history, then completes
+    /// the slot and releases it. Runs on its own task, so failures are logged
+    /// rather than returned.
     async fn run_download(self: Arc<Self>, request: FetchRequest, id: i64, slot: Arc<Slot>) {
         let repository = self.storage.artifacts();
-        if let Err(err) = repository.upsert(&downloading_artifact(&request)).await {
-            tracing::error!(name = %request.name, error = &err as &dyn Error, "failed to mark artifact downloading");
-        }
-
         let result = self.execute(&request, slot.progress()).await;
         let finished = Timestamp::now();
 
         let phase = match &result {
             Ok(fetched) => {
-                let artifact = present_artifact(&request, fetched, finished);
-                if let Err(err) = repository.upsert(&artifact).await {
-                    tracing::error!(name = %request.name, error = &err as &dyn Error, "failed to record artifact");
+                let artifact = version_artifact(&request, fetched, finished);
+                if let Err(err) = repository.record_version(&artifact).await {
+                    tracing::error!(key = %request.key, error = &err as &dyn Error, "failed to record artifact version");
                 }
                 if let Err(err) = repository
                     .finish_download(
@@ -227,14 +313,11 @@ impl Inner {
                     )
                     .await
                 {
-                    tracing::error!(name = %request.name, error = &err as &dyn Error, "failed to finish download record");
+                    tracing::error!(key = %request.key, error = &err as &dyn Error, "failed to finish download record");
                 }
                 Phase::Succeeded
             }
             Err(err) => {
-                if let Err(write_err) = repository.upsert(&failed_artifact(&request)).await {
-                    tracing::error!(name = %request.name, error = &write_err as &dyn Error, "failed to mark artifact failed");
-                }
                 if let Err(write_err) = repository
                     .finish_download(
                         id,
@@ -246,14 +329,14 @@ impl Inner {
                     )
                     .await
                 {
-                    tracing::error!(name = %request.name, error = &write_err as &dyn Error, "failed to finish download record");
+                    tracing::error!(key = %request.key, error = &write_err as &dyn Error, "failed to finish download record");
                 }
                 Phase::Failed
             }
         };
 
         slot.complete(phase);
-        self.downloads.release(&request.name);
+        self.downloads.release(&request.key);
     }
 
     /// Dispatches a fetch to the right fetcher for its source.
@@ -344,26 +427,21 @@ impl Inner {
                 .await?;
         }
 
-        for artifact in repository.list().await? {
-            // Resolve a catalog entry left mid-download by a stopped process.
-            if artifact.status == ArtifactStatus::Downloading
-                && !self.downloads.is_active(&artifact.name)
-            {
-                let mut failed = artifact.clone();
-                failed.status = ArtifactStatus::Failed;
-                repository.upsert(&failed).await?;
-                continue;
-            }
-            let Some(raw) = artifact.digest.as_deref() else {
-                continue;
-            };
-            let Ok(digest) = raw.parse::<Digest>() else {
+        for artifact in repository.all_versions().await? {
+            let Ok(digest) = artifact.digest.parse::<Digest>() else {
+                // An unreadable digest can never match a blob, so drop the row.
+                repository
+                    .delete_version(&artifact.key, &artifact.digest)
+                    .await?;
+                report.removed_entries += 1;
                 continue;
             };
             if self.blobs.contains(&digest).await {
                 tracked.insert(digest);
             } else {
-                repository.delete(&artifact.name).await?;
+                repository
+                    .delete_version(&artifact.key, &artifact.digest)
+                    .await?;
                 report.removed_entries += 1;
             }
         }
@@ -392,7 +470,7 @@ enum HandleState {
     Ready(Located),
     Tracking {
         inner: Arc<Inner>,
-        name: String,
+        key: String,
         slot: Arc<Slot>,
     },
 }
@@ -404,17 +482,17 @@ impl DownloadHandle {
         }
     }
 
-    fn tracking(inner: Arc<Inner>, name: String, slot: Arc<Slot>) -> Self {
+    fn tracking(inner: Arc<Inner>, key: String, slot: Arc<Slot>) -> Self {
         Self {
-            state: HandleState::Tracking { inner, name, slot },
+            state: HandleState::Tracking { inner, key, slot },
         }
     }
 
-    /// The artifact's logical name.
-    pub fn name(&self) -> Option<&str> {
+    /// The artifact's logical key.
+    pub fn key(&self) -> Option<&str> {
         match &self.state {
             HandleState::Ready(_) => None,
-            HandleState::Tracking { name, .. } => Some(name),
+            HandleState::Tracking { key, .. } => Some(key),
         }
     }
 
@@ -422,7 +500,7 @@ impl DownloadHandle {
     pub fn progress(&self) -> Option<DownloadProgress> {
         match &self.state {
             HandleState::Ready(_) => None,
-            HandleState::Tracking { name, slot, .. } => Some(slot.snapshot(name)),
+            HandleState::Tracking { key, slot, .. } => Some(slot.snapshot(key)),
         }
     }
 
@@ -430,7 +508,7 @@ impl DownloadHandle {
     pub async fn wait(self) -> Result<Located> {
         match self.state {
             HandleState::Ready(located) => Ok(located),
-            HandleState::Tracking { inner, name, slot } => {
+            HandleState::Tracking { inner, key, slot } => {
                 let mut phase = slot.subscribe();
                 while *phase.borrow_and_update() == Phase::Running {
                     if phase.changed().await.is_err() {
@@ -439,11 +517,11 @@ impl DownloadHandle {
                 }
                 let final_phase = *phase.borrow();
                 match final_phase {
-                    Phase::Succeeded => inner.locate(&name).await?.ok_or_else(|| {
-                        ArtifactError::Fetch(anyhow::format_err!("{name} missing after download"))
+                    Phase::Succeeded => inner.locate(&key).await?.ok_or_else(|| {
+                        ArtifactError::Fetch(anyhow::format_err!("{key} missing after download"))
                     }),
                     _ => Err(ArtifactError::Fetch(anyhow::format_err!(
-                        "download of {name} failed"
+                        "download of {key} failed"
                     ))),
                 }
             }
@@ -460,38 +538,16 @@ impl IntoFuture for DownloadHandle {
     }
 }
 
-fn downloading_artifact(request: &FetchRequest) -> Artifact {
-    base_artifact(request, ArtifactStatus::Downloading)
-}
-
-fn failed_artifact(request: &FetchRequest) -> Artifact {
-    base_artifact(request, ArtifactStatus::Failed)
-}
-
-fn base_artifact(request: &FetchRequest, status: ArtifactStatus) -> Artifact {
+fn version_artifact(request: &FetchRequest, fetched: &Fetched, finished: Timestamp) -> Artifact {
     Artifact {
-        name: request.name.clone(),
+        id: 0,
+        key: request.key.clone(),
         source: request.source_str().to_owned(),
-        digest: None,
-        media_type: None,
-        version: None,
-        size_bytes: None,
-        status,
-        downloaded_at: None,
-        verified_at: None,
-    }
-}
-
-fn present_artifact(request: &FetchRequest, fetched: &Fetched, finished: Timestamp) -> Artifact {
-    Artifact {
-        name: request.name.clone(),
-        source: request.source_str().to_owned(),
-        digest: Some(fetched.digest.to_string()),
+        digest: fetched.digest.to_string(),
         media_type: Some(fetched.media_type.to_string()),
         version: fetched.version.clone(),
-        size_bytes: Some(fetched.size as i64),
-        status: ArtifactStatus::Present,
-        downloaded_at: Some(finished),
+        size_bytes: fetched.size as i64,
+        downloaded_at: finished,
         verified_at: Some(finished),
     }
 }

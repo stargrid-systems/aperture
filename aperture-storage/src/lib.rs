@@ -8,16 +8,18 @@
 use turso::{Builder, Connection};
 
 pub use self::artifact::{
-    Artifact, ArtifactRepository, ArtifactStatus, Download, DownloadStatus,
+    Artifact, ArtifactKey, ArtifactRepository, Download, DownloadStatus, VersionSort,
 };
 use self::error::database;
 pub use self::error::{Result, StorageError};
 use self::migration::run;
+pub use self::page::{ListQuery, Order, Page};
 
 mod artifact;
 mod error;
 mod macros;
 mod migration;
+mod page;
 
 /// Handle to the gateway's persistent storage.
 #[derive(Clone)]

@@ -79,10 +79,10 @@ impl Slot {
         let _ = self.phase.send(phase);
     }
 
-    /// A snapshot of this download for display, labelled with `name`.
-    pub(crate) fn snapshot(&self, name: &str) -> DownloadProgress {
+    /// A snapshot of this download for display, labelled with `key`.
+    pub(crate) fn snapshot(&self, key: &str) -> DownloadProgress {
         DownloadProgress {
-            name: name.to_owned(),
+            key: key.to_owned(),
             source: self.source.clone(),
             started_at: self.started_at,
             done_bytes: self.progress.done(),
@@ -94,8 +94,8 @@ impl Slot {
 /// A snapshot of one ongoing download, for display.
 #[derive(Debug, Clone)]
 pub struct DownloadProgress {
-    /// Logical artifact name.
-    pub name: String,
+    /// Logical artifact key.
+    pub key: String,
     /// Where it is being fetched from.
     pub source: String,
     /// When the download started.
@@ -157,7 +157,7 @@ impl Downloads {
         let active = self.active.lock().expect("downloads poisoned");
         active
             .iter()
-            .map(|(name, slot)| slot.snapshot(name))
+            .map(|(key, slot)| slot.snapshot(key))
             .collect()
     }
 }
@@ -249,7 +249,7 @@ mod tests {
 
         let snapshot = downloads.snapshot();
         assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].name, "spectra");
+        assert_eq!(snapshot[0].key, "spectra");
         assert_eq!(snapshot[0].done_bytes, 40);
         assert_eq!(snapshot[0].total_bytes, Some(100));
     }

@@ -18,6 +18,7 @@ pub use self::spectra::{Spectra, SpectraConfig};
 
 mod api;
 mod dto;
+mod error;
 mod spectra;
 
 /// Shared application state handed to every request handler.

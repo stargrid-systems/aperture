@@ -4,16 +4,18 @@ use crate::macros::sql;
 
 pub(super) const SQL: &str = sql!(
     CREATE TABLE artifacts (
-        name TEXT PRIMARY KEY NOT NULL,
+        id INTEGER PRIMARY KEY,
+        key TEXT NOT NULL,
         source TEXT NOT NULL,
-        digest TEXT,
+        digest TEXT NOT NULL,
         media_type TEXT,
         version TEXT,
-        size_bytes INTEGER,
-        status TEXT NOT NULL,
-        downloaded_at INTEGER,
-        verified_at INTEGER
+        size_bytes INTEGER NOT NULL,
+        downloaded_at INTEGER NOT NULL,
+        verified_at INTEGER,
+        UNIQUE (key, digest)
     );
+    CREATE INDEX idx_artifacts_key ON artifacts (key);
     CREATE TABLE artifact_downloads (
         id INTEGER PRIMARY KEY,
         artifact TEXT NOT NULL,
