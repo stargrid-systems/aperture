@@ -1,7 +1,6 @@
 [package]
-name = "aperture-storage"
+name = "aperture-artifacts"
 version = "0.1.0"
-description = "Aperture storage layer."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,10 +12,14 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+aperture-storage = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std"] }
+oci-client = { workspace = true, features = ["rustls-tls"] }
+sha2 = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
-turso = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
