@@ -35,6 +35,7 @@ sha2 = { version = "0.11", default-features = false }
 thiserror = { version = "2", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
+tower = { version = "0.5", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 turso = { version = "0.6", default-features = false }
