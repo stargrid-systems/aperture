@@ -4,9 +4,10 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aperture_artifacts::Artifacts;
+use aperture_artifacts::{Artifacts, DownloadDefinition};
 pub use aperture_http::openapi;
 use aperture_http::{AppState, Spectra, SpectraConfig};
+use aperture_tasks::{TaskManager, TaskRegistry};
 use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
@@ -19,7 +20,14 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;
     artifacts.sync().await.into_diagnostic()?;
 
-    let spectra = Spectra::new(artifacts, SpectraConfig::default());
+    // Register the task kinds and mark any invocations a previous run left
+    // active as interrupted.
+    let mut registry = TaskRegistry::new();
+    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
+    let tasks = TaskManager::new(artifacts.storage().clone(), registry);
+    tasks.reconcile().await.into_diagnostic()?;
+
+    let spectra = Spectra::new(Arc::clone(&artifacts), tasks, SpectraConfig::default());
     // Open a cached frontend right away. A missing one is fetched lazily on the
     // first request.
     spectra

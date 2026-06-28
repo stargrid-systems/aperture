@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use aperture_artifacts::{Artifacts, FetchRequest, FetchSource};
+use aperture_artifacts::{Artifacts, DownloadDefinition, DownloadInput, DownloadSource};
+use aperture_tasks::TaskManager;
 use tokio::time;
 
 use super::config::SpectraConfig;
@@ -15,16 +16,19 @@ use super::image::{SpectraImage, open_image};
 #[derive(Clone)]
 pub struct Spectra {
     artifacts: Arc<Artifacts>,
+    tasks: TaskManager,
     config: SpectraConfig,
     current: Arc<RwLock<Option<Arc<SpectraImage>>>>,
     preparing: Arc<AtomicBool>,
 }
 
 impl Spectra {
-    /// Creates a frontend backed by `artifacts`, pulling from `config`.
-    pub fn new(artifacts: Arc<Artifacts>, config: SpectraConfig) -> Self {
+    /// Creates a frontend backed by `artifacts`, fetched via `tasks`, pulling
+    /// from `config`.
+    pub fn new(artifacts: Arc<Artifacts>, tasks: TaskManager, config: SpectraConfig) -> Self {
         Self {
             artifacts,
+            tasks,
             config,
             current: Arc::new(RwLock::new(None)),
             preparing: Arc::new(AtomicBool::new(false)),
@@ -62,7 +66,6 @@ impl Spectra {
         if self.preparing.swap(true, Ordering::SeqCst) {
             return;
         }
-        // TODO: switch to a proper task management system!
         let this = self.clone();
         tokio::spawn(async move {
             if let Err(err) = this.prepare().await {
@@ -74,18 +77,15 @@ impl Spectra {
     }
 
     async fn prepare(&self) -> anyhow::Result<()> {
-        let located = self
-            .artifacts
-            .ensure(FetchRequest {
-                key: self.config.name.clone(),
-                source: FetchSource::Oci {
-                    reference: self.config.source.clone(),
-                    media_type: self.config.media_type.clone(),
-                },
-            })
-            .await?;
-        let image = open_image(located.path, located.digest.to_string()).await?;
-        self.set(Arc::new(image));
+        let input = DownloadInput {
+            key: self.config.name.clone(),
+            source: DownloadSource::Oci {
+                reference: self.config.source.clone(),
+                media_type: self.config.media_type.as_str().to_owned(),
+            },
+        };
+        self.tasks.spawn::<DownloadDefinition>(input).await?.wait().await?;
+        self.activate_if_present().await?;
         Ok(())
     }
 }

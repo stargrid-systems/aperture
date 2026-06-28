@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use std::{env, fs, process};
 
-use aperture_artifacts::{Artifact, Artifacts, DownloadStatus, Storage};
+use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
+use aperture_tasks::{TaskManager, TaskRegistry};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
@@ -28,11 +29,11 @@ fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
     }
 }
 
-async fn seeded_app() -> (Router, Artifacts) {
+async fn seeded_app() -> (Router, Arc<Artifacts>) {
     let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage, root);
+    let artifacts = Arc::new(Artifacts::new(storage, root));
 
     let repo = artifacts.storage().artifacts();
     repo.record_version(&version("firmware", "sha256:fff", 1_000))
@@ -45,13 +46,11 @@ async fn seeded_app() -> (Router, Artifacts) {
         .await
         .unwrap();
 
-    let started = at(1_700_000_000_000);
-    let id = repo.start_download("spectra", "src", started).await.unwrap();
-    repo.finish_download(id, DownloadStatus::Succeeded, started, Some("sha256:bbb"), Some(1234), None)
-        .await
-        .unwrap();
+    let mut registry = TaskRegistry::new();
+    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
+    let tasks = TaskManager::new(artifacts.storage().clone(), registry);
 
-    let spectra = Spectra::new(Arc::new(artifacts.clone()), SpectraConfig::default());
+    let spectra = Spectra::new(Arc::clone(&artifacts), tasks, SpectraConfig::default());
     let state = AppState::new("test", spectra);
     (app(state), artifacts)
 }
@@ -180,16 +179,3 @@ async fn filters_artifacts_and_versions() {
     assert!(miss["items"].as_array().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn lists_downloads_with_filter() {
-    let (app, _artifacts) = seeded_app().await;
-
-    let (status, json) = get_json(&app, "/api/v1/downloads").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["items"].as_array().unwrap().len(), 1);
-    assert_eq!(json["items"][0]["key"], "spectra");
-    assert_eq!(json["items"][0]["status"], "succeeded");
-
-    let (_, none) = get_json(&app, "/api/v1/downloads?status=failed").await;
-    assert!(none["items"].as_array().unwrap().is_empty());
-}

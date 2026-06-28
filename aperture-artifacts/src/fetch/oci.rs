@@ -3,9 +3,10 @@ use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 use tokio::io::AsyncWrite;
 
+use aperture_tasks::ProgressHandle;
+
 use super::FetchMeta;
 use crate::digest::Digest;
-use crate::downloads::Progress;
 use crate::error::{ArtifactError, Result};
 use crate::media_type::MediaType;
 
@@ -30,7 +31,7 @@ impl OciFetcher {
         reference: &Reference,
         media_type: &MediaType,
         sink: &mut (dyn AsyncWrite + Unpin + Send),
-        progress: &Progress,
+        progress: &ProgressHandle,
     ) -> Result<FetchMeta> {
         let (manifest, _digest) = self
             .client

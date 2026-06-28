@@ -13,13 +13,16 @@ workspace = true
 
 [dependencies]
 aperture-storage = { workspace = true }
+aperture-tasks = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std"] }
 oci-client = { workspace = true, features = ["rustls-tls"] }
+serde = { workspace = true, features = ["std", "derive"] }
 sha2 = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
 tracing = { workspace = true }
+utoipa = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

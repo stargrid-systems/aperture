@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::{env, fs, process};
 
-use aperture_artifacts::{Artifact, Artifacts, DownloadStatus, ListQuery, Storage, VersionSort};
+use aperture_artifacts::{Artifact, Artifacts, ListQuery, Storage, VersionSort};
+use aperture_storage::DownloadStatus;
 use jiff::Timestamp;
 
 fn temp_root(tag: &str) -> PathBuf {
