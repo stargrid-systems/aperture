@@ -21,6 +21,8 @@ use crate::error::TaskError;
 pub(crate) trait ErasedDefinition: Send + Sync + 'static {
     fn kind(&self) -> &'static str;
     fn capabilities(&self) -> Capabilities;
+    fn input_name(&self) -> String;
+    fn output_name(&self) -> String;
     fn input_schema(&self) -> RefOr<Schema>;
     fn output_schema(&self) -> RefOr<Schema>;
     /// Pushes the named component schemas this kind references (its input and
@@ -45,6 +47,14 @@ impl<T: TaskDefinition> ErasedDefinition for T {
 
     fn capabilities(&self) -> Capabilities {
         TaskDefinition::capabilities(self)
+    }
+
+    fn input_name(&self) -> String {
+        <T::Input as ToSchema>::name().into_owned()
+    }
+
+    fn output_name(&self) -> String {
+        <T::Output as ToSchema>::name().into_owned()
     }
 
     fn input_schema(&self) -> RefOr<Schema> {

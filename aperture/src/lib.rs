@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
-pub use aperture_http::openapi;
-use aperture_http::{AppState, Spectra, SpectraConfig};
+use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
 use aperture_tasks::{TaskManager, TaskRegistry};
 use miette::IntoDiagnostic;
 use tokio::fs;
@@ -23,7 +22,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     // Register the task kinds and mark any invocations a previous run left
     // active as interrupted.
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
+    register_kinds(&mut registry, Arc::clone(&artifacts));
     let tasks = TaskManager::new(artifacts.storage().clone(), registry);
     tasks.reconcile().await.into_diagnostic()?;
 
@@ -42,6 +41,21 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     tracing::info!(%addr, "aperture listening");
     axum::serve(listener, app).await.into_diagnostic()?;
     Ok(())
+}
+
+/// Returns the OpenAPI specification, with the task kinds projected in.
+pub async fn openapi() -> miette::Result<OpenApiSpec> {
+    let artifacts = Artifacts::open(":memory:", PathBuf::from("."))
+        .await
+        .into_diagnostic()?;
+    let mut registry = TaskRegistry::new();
+    register_kinds(&mut registry, Arc::new(artifacts));
+    Ok(aperture_http::openapi(&registry.descriptors()))
+}
+
+/// Registers every task kind the gateway supports.
+fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
+    registry.register(DownloadDefinition::new(artifacts));
 }
 
 /// Opens the storage database and blob store under `data_dir`.

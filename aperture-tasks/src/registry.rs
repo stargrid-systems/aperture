@@ -18,6 +18,10 @@ pub struct TaskDescriptor {
     pub kind: &'static str,
     /// What the kind supports.
     pub capabilities: Capabilities,
+    /// Component name of the kind's input type.
+    pub input_name: String,
+    /// Component name of the kind's output type.
+    pub output_name: String,
     /// Schema of the kind's input type.
     pub input_schema: RefOr<Schema>,
     /// Schema of the kind's output type.
@@ -55,6 +59,8 @@ impl TaskRegistry {
                 TaskDescriptor {
                     kind: definition.kind(),
                     capabilities: definition.capabilities(),
+                    input_name: definition.input_name(),
+                    output_name: definition.output_name(),
                     input_schema: definition.input_schema(),
                     output_schema: definition.output_schema(),
                     schemas,
