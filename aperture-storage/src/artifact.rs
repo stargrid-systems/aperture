@@ -167,9 +167,11 @@ impl ArtifactRepository {
 
     /// Returns the newest stored version of `key`, if any.
     pub async fn latest(&self, key: &str) -> Result<Option<Artifact>> {
-        let sql = sql!(
-            "SELECT {cols} FROM artifacts WHERE key = ?1 \
-             ORDER BY downloaded_at DESC, id DESC LIMIT 1",
+        let sql = format!(
+            sql!(
+                SELECT {cols} FROM artifacts WHERE key = ?1
+                ORDER BY downloaded_at DESC, id DESC LIMIT 1
+            ),
             cols = ARTIFACT_COLUMNS,
         );
         let mut rows = self
@@ -185,8 +187,8 @@ impl ArtifactRepository {
 
     /// Returns the `(key, digest)` version, if stored.
     pub async fn get_version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
-        let sql = sql!(
-            "SELECT {cols} FROM artifacts WHERE key = ?1 AND digest = ?2",
+        let sql = format!(
+            sql!(SELECT {cols} FROM artifacts WHERE key = ?1 AND digest = ?2),
             cols = ARTIFACT_COLUMNS,
         );
         let mut rows = self
@@ -205,12 +207,14 @@ impl ArtifactRepository {
 
     /// Returns `key` with its newest version and version count, if it exists.
     pub async fn get_key(&self, key: &str) -> Result<Option<ArtifactKey>> {
-        let sql = sql!(
-            "SELECT {cols}, \
-             (SELECT COUNT(*) FROM artifacts c WHERE c.key = a.key) AS version_count \
-             FROM artifacts a \
-             WHERE a.key = ?1 AND a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key \
-                ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)",
+        let sql = format!(
+            sql!(
+                SELECT {cols},
+                (SELECT COUNT(*) FROM artifacts c WHERE c.key = a.key) AS version_count
+                FROM artifacts a
+                WHERE a.key = ?1 AND a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key
+                    ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)
+            ),
             cols = ARTIFACT_COLUMNS,
         );
         let mut rows = self
@@ -239,10 +243,12 @@ impl ArtifactRepository {
         filters.like("a.key", q);
         filters.keyset(&keyset, &paginator);
 
-        let sql = sql!(
-            "SELECT {cols}, \
-             (SELECT COUNT(*) FROM artifacts c WHERE c.key = a.key) AS version_count \
-             FROM artifacts a {where_clause} ORDER BY {order} LIMIT {limit}",
+        let sql = format!(
+            sql!(
+                SELECT {cols},
+                (SELECT COUNT(*) FROM artifacts c WHERE c.key = a.key) AS version_count
+                FROM artifacts a {where_clause} ORDER BY {order} LIMIT {limit}
+            ),
             cols = ARTIFACT_COLUMNS,
             where_clause = filters.where_clause(),
             order = keyset.order_by(),
@@ -286,8 +292,8 @@ impl ArtifactRepository {
         filters.eq_text("version", version);
         filters.keyset(&keyset, &paginator);
 
-        let sql = sql!(
-            "SELECT {cols} FROM artifacts {where_clause} ORDER BY {order} LIMIT {limit}",
+        let sql = format!(
+            sql!(SELECT {cols} FROM artifacts {where_clause} ORDER BY {order} LIMIT {limit}),
             cols = ARTIFACT_COLUMNS,
             where_clause = filters.where_clause(),
             order = keyset.order_by(),
@@ -314,7 +320,7 @@ impl ArtifactRepository {
 
     /// Lists every stored version. For internal reconciliation, not paginated.
     pub async fn all_versions(&self) -> Result<Vec<Artifact>> {
-        let sql = sql!("SELECT {cols} FROM artifacts ORDER BY id", cols = ARTIFACT_COLUMNS);
+        let sql = format!(sql!(SELECT {cols} FROM artifacts ORDER BY id), cols = ARTIFACT_COLUMNS);
         let mut rows = self.connection.query(&sql, ()).await.map_err(database)?;
         let mut artifacts = Vec::new();
         while let Some(row) = rows.next().await.map_err(database)? {
@@ -397,8 +403,8 @@ impl ArtifactRepository {
     /// Lists attempts still in the [`DownloadStatus::Running`] state. After a
     /// clean start these are leftovers from a process that stopped mid-download.
     pub async fn list_running(&self) -> Result<Vec<Download>> {
-        let sql = sql!(
-            "SELECT {cols} FROM artifact_downloads WHERE status = ?1 ORDER BY id",
+        let sql = format!(
+            sql!(SELECT {cols} FROM artifact_downloads WHERE status = ?1 ORDER BY id),
             cols = DOWNLOAD_COLUMNS,
         );
         let mut rows = self
@@ -432,8 +438,8 @@ impl ArtifactRepository {
         filters.eq_text("artifact", key);
         filters.keyset(&keyset, &paginator);
 
-        let sql = sql!(
-            "SELECT {cols} FROM artifact_downloads {where_clause} ORDER BY {order} LIMIT {limit}",
+        let sql = format!(
+            sql!(SELECT {cols} FROM artifact_downloads {where_clause} ORDER BY {order} LIMIT {limit}),
             cols = DOWNLOAD_COLUMNS,
             where_clause = filters.where_clause(),
             order = keyset.order_by(),
@@ -456,8 +462,8 @@ impl ArtifactRepository {
 
     /// Lists the download history for `artifact`, newest first.
     pub async fn downloads_for(&self, artifact: &str) -> Result<Vec<Download>> {
-        let sql = sql!(
-            "SELECT {cols} FROM artifact_downloads WHERE artifact = ?1 ORDER BY id DESC",
+        let sql = format!(
+            sql!(SELECT {cols} FROM artifact_downloads WHERE artifact = ?1 ORDER BY id DESC),
             cols = DOWNLOAD_COLUMNS,
         );
         let mut rows = self

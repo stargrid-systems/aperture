@@ -1,16 +1,12 @@
 //! Internal macros.
 
-/// Marks SQL so editors highlight it, and keeps the query text in one place.
+/// Marks raw SQL tokens so editors highlight them as SQL. Expands to the
+/// stringified tokens (a `&'static str`, zero allocation).
 ///
-/// Two forms:
-/// - Raw tokens, `sql!(SELECT ...)`, expand to a `&'static str` via
-///   [`stringify`] (zero allocation). Use for fully static queries.
-/// - A string-literal template plus arguments, `sql!("SELECT {cols} ...", cols
-///   = COLS)`, expand to [`format`]. Use when a query is assembled from pieces.
+/// For a query assembled from pieces, wrap it in `format!`, keeping the SQL as
+/// raw tokens so it still highlights: `format!(sql!(SELECT {cols} FROM x), cols
+/// = COLS)`. Values must still go through bind params (`?1`), never `format!`.
 macro_rules! sql {
-    ($fmt:literal, $($args:tt)*) => {
-        ::std::format!($fmt, $($args)*)
-    };
     ($($query:tt)*) => {
         stringify!($($query)*)
     };
