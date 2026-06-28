@@ -9,6 +9,10 @@
 //! and unwinds. Capabilities on a definition declare whether a kind can be
 //! cancelled at all and whether it is safe to interrupt across a restart.
 
+pub use aperture_storage::{
+    ListQuery, Order, Page, ParentFilter, StatusFilter, TaskInvocation, TaskStatus,
+};
+
 pub use self::context::TaskContext;
 pub use self::definition::{Capabilities, TaskDefinition};
 pub use self::error::TaskError;

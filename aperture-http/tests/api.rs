@@ -3,12 +3,13 @@ use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
-use aperture_tasks::{TaskManager, TaskRegistry};
+use aperture_tasks::{TaskManager, TaskRegistry, TaskStatus};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
+use axum::response::Response;
 use jiff::Timestamp;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn at(millis: i64) -> Timestamp {
@@ -50,8 +51,8 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
     registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
     let tasks = TaskManager::new(artifacts.storage().clone(), registry);
 
-    let spectra = Spectra::new(Arc::clone(&artifacts), tasks, SpectraConfig::default());
-    let state = AppState::new("test", spectra);
+    let spectra = Spectra::new(Arc::clone(&artifacts), tasks.clone(), SpectraConfig::default());
+    let state = AppState::new("test", spectra, tasks);
     (app(state), artifacts)
 }
 
@@ -61,6 +62,26 @@ async fn get_json(app: &Router, uri: &str) -> (StatusCode, Value) {
         .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await
         .unwrap();
+    read_json(response).await
+}
+
+async fn post_json(app: &Router, uri: &str, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    read_json(response).await
+}
+
+async fn read_json(response: Response) -> (StatusCode, Value) {
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json = if body.is_empty() {
@@ -158,6 +179,65 @@ async fn evicts_a_version() {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     let (status, _) = get_json(&app, "/api/v1/artifacts/spectra/versions/sha256:aaa").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn lists_task_definitions_with_schemas() {
+    let (app, _artifacts) = seeded_app().await;
+
+    let (status, json) = get_json(&app, "/api/v1/task-definitions").await;
+    assert_eq!(status, StatusCode::OK);
+    let download = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|def| def["kind"] == "download")
+        .expect("download kind registered");
+    assert_eq!(download["cancellable"], true);
+    assert_eq!(download["resumable"], true);
+    assert!(download["input_schema"].is_object());
+}
+
+#[tokio::test]
+async fn reads_recorded_tasks() {
+    let (app, artifacts) = seeded_app().await;
+    let repo = artifacts.storage().tasks();
+    let id = repo
+        .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .await
+        .unwrap();
+    repo.finish(id, TaskStatus::Succeeded, at(2_000), Some(r#"{"digest":"sha256:bbb"}"#), None)
+        .await
+        .unwrap();
+
+    let (status, list) = get_json(&app, "/api/v1/tasks").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    assert_eq!(list["items"][0]["kind"], "download");
+
+    let (status, task) = get_json(&app, &format!("/api/v1/tasks/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(task["status"], "succeeded");
+    assert_eq!(task["input"]["key"], "spectra");
+    assert_eq!(task["output"]["digest"], "sha256:bbb");
+}
+
+#[tokio::test]
+async fn create_rejects_unknown_kind() {
+    let (app, _artifacts) = seeded_app().await;
+    let (status, _) = post_json(&app, "/api/v1/tasks", json!({"kind": "nope", "input": {}})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn get_and_cancel_unknown_task_404() {
+    let (app, _artifacts) = seeded_app().await;
+
+    let (status, _) = get_json(&app, "/api/v1/tasks/999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = post_json(&app, "/api/v1/tasks/999/cancel", Value::Null).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 

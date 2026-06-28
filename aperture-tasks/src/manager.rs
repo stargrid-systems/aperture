@@ -13,7 +13,9 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use aperture_storage::{Storage, TaskStatus};
+use aperture_storage::{
+    ListQuery, Page, ParentFilter, StatusFilter, Storage, TaskInvocation, TaskStatus,
+};
 use jiff::Timestamp;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -29,7 +31,7 @@ use crate::registry::TaskRegistry;
 
 /// Whether a tracked task is still running or has settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
+pub(crate) enum Phase {
     Running,
     Settled,
 }
@@ -112,6 +114,36 @@ impl TaskManager {
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
         self.inner.spawn_value::<T::Output>(T::KIND, value, None).await
+    }
+
+    /// Spawns a top-level task by kind string, validating `input` against the
+    /// kind's input type, and returns the new invocation id. Used by the API,
+    /// which does not await a typed output.
+    pub async fn create(&self, kind: &str, input: Value) -> Result<i64, TaskError> {
+        let (id, _phase) = self.inner.start(kind, input, None).await?;
+        Ok(id)
+    }
+
+    /// Lists recorded invocations, optionally filtered by status, kind, and
+    /// parent.
+    pub async fn list(
+        &self,
+        status: Option<StatusFilter>,
+        kind: Option<&str>,
+        parent: Option<ParentFilter>,
+        query: &ListQuery,
+    ) -> Result<Page<TaskInvocation>, TaskError> {
+        Ok(self
+            .inner
+            .storage
+            .tasks()
+            .list(status, kind, parent, query)
+            .await?)
+    }
+
+    /// Returns the recorded invocation `id`, if it exists.
+    pub async fn get(&self, id: i64) -> Result<Option<TaskInvocation>, TaskError> {
+        Ok(self.inner.storage.tasks().get(id).await?)
     }
 
     /// Requests cooperative cancellation of the running task `id`. Returns `true`
@@ -211,15 +243,15 @@ impl TaskManager {
 }
 
 impl ManagerInner {
-    /// Creates the invocation, marks it running, spawns the body, and returns a
-    /// typed handle. The live entry is inserted before the body is spawned, so a
-    /// fast completion always finds it.
-    pub(crate) async fn spawn_value<O>(
+    /// Creates the invocation, marks it running, and spawns the body. The live
+    /// entry is inserted before the body is spawned, so a fast completion always
+    /// finds it. Returns the new id and a receiver of its completion phase.
+    pub(crate) async fn start(
         self: &Arc<Self>,
         kind: &str,
         input: Value,
         parent_id: Option<i64>,
-    ) -> Result<TaskHandle<O>, TaskError> {
+    ) -> Result<(i64, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
             self.registry
                 .get(kind)
@@ -263,10 +295,21 @@ impl ManagerInner {
         };
         let _ = shared.abort.set(abort);
 
+        Ok((id, phase_rx))
+    }
+
+    /// Spawns a task and returns a typed handle to its output.
+    pub(crate) async fn spawn_value<O>(
+        self: &Arc<Self>,
+        kind: &str,
+        input: Value,
+        parent_id: Option<i64>,
+    ) -> Result<TaskHandle<O>, TaskError> {
+        let (id, phase) = self.start(kind, input, parent_id).await?;
         Ok(TaskHandle {
             id,
             inner: Arc::clone(self),
-            phase: phase_rx,
+            phase,
             _output: PhantomData,
         })
     }

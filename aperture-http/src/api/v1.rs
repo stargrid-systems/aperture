@@ -4,15 +4,19 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use self::artifacts::router as artifacts_routes;
+use self::tasks::{definitions_router as task_definitions_routes, router as tasks_routes};
 use crate::AppState;
 use crate::dto::VersionResponse;
 
 mod artifacts;
+mod tasks;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_version))
         .nest("/artifacts", artifacts_routes())
+        .nest("/tasks", tasks_routes())
+        .nest("/task-definitions", task_definitions_routes())
 }
 
 /// Returns version information about the gateway.
