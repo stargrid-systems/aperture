@@ -1,8 +1,6 @@
 use std::{env, fs};
 
-use aperture_storage::{
-    Artifact, DownloadStatus, ListQuery, Order, Storage, VersionSort,
-};
+use aperture_storage::{Artifact, ListQuery, Storage, VersionSort};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -242,80 +240,6 @@ async fn delete_version_removes_only_that_version() {
         .unwrap();
     assert_eq!(versions.items.len(), 1);
     assert_eq!(versions.items[0].digest, "sha256:bbb");
-}
-
-#[tokio::test]
-async fn lists_downloads_with_filters_and_history() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
-
-    let started = at(1_700_000_000_000);
-    let source = "ghcr.io/stargrid-systems/spectra:0.2.0";
-
-    let id1 = repo.start_download("spectra", source, started).await.unwrap();
-    repo.finish_download(id1, DownloadStatus::Succeeded, started, Some("sha256:abc"), Some(10), None)
-        .await
-        .unwrap();
-
-    let id2 = repo.start_download("spectra", source, started).await.unwrap();
-    repo.finish_download(id2, DownloadStatus::Failed, started, None, None, Some("connection reset"))
-        .await
-        .unwrap();
-
-    assert!(id2 > id1);
-
-    // Newest first across all downloads.
-    let all = repo
-        .list_downloads(None, None, &ListQuery::default())
-        .await
-        .unwrap();
-    assert_eq!(all.items.len(), 2);
-    assert_eq!(all.items[0].id, id2);
-    assert_eq!(all.items[0].status, DownloadStatus::Failed);
-
-    // Filter by status.
-    let failed = repo
-        .list_downloads(Some(DownloadStatus::Failed), None, &ListQuery::default())
-        .await
-        .unwrap();
-    assert_eq!(failed.items.len(), 1);
-    assert_eq!(failed.items[0].id, id2);
-
-    // Oldest first with explicit order.
-    let oldest = repo
-        .list_downloads(
-            None,
-            Some("spectra"),
-            &ListQuery {
-                order: Some(Order::Asc),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(oldest.items[0].id, id1);
-
-    let history = repo.downloads_for("spectra").await.unwrap();
-    assert_eq!(history.len(), 2);
-    assert!(repo.downloads_for("unknown").await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn lists_running_downloads() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
-
-    let started = at(1_700_000_000_000);
-    let running = repo.start_download("spectra", "src", started).await.unwrap();
-    let done = repo.start_download("firmware", "src", started).await.unwrap();
-    repo.finish_download(done, DownloadStatus::Succeeded, started, None, None, None)
-        .await
-        .unwrap();
-
-    let still_running = repo.list_running().await.unwrap();
-    assert_eq!(still_running.len(), 1);
-    assert_eq!(still_running[0].id, running);
-    assert_eq!(still_running[0].status, DownloadStatus::Running);
 }
 
 #[tokio::test]

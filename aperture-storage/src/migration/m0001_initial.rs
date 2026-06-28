@@ -1,4 +1,4 @@
-//! Migration 0001: artifact catalog, download history, and task invocations.
+//! Migration 0001: artifact catalog and task invocations.
 
 use crate::macros::sql;
 
@@ -16,18 +16,6 @@ pub(super) const SQL: &str = sql!(
         UNIQUE (key, digest)
     ) STRICT;
     CREATE INDEX idx_artifacts_key ON artifacts (key);
-    CREATE TABLE artifact_downloads (
-        id INTEGER PRIMARY KEY,
-        artifact TEXT NOT NULL,
-        started_at INTEGER NOT NULL,
-        finished_at INTEGER,
-        status TEXT NOT NULL,
-        digest TEXT,
-        size_bytes INTEGER,
-        source TEXT NOT NULL,
-        error TEXT
-    ) STRICT;
-    CREATE INDEX idx_artifact_downloads_artifact ON artifact_downloads (artifact);
     CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
         kind TEXT NOT NULL,

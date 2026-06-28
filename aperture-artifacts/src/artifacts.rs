@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aperture_storage::{Artifact, ArtifactKey, DownloadStatus, ListQuery, Page, Storage, VersionSort};
+use aperture_storage::{Artifact, ArtifactKey, ListQuery, Page, Storage, VersionSort};
 use aperture_tasks::ProgressHandle;
 use jiff::Timestamp;
 use oci_client::Reference;
@@ -320,21 +320,6 @@ impl Inner {
         let repository = self.storage.artifacts();
         let mut report = SyncReport::default();
         let mut tracked: HashSet<Digest> = HashSet::new();
-
-        // A download still marked running has no owner left after a restart.
-        let now = Timestamp::now();
-        for download in repository.list_running().await? {
-            repository
-                .finish_download(
-                    download.id,
-                    DownloadStatus::Interrupted,
-                    now,
-                    None,
-                    None,
-                    Some("interrupted"),
-                )
-                .await?;
-        }
 
         for artifact in repository.all_versions().await? {
             let Ok(digest) = artifact.digest.parse::<Digest>() else {

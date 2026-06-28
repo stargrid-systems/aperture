@@ -7,9 +7,7 @@
 
 use turso::{Builder, Connection};
 
-pub use self::artifact::{
-    Artifact, ArtifactKey, ArtifactRepository, Download, DownloadStatus, VersionSort,
-};
+pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
 use self::error::database;
 pub use self::error::{Result, StorageError};
 use self::migration::run;
