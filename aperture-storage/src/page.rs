@@ -7,6 +7,8 @@
 //! correct even when rows are inserted between page fetches, as long as the sort
 //! field and direction do not change.
 
+use std::fmt::Write;
+
 use turso::Value;
 
 use crate::error::{Result, StorageError};
@@ -186,11 +188,7 @@ impl Keyset {
 
     /// The keyset `WHERE` condition that resumes from `cursor`, using bind
     /// params starting at `first_param`. Empty (and no params) without a cursor.
-    pub(crate) fn condition(
-        &self,
-        cursor: Option<&Cursor>,
-        first_param: usize,
-    ) -> (String, Vec<Value>) {
+    fn condition(&self, cursor: Option<&Cursor>, first_param: usize) -> (String, Vec<Value>) {
         let Some(cursor) = cursor else {
             return (String::new(), Vec::new());
         };
@@ -217,6 +215,79 @@ impl Keyset {
                 vec![cursor.value.to_db()],
             )
         }
+    }
+}
+
+/// Builds the `WHERE` body of a listing, keeping conditions and their bind
+/// params in lockstep so placeholder numbers can never drift. Column names come
+/// from the calling query, never user input, since they are written verbatim.
+pub(crate) struct Filters {
+    sql: String,
+    params: Vec<Value>,
+}
+
+impl Filters {
+    pub(crate) fn new() -> Self {
+        Self {
+            sql: String::new(),
+            params: Vec::new(),
+        }
+    }
+
+    fn separator(&mut self) {
+        if !self.sql.is_empty() {
+            self.sql.push_str(" AND ");
+        }
+    }
+
+    /// Adds a condition with no bind params (a fixed predicate).
+    pub(crate) fn raw(&mut self, condition: &str) {
+        self.separator();
+        self.sql.push_str(condition);
+    }
+
+    /// Adds `column = ?` bound to `value`, or nothing when `value` is `None`.
+    pub(crate) fn eq_text(&mut self, column: &str, value: Option<&str>) {
+        if let Some(value) = value {
+            self.params.push(Value::Text(value.to_owned()));
+            self.separator();
+            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `column LIKE ?` matching `value` as a literal substring (wildcards
+    /// escaped), or nothing when `value` is `None`.
+    pub(crate) fn like(&mut self, column: &str, value: Option<&str>) {
+        if let Some(value) = value {
+            self.params
+                .push(Value::Text(format!("%{}%", escape_like(value))));
+            self.separator();
+            let _ = write!(self.sql, "{column} LIKE ?{} ESCAPE '\\'", self.params.len());
+        }
+    }
+
+    /// Adds the keyset resume condition for `paginator`, if it has a cursor.
+    pub(crate) fn keyset(&mut self, keyset: &Keyset, paginator: &Paginator) {
+        let (condition, params) = keyset.condition(paginator.cursor(), self.params.len() + 1);
+        if !condition.is_empty() {
+            self.params.extend(params);
+            self.separator();
+            self.sql.push_str(&condition);
+        }
+    }
+
+    /// The `WHERE` clause, or an empty string when there are no conditions.
+    pub(crate) fn where_clause(&self) -> String {
+        if self.sql.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", self.sql)
+        }
+    }
+
+    /// The bind params, in placeholder order.
+    pub(crate) fn into_params(self) -> Vec<Value> {
+        self.params
     }
 }
 
@@ -317,6 +388,19 @@ impl Paginator {
             prev_cursor,
         }
     }
+}
+
+/// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
+/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the SQL.
+fn escape_like(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn to_hex(bytes: &[u8]) -> String {

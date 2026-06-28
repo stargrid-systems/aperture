@@ -11,7 +11,7 @@ use turso::{Connection, Row, Value, params_from_iter};
 
 use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
-use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 
 /// Columns selected for an [`Artifact`], in [`row_to_artifact`] order.
 const ARTIFACT_COLUMNS: &str =
@@ -167,9 +167,10 @@ impl ArtifactRepository {
 
     /// Returns the newest stored version of `key`, if any.
     pub async fn latest(&self, key: &str) -> Result<Option<Artifact>> {
-        let sql = format!(
-            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE key = ?1 \
-             ORDER BY downloaded_at DESC, id DESC LIMIT 1"
+        let sql = sql!(
+            "SELECT {cols} FROM artifacts WHERE key = ?1 \
+             ORDER BY downloaded_at DESC, id DESC LIMIT 1",
+            cols = ARTIFACT_COLUMNS,
         );
         let mut rows = self
             .connection
@@ -184,7 +185,10 @@ impl ArtifactRepository {
 
     /// Returns the `(key, digest)` version, if stored.
     pub async fn get_version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
-        let sql = format!("SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE key = ?1 AND digest = ?2");
+        let sql = sql!(
+            "SELECT {cols} FROM artifacts WHERE key = ?1 AND digest = ?2",
+            cols = ARTIFACT_COLUMNS,
+        );
         let mut rows = self
             .connection
             .query(
@@ -201,12 +205,13 @@ impl ArtifactRepository {
 
     /// Returns `key` with its newest version and version count, if it exists.
     pub async fn get_key(&self, key: &str) -> Result<Option<ArtifactKey>> {
-        let sql = format!(
-            "SELECT {ARTIFACT_COLUMNS}, \
+        let sql = sql!(
+            "SELECT {cols}, \
              (SELECT COUNT(*) FROM artifacts c WHERE c.key = a.key) AS version_count \
              FROM artifacts a \
              WHERE a.key = ?1 AND a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key \
-                ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)"
+                ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)",
+            cols = ARTIFACT_COLUMNS,
         );
         let mut rows = self
             .connection
@@ -225,35 +230,28 @@ impl ArtifactRepository {
         let paginator = Paginator::new(query, Order::Asc)?;
         let keyset = Keyset::unique("a.key", paginator.query_order());
 
-        // The latest-version predicate keeps one row per key; filters and the
-        // keyset condition are ANDed onto it.
-        let mut params: Vec<Value> = Vec::new();
-        let mut conditions = vec![
+        let mut filters = Filters::new();
+        // The latest-version predicate keeps one row per key.
+        filters.raw(
             "a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key \
-             ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)"
-                .to_owned(),
-        ];
-        if let Some(q) = q {
-            params.push(Value::Text(format!("%{}%", escape_like(q))));
-            conditions.push(format!("a.key LIKE ?{} ESCAPE '\\'", params.len()));
-        }
-        let (cursor_sql, cursor_params) = keyset.condition(paginator.cursor(), params.len() + 1);
-        if !cursor_sql.is_empty() {
-            conditions.push(cursor_sql);
-            params.extend(cursor_params);
-        }
-        let sql = format!(
-            "SELECT {ARTIFACT_COLUMNS}, \
+             ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)",
+        );
+        filters.like("a.key", q);
+        filters.keyset(&keyset, &paginator);
+
+        let sql = sql!(
+            "SELECT {cols}, \
              (SELECT COUNT(*) FROM artifacts c WHERE c.key = a.key) AS version_count \
-             FROM artifacts a WHERE {} ORDER BY {} LIMIT {}",
-            conditions.join(" AND "),
-            keyset.order_by(),
-            paginator.fetch_limit(),
+             FROM artifacts a {where_clause} ORDER BY {order} LIMIT {limit}",
+            cols = ARTIFACT_COLUMNS,
+            where_clause = filters.where_clause(),
+            order = keyset.order_by(),
+            limit = paginator.fetch_limit(),
         );
 
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter(params))
+            .query(&sql, params_from_iter(filters.into_params()))
             .await
             .map_err(database)?;
         let mut items = Vec::new();
@@ -282,31 +280,23 @@ impl ArtifactRepository {
         };
         let keyset = Keyset::with_id(column, paginator.query_order());
 
-        let mut params = vec![Value::Text(key.to_owned())];
-        let mut conditions = vec!["key = ?1".to_owned()];
-        if let Some(media_type) = media_type {
-            params.push(Value::Text(media_type.to_owned()));
-            conditions.push(format!("media_type = ?{}", params.len()));
-        }
-        if let Some(version) = version {
-            params.push(Value::Text(version.to_owned()));
-            conditions.push(format!("version = ?{}", params.len()));
-        }
-        let (cursor_sql, cursor_params) = keyset.condition(paginator.cursor(), params.len() + 1);
-        if !cursor_sql.is_empty() {
-            conditions.push(cursor_sql);
-            params.extend(cursor_params);
-        }
-        let sql = format!(
-            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE {} ORDER BY {} LIMIT {}",
-            conditions.join(" AND "),
-            keyset.order_by(),
-            paginator.fetch_limit(),
+        let mut filters = Filters::new();
+        filters.eq_text("key", Some(key));
+        filters.eq_text("media_type", media_type);
+        filters.eq_text("version", version);
+        filters.keyset(&keyset, &paginator);
+
+        let sql = sql!(
+            "SELECT {cols} FROM artifacts {where_clause} ORDER BY {order} LIMIT {limit}",
+            cols = ARTIFACT_COLUMNS,
+            where_clause = filters.where_clause(),
+            order = keyset.order_by(),
+            limit = paginator.fetch_limit(),
         );
 
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter(params))
+            .query(&sql, params_from_iter(filters.into_params()))
             .await
             .map_err(database)?;
         let mut items = Vec::new();
@@ -324,7 +314,7 @@ impl ArtifactRepository {
 
     /// Lists every stored version. For internal reconciliation, not paginated.
     pub async fn all_versions(&self) -> Result<Vec<Artifact>> {
-        let sql = format!("SELECT {ARTIFACT_COLUMNS} FROM artifacts ORDER BY id");
+        let sql = sql!("SELECT {cols} FROM artifacts ORDER BY id", cols = ARTIFACT_COLUMNS);
         let mut rows = self.connection.query(&sql, ()).await.map_err(database)?;
         let mut artifacts = Vec::new();
         while let Some(row) = rows.next().await.map_err(database)? {
@@ -407,8 +397,9 @@ impl ArtifactRepository {
     /// Lists attempts still in the [`DownloadStatus::Running`] state. After a
     /// clean start these are leftovers from a process that stopped mid-download.
     pub async fn list_running(&self) -> Result<Vec<Download>> {
-        let sql = format!(
-            "SELECT {DOWNLOAD_COLUMNS} FROM artifact_downloads WHERE status = ?1 ORDER BY id"
+        let sql = sql!(
+            "SELECT {cols} FROM artifact_downloads WHERE status = ?1 ORDER BY id",
+            cols = DOWNLOAD_COLUMNS,
         );
         let mut rows = self
             .connection
@@ -436,36 +427,22 @@ impl ArtifactRepository {
         let paginator = Paginator::new(query, Order::Desc)?;
         let keyset = Keyset::unique("id", paginator.query_order());
 
-        let mut params: Vec<Value> = Vec::new();
-        let mut conditions: Vec<String> = Vec::new();
-        if let Some(status) = status {
-            params.push(Value::Text(status.as_db().to_owned()));
-            conditions.push(format!("status = ?{}", params.len()));
-        }
-        if let Some(key) = key {
-            params.push(Value::Text(key.to_owned()));
-            conditions.push(format!("artifact = ?{}", params.len()));
-        }
-        let (cursor_sql, cursor_params) = keyset.condition(paginator.cursor(), params.len() + 1);
-        if !cursor_sql.is_empty() {
-            conditions.push(cursor_sql);
-            params.extend(cursor_params);
-        }
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
-        let sql = format!(
-            "SELECT {DOWNLOAD_COLUMNS} FROM artifact_downloads {where_clause} \
-             ORDER BY {} LIMIT {}",
-            keyset.order_by(),
-            paginator.fetch_limit(),
+        let mut filters = Filters::new();
+        filters.eq_text("status", status.map(DownloadStatus::as_db));
+        filters.eq_text("artifact", key);
+        filters.keyset(&keyset, &paginator);
+
+        let sql = sql!(
+            "SELECT {cols} FROM artifact_downloads {where_clause} ORDER BY {order} LIMIT {limit}",
+            cols = DOWNLOAD_COLUMNS,
+            where_clause = filters.where_clause(),
+            order = keyset.order_by(),
+            limit = paginator.fetch_limit(),
         );
 
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter(params))
+            .query(&sql, params_from_iter(filters.into_params()))
             .await
             .map_err(database)?;
         let mut items = Vec::new();
@@ -479,8 +456,9 @@ impl ArtifactRepository {
 
     /// Lists the download history for `artifact`, newest first.
     pub async fn downloads_for(&self, artifact: &str) -> Result<Vec<Download>> {
-        let sql = format!(
-            "SELECT {DOWNLOAD_COLUMNS} FROM artifact_downloads WHERE artifact = ?1 ORDER BY id DESC"
+        let sql = sql!(
+            "SELECT {cols} FROM artifact_downloads WHERE artifact = ?1 ORDER BY id DESC",
+            cols = DOWNLOAD_COLUMNS,
         );
         let mut rows = self
             .connection
@@ -493,19 +471,6 @@ impl ArtifactRepository {
         }
         Ok(downloads)
     }
-}
-
-/// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
-/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the SQL.
-fn escape_like(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if matches!(ch, '\\' | '%' | '_') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 fn text_or_null(value: &Option<String>) -> Value {
