@@ -1,0 +1,379 @@
+//! The task manager: spawns tasks, tracks the running ones, and records every
+//! invocation in storage.
+//!
+//! The durable record of every invocation lives in the storage catalog. A live
+//! registry, held here, tracks only the tasks running right now, with their
+//! cancellation token, progress, and abort handle. Spawning runs the body on a
+//! [`JoinSet`] and returns a typed [`TaskHandle`].
+
+use std::collections::HashMap;
+use std::error::Error;
+use std::future::{Future, IntoFuture};
+use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use aperture_storage::{Storage, TaskStatus};
+use jiff::Timestamp;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use tokio::sync::watch;
+use tokio::task::{AbortHandle, JoinSet};
+use tokio_util::sync::CancellationToken;
+
+use crate::context::TaskContext;
+use crate::definition::{Capabilities, TaskDefinition};
+use crate::error::TaskError;
+use crate::progress::{Progress, ProgressState};
+use crate::registry::TaskRegistry;
+
+/// Whether a tracked task is still running or has settled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Running,
+    Settled,
+}
+
+/// State shared between a running task's body, its live-registry entry, and any
+/// handle observing it.
+struct TaskShared {
+    cancel: CancellationToken,
+    progress: Arc<ProgressState>,
+    phase: watch::Sender<Phase>,
+    abort: OnceLock<AbortHandle>,
+}
+
+/// A task currently being tracked in the live registry.
+struct RunningTask {
+    shared: Arc<TaskShared>,
+    kind: String,
+    parent_id: Option<i64>,
+    capabilities: Capabilities,
+    started_at: Timestamp,
+}
+
+/// A snapshot of one running task, for display.
+#[derive(Debug, Clone)]
+pub struct ActiveTask {
+    /// The invocation id.
+    pub id: i64,
+    /// The kind of task.
+    pub kind: String,
+    /// The parent invocation, if any.
+    pub parent_id: Option<i64>,
+    /// What the kind supports.
+    pub capabilities: Capabilities,
+    /// Live progress.
+    pub progress: Progress,
+    /// When the task started.
+    pub started_at: Timestamp,
+}
+
+pub(crate) struct ManagerInner {
+    storage: Storage,
+    registry: TaskRegistry,
+    running: Mutex<HashMap<i64, RunningTask>>,
+    joinset: Mutex<JoinSet<()>>,
+}
+
+/// Spawns and tracks tasks. Cheap to clone: all clones share one manager.
+#[derive(Clone)]
+pub struct TaskManager {
+    inner: Arc<ManagerInner>,
+}
+
+impl TaskManager {
+    /// Creates a manager backed by `storage` and the kinds in `registry`.
+    pub fn new(storage: Storage, registry: TaskRegistry) -> Self {
+        Self {
+            inner: Arc::new(ManagerInner {
+                storage,
+                registry,
+                running: Mutex::new(HashMap::new()),
+                joinset: Mutex::new(JoinSet::new()),
+            }),
+        }
+    }
+
+    /// Read access to the storage catalog, for listing recorded invocations.
+    pub fn storage(&self) -> &Storage {
+        &self.inner.storage
+    }
+
+    /// The registry of kinds, for projecting schemas and capabilities.
+    pub fn registry(&self) -> &TaskRegistry {
+        &self.inner.registry
+    }
+
+    /// Spawns a top-level task of kind `T` and returns a typed handle to it.
+    pub async fn spawn<T: TaskDefinition>(
+        &self,
+        input: T::Input,
+    ) -> Result<TaskHandle<T::Output>, TaskError> {
+        let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
+        self.inner.spawn_value::<T::Output>(T::KIND, value, None).await
+    }
+
+    /// Requests cooperative cancellation of the running task `id`. Returns `true`
+    /// if cancellation was requested, `false` if the kind is not cancellable, and
+    /// an error if the task is not currently running.
+    pub fn cancel(&self, id: i64) -> Result<bool, TaskError> {
+        let running = self.inner.running.lock().expect("running poisoned");
+        let task = running.get(&id).ok_or(TaskError::NotRunning(id))?;
+        if !task.capabilities.cancellable {
+            return Ok(false);
+        }
+        task.shared.cancel.cancel();
+        Ok(true)
+    }
+
+    /// A snapshot of every task running right now.
+    pub fn active(&self) -> Vec<ActiveTask> {
+        let running = self.inner.running.lock().expect("running poisoned");
+        running
+            .iter()
+            .map(|(id, task)| ActiveTask {
+                id: *id,
+                kind: task.kind.clone(),
+                parent_id: task.parent_id,
+                capabilities: task.capabilities,
+                progress: task.shared.progress.snapshot(),
+                started_at: task.started_at,
+            })
+            .collect()
+    }
+
+    /// Live progress of the running task `id`, or `None` if it is not running.
+    pub fn progress(&self, id: i64) -> Option<Progress> {
+        let running = self.inner.running.lock().expect("running poisoned");
+        running.get(&id).map(|task| task.shared.progress.snapshot())
+    }
+
+    /// Marks invocations left active by a previous process as interrupted.
+    /// Call once at startup, before spawning anything. Returns how many were
+    /// reconciled.
+    pub async fn reconcile(&self) -> Result<usize, TaskError> {
+        let now = Timestamp::now();
+        let mut count = 0;
+        for task in self.inner.storage.tasks().list_active().await? {
+            self.inner
+                .storage
+                .tasks()
+                .finish(task.id, TaskStatus::Interrupted, now, None, Some("interrupted"))
+                .await?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Stops accepting nothing new here, but resolves the running set for
+    /// shutdown: resumable tasks are aborted and recorded as interrupted, while
+    /// unresumable tasks are awaited so they finish cleanly.
+    pub async fn shutdown(&self) {
+        let entries: Vec<(i64, bool, Arc<TaskShared>)> = {
+            let running = self.inner.running.lock().expect("running poisoned");
+            running
+                .iter()
+                .map(|(id, task)| (*id, task.capabilities.resumable, Arc::clone(&task.shared)))
+                .collect()
+        };
+
+        let mut awaiting = Vec::new();
+        for (id, resumable, shared) in entries {
+            if resumable {
+                if let Some(abort) = shared.abort.get() {
+                    abort.abort();
+                }
+                let now = Timestamp::now();
+                if let Err(err) = self
+                    .inner
+                    .storage
+                    .tasks()
+                    .finish(id, TaskStatus::Interrupted, now, None, Some("interrupted"))
+                    .await
+                {
+                    tracing::error!(task = id, error = &err as &dyn Error, "failed to record interrupted task");
+                }
+                self.inner.settle(id);
+            } else {
+                awaiting.push(shared.phase.subscribe());
+            }
+        }
+
+        for mut phase in awaiting {
+            while *phase.borrow_and_update() == Phase::Running {
+                if phase.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+impl ManagerInner {
+    /// Creates the invocation, marks it running, spawns the body, and returns a
+    /// typed handle. The live entry is inserted before the body is spawned, so a
+    /// fast completion always finds it.
+    pub(crate) async fn spawn_value<O>(
+        self: &Arc<Self>,
+        kind: &str,
+        input: Value,
+        parent_id: Option<i64>,
+    ) -> Result<TaskHandle<O>, TaskError> {
+        let definition = Arc::clone(
+            self.registry
+                .get(kind)
+                .ok_or_else(|| TaskError::NotRegistered(kind.to_owned()))?,
+        );
+        definition.validate(&input)?;
+
+        let now = Timestamp::now();
+        let input_json = input.to_string();
+        let tasks = self.storage.tasks();
+        let id = tasks.create(kind, parent_id, &input_json, now).await?;
+        tasks.mark_running(id, now).await?;
+
+        let cancel = match parent_id.and_then(|parent| self.parent_token(parent)) {
+            Some(parent) => parent.child_token(),
+            None => CancellationToken::new(),
+        };
+        let (phase_tx, phase_rx) = watch::channel(Phase::Running);
+        let shared = Arc::new(TaskShared {
+            cancel: cancel.clone(),
+            progress: Arc::new(ProgressState::default()),
+            phase: phase_tx,
+            abort: OnceLock::new(),
+        });
+
+        self.running.lock().expect("running poisoned").insert(
+            id,
+            RunningTask {
+                shared: Arc::clone(&shared),
+                kind: kind.to_owned(),
+                parent_id,
+                capabilities: definition.capabilities(),
+                started_at: now,
+            },
+        );
+
+        let ctx = TaskContext::new(id, Arc::clone(self), cancel, Arc::clone(&shared.progress));
+        let abort = {
+            let mut set = self.joinset.lock().expect("joinset poisoned");
+            definition.spawn_on(input, ctx, &mut set)
+        };
+        let _ = shared.abort.set(abort);
+
+        Ok(TaskHandle {
+            id,
+            inner: Arc::clone(self),
+            phase: phase_rx,
+            _output: PhantomData,
+        })
+    }
+
+    fn parent_token(&self, parent: i64) -> Option<CancellationToken> {
+        self.running
+            .lock()
+            .expect("running poisoned")
+            .get(&parent)
+            .map(|task| task.shared.cancel.clone())
+    }
+
+    /// Records the terminal outcome of `id` and wakes anyone awaiting it.
+    pub(crate) async fn finish(&self, id: i64, outcome: Result<Value, TaskError>) {
+        let now = Timestamp::now();
+        let (status, output, error) = match outcome {
+            Ok(value) => (TaskStatus::Succeeded, Some(value.to_string()), None),
+            Err(TaskError::Cancelled) => (TaskStatus::Cancelled, None, None),
+            Err(err) => (TaskStatus::Failed, None, Some(err.to_string())),
+        };
+        if let Err(err) = self
+            .storage
+            .tasks()
+            .finish(id, status, now, output.as_deref(), error.as_deref())
+            .await
+        {
+            tracing::error!(task = id, error = &err as &dyn Error, "failed to record task outcome");
+        }
+        self.settle(id);
+    }
+
+    /// Removes `id` from the live registry and signals its completion.
+    fn settle(&self, id: i64) {
+        if let Some(task) = self.running.lock().expect("running poisoned").remove(&id) {
+            let _ = task.shared.phase.send(Phase::Settled);
+        }
+    }
+}
+
+/// A typed handle to a spawned task. Await it for the output, or read live
+/// [`TaskHandle::progress`] while it runs.
+pub struct TaskHandle<O> {
+    id: i64,
+    inner: Arc<ManagerInner>,
+    phase: watch::Receiver<Phase>,
+    _output: PhantomData<fn() -> O>,
+}
+
+impl<O> TaskHandle<O> {
+    /// The invocation id.
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
+    /// Live progress, or `None` once the task has settled.
+    pub fn progress(&self) -> Option<Progress> {
+        self.inner
+            .running
+            .lock()
+            .expect("running poisoned")
+            .get(&self.id)
+            .map(|task| task.shared.progress.snapshot())
+    }
+}
+
+impl<O: DeserializeOwned> TaskHandle<O> {
+    /// Waits for the task to settle and returns its decoded output.
+    pub async fn wait(mut self) -> Result<O, TaskError> {
+        while *self.phase.borrow_and_update() == Phase::Running {
+            if self.phase.changed().await.is_err() {
+                break;
+            }
+        }
+
+        let task = self
+            .inner
+            .storage
+            .tasks()
+            .get(self.id)
+            .await?
+            .ok_or(TaskError::NotFound(self.id))?;
+        match task.status {
+            TaskStatus::Succeeded => {
+                let output = task.output.ok_or_else(|| {
+                    TaskError::Failed(anyhow::format_err!(
+                        "task {} succeeded without output",
+                        self.id
+                    ))
+                })?;
+                serde_json::from_str(&output).map_err(TaskError::DecodeOutput)
+            }
+            TaskStatus::Cancelled => Err(TaskError::Cancelled),
+            TaskStatus::Failed | TaskStatus::Interrupted => Err(TaskError::Failed(
+                anyhow::format_err!("{}", task.error.unwrap_or_else(|| "task failed".to_owned())),
+            )),
+            TaskStatus::Pending | TaskStatus::Running => Err(TaskError::Failed(
+                anyhow::format_err!("task {} still active after settle", self.id),
+            )),
+        }
+    }
+}
+
+impl<O: DeserializeOwned + Send + 'static> IntoFuture for TaskHandle<O> {
+    type Output = Result<O, TaskError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Result<O, TaskError>> + Send>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.wait())
+    }
+}

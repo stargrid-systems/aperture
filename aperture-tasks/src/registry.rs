@@ -1,0 +1,69 @@
+//! The registry of task definitions.
+//!
+//! Definitions are registered once at startup. The registry is the single source
+//! of truth for what kinds exist: the manager looks up runners by kind, and the
+//! HTTP layer projects [`TaskRegistry::descriptors`] into the OpenAPI document.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use utoipa::openapi::{RefOr, Schema};
+
+use crate::definition::{Capabilities, TaskDefinition};
+use crate::erased::ErasedDefinition;
+
+/// A public, schema-carrying description of one registered kind.
+pub struct TaskDescriptor {
+    /// The kind string.
+    pub kind: &'static str,
+    /// What the kind supports.
+    pub capabilities: Capabilities,
+    /// Schema of the kind's input type.
+    pub input_schema: RefOr<Schema>,
+    /// Schema of the kind's output type.
+    pub output_schema: RefOr<Schema>,
+    /// Named component schemas the input and output reference, including
+    /// themselves and their dependencies.
+    pub schemas: Vec<(String, RefOr<Schema>)>,
+}
+
+/// A registry of task definitions, keyed by kind.
+#[derive(Default)]
+pub struct TaskRegistry {
+    definitions: HashMap<&'static str, Arc<dyn ErasedDefinition>>,
+}
+
+impl TaskRegistry {
+    /// Creates an empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers `definition` under its [`TaskDefinition::KIND`], replacing any
+    /// previously registered definition for that kind.
+    pub fn register<T: TaskDefinition>(&mut self, definition: T) {
+        self.definitions.insert(T::KIND, Arc::new(definition));
+    }
+
+    /// A schema-carrying descriptor per registered kind.
+    pub fn descriptors(&self) -> Vec<TaskDescriptor> {
+        self.definitions
+            .values()
+            .map(|definition| {
+                let mut schemas = Vec::new();
+                definition.collect_schemas(&mut schemas);
+                TaskDescriptor {
+                    kind: definition.kind(),
+                    capabilities: definition.capabilities(),
+                    input_schema: definition.input_schema(),
+                    output_schema: definition.output_schema(),
+                    schemas,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn get(&self, kind: &str) -> Option<&Arc<dyn ErasedDefinition>> {
+        self.definitions.get(kind)
+    }
+}
