@@ -63,7 +63,7 @@ async fn record_version_is_idempotent_per_digest() {
     repo.record_version(&again).await.unwrap();
 
     let versions = repo
-        .list_versions("spectra", VersionSort::DownloadedAt, &ListQuery::default())
+        .list_versions("spectra", VersionSort::DownloadedAt, None, None, &ListQuery::default())
         .await
         .unwrap();
     assert_eq!(versions.items.len(), 1);
@@ -86,7 +86,7 @@ async fn list_keys_returns_latest_and_count() {
         .await
         .unwrap();
 
-    let keys = repo.list_keys(&ListQuery::default()).await.unwrap();
+    let keys = repo.list_keys(None, &ListQuery::default()).await.unwrap();
     assert_eq!(keys.items.len(), 2);
     // Ordered by key ascending.
     assert_eq!(keys.items[0].latest.key, "firmware");
@@ -108,7 +108,7 @@ async fn list_keys_paginates_with_cursor() {
     }
 
     let first = repo
-        .list_keys(&ListQuery {
+        .list_keys(None, &ListQuery {
             limit: Some(2),
             ..Default::default()
         })
@@ -121,7 +121,7 @@ async fn list_keys_paginates_with_cursor() {
     let cursor = first.next_cursor.expect("more pages");
 
     let second = repo
-        .list_keys(&ListQuery {
+        .list_keys(None, &ListQuery {
             limit: Some(2),
             cursor: Some(cursor),
             ..Default::default()
@@ -133,6 +133,22 @@ async fn list_keys_paginates_with_cursor() {
         ["c"]
     );
     assert!(second.next_cursor.is_none());
+
+    // Page back from the second page using its prev cursor.
+    let back = repo
+        .list_keys(None, &ListQuery {
+            limit: Some(2),
+            cursor: Some(second.prev_cursor.expect("a previous page")),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        back.items.iter().map(|k| k.latest.key.as_str()).collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert!(back.next_cursor.is_some());
+    assert!(back.prev_cursor.is_none());
 }
 
 #[tokio::test]
@@ -151,6 +167,8 @@ async fn list_versions_sorts_and_paginates() {
         .list_versions(
             "spectra",
             VersionSort::DownloadedAt,
+            None,
+            None,
             &ListQuery {
                 limit: Some(2),
                 ..Default::default()
@@ -168,6 +186,8 @@ async fn list_versions_sorts_and_paginates() {
         .list_versions(
             "spectra",
             VersionSort::DownloadedAt,
+            None,
+            None,
             &ListQuery {
                 limit: Some(2),
                 cursor: Some(cursor),
@@ -197,7 +217,7 @@ async fn delete_version_removes_only_that_version() {
     repo.delete_version("spectra", "sha256:aaa").await.unwrap();
 
     let versions = repo
-        .list_versions("spectra", VersionSort::DownloadedAt, &ListQuery::default())
+        .list_versions("spectra", VersionSort::DownloadedAt, None, None, &ListQuery::default())
         .await
         .unwrap();
     assert_eq!(versions.items.len(), 1);

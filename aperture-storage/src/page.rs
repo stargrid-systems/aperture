@@ -1,9 +1,11 @@
 //! Cursor-based (keyset) pagination over catalog listings.
 //!
 //! A listing orders rows by one column plus the unique `id` as a tiebreaker.
-//! The cursor carries the last row's sort value and id, so the next page
-//! resumes right after it. This stays correct even when rows are inserted
-//! between page fetches, as long as the sort field and direction do not change.
+//! The cursor carries the last (or first) row's sort value, its id, and the
+//! direction to travel. So a single `cursor` value pages either forward or
+//! backward, and the caller never needs a separate direction flag. This stays
+//! correct even when rows are inserted between page fetches, as long as the sort
+//! field and direction do not change.
 
 use turso::Value;
 
@@ -22,6 +24,13 @@ pub enum Order {
 }
 
 impl Order {
+    fn flip(self) -> Self {
+        match self {
+            Self::Asc => Self::Desc,
+            Self::Desc => Self::Asc,
+        }
+    }
+
     fn keyword(self) -> &'static str {
         match self {
             Self::Asc => "ASC",
@@ -37,13 +46,24 @@ impl Order {
     }
 }
 
-/// A page of results plus an opaque cursor for the next page, if any.
+/// Which way to travel from a cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Rows after the cursor, in base order (the next page).
+    After,
+    /// Rows before the cursor, in base order (the previous page).
+    Before,
+}
+
+/// A page of results plus the cursors for the neighbouring pages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page<T> {
-    /// The rows in this page.
+    /// The rows in this page, in base order.
     pub items: Vec<T>,
-    /// Cursor to pass back to fetch the following page. `None` at the end.
+    /// Cursor for the next page, or `None` at the end.
     pub next_cursor: Option<String>,
+    /// Cursor for the previous page, or `None` at the start.
+    pub prev_cursor: Option<String>,
 }
 
 /// How much to return and where to resume from.
@@ -51,23 +71,10 @@ pub struct Page<T> {
 pub struct ListQuery {
     /// Maximum rows to return. Clamped to `1..=200`. Defaults to 50.
     pub limit: Option<u32>,
-    /// Opaque cursor from a previous page's `next_cursor`.
+    /// Opaque cursor from a page's `next_cursor` or `prev_cursor`.
     pub cursor: Option<String>,
     /// Sort direction. Each listing applies its own default.
     pub order: Option<Order>,
-}
-
-impl ListQuery {
-    fn limit(&self) -> u32 {
-        self.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
-    }
-
-    fn cursor(&self) -> Result<Option<Cursor>> {
-        match &self.cursor {
-            Some(encoded) => Cursor::decode(encoded).map(Some),
-            None => Ok(None),
-        }
-    }
 }
 
 /// The sort key value carried by a cursor.
@@ -86,27 +93,29 @@ impl CursorValue {
     }
 }
 
-/// A decoded keyset position: the last row's sort value and its unique id.
+/// A decoded keyset position: a row's sort value, its id, and the travel
+/// direction baked in when the cursor was issued.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Cursor {
     value: CursorValue,
     id: i64,
+    step: Step,
 }
 
 impl Cursor {
-    fn encode(&self) -> String {
-        let mut buf = Vec::new();
-        match &self.value {
-            CursorValue::Int(int) => {
-                buf.push(0);
-                buf.extend_from_slice(&self.id.to_be_bytes());
-                buf.extend_from_slice(&int.to_be_bytes());
-            }
-            CursorValue::Text(text) => {
-                buf.push(1);
-                buf.extend_from_slice(&self.id.to_be_bytes());
-                buf.extend_from_slice(text.as_bytes());
-            }
+    fn encode(value: CursorValue, id: i64, step: Step) -> String {
+        let mut flags = 0u8;
+        if matches!(value, CursorValue::Text(_)) {
+            flags |= 0b01;
+        }
+        if matches!(step, Step::Before) {
+            flags |= 0b10;
+        }
+        let mut buf = vec![flags];
+        buf.extend_from_slice(&id.to_be_bytes());
+        match value {
+            CursorValue::Int(int) => buf.extend_from_slice(&int.to_be_bytes()),
+            CursorValue::Text(text) => buf.extend_from_slice(text.as_bytes()),
         }
         to_hex(&buf)
     }
@@ -117,15 +126,22 @@ impl Cursor {
         if buf.len() < 9 {
             return Err(invalid());
         }
+        let flags = buf[0];
         let id = i64::from_be_bytes(buf[1..9].try_into().expect("8 bytes"));
-        let value = match buf[0] {
-            0 if buf.len() == 17 => {
-                CursorValue::Int(i64::from_be_bytes(buf[9..17].try_into().expect("8 bytes")))
-            }
-            1 => CursorValue::Text(String::from_utf8(buf[9..].to_vec()).map_err(|_| invalid())?),
-            _ => return Err(invalid()),
+        let step = if flags & 0b10 != 0 {
+            Step::Before
+        } else {
+            Step::After
         };
-        Ok(Self { value, id })
+        let value = if flags & 0b01 != 0 {
+            CursorValue::Text(String::from_utf8(buf[9..].to_vec()).map_err(|_| invalid())?)
+        } else {
+            if buf.len() != 17 {
+                return Err(invalid());
+            }
+            CursorValue::Int(i64::from_be_bytes(buf[9..17].try_into().expect("8 bytes")))
+        };
+        Ok(Self { value, id, step })
     }
 }
 
@@ -168,7 +184,7 @@ impl Keyset {
         }
     }
 
-    /// The keyset `WHERE` condition that resumes after `cursor`, using bind
+    /// The keyset `WHERE` condition that resumes from `cursor`, using bind
     /// params starting at `first_param`. Empty (and no params) without a cursor.
     pub(crate) fn condition(
         &self,
@@ -196,28 +212,51 @@ impl Keyset {
                 ],
             )
         } else {
-            (format!("{col} {op} ?{first_param}"), vec![cursor.value.to_db()])
+            (
+                format!("{col} {op} ?{first_param}"),
+                vec![cursor.value.to_db()],
+            )
         }
     }
 }
 
-/// Holds a query's limit and decoded cursor, and turns a fetched batch into a
-/// [`Page`]. Fetch `limit() + 1` rows so a full batch signals more to come.
+/// Drives one paginated query: resolves the limit, base order, and travel
+/// direction, exposes the order to query in, and turns a fetched batch into a
+/// [`Page`].
 pub(crate) struct Paginator {
     limit: u32,
     cursor: Option<Cursor>,
+    step: Step,
+    base_order: Order,
 }
 
 impl Paginator {
-    pub(crate) fn new(query: &ListQuery) -> Result<Self> {
+    pub(crate) fn new(query: &ListQuery, default_order: Order) -> Result<Self> {
+        let cursor = match &query.cursor {
+            Some(encoded) => Some(Cursor::decode(encoded)?),
+            None => None,
+        };
+        let step = cursor.as_ref().map_or(Step::After, |cursor| cursor.step);
         Ok(Self {
-            limit: query.limit(),
-            cursor: query.cursor()?,
+            limit: query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+            cursor,
+            step,
+            base_order: query.order.unwrap_or(default_order),
         })
     }
 
+    /// The decoded cursor position, if any.
     pub(crate) fn cursor(&self) -> Option<&Cursor> {
         self.cursor.as_ref()
+    }
+
+    /// The order to run the query in. Backward paging queries in the flipped
+    /// order, then [`Paginator::finish`] reverses the rows back to base order.
+    pub(crate) fn query_order(&self) -> Order {
+        match self.step {
+            Step::After => self.base_order,
+            Step::Before => self.base_order.flip(),
+        }
     }
 
     /// One more than the page size, so an extra row means another page exists.
@@ -225,23 +264,58 @@ impl Paginator {
         self.limit + 1
     }
 
-    /// Trims `items` to the page size and returns the cursor for the next page,
-    /// derived from the last kept row by `key_of`.
+    /// Trims `rows` to the page size, restores base order, and derives the
+    /// neighbouring cursors. `key_of` reads a row's sort value and id.
     pub(crate) fn finish<T>(
         &self,
-        mut items: Vec<T>,
+        mut rows: Vec<T>,
         key_of: impl Fn(&T) -> (CursorValue, i64),
     ) -> Page<T> {
-        let next_cursor = if items.len() as u32 > self.limit {
-            items.truncate(self.limit as usize);
-            items.last().map(|last| {
-                let (value, id) = key_of(last);
-                Cursor { value, id }.encode()
+        let has_extra = rows.len() as u32 > self.limit;
+        if has_extra {
+            rows.truncate(self.limit as usize);
+        }
+        if matches!(self.step, Step::Before) {
+            rows.reverse();
+        }
+
+        let cursor_at = |row: Option<&T>, step: Step| {
+            row.map(|row| {
+                let (value, id) = key_of(row);
+                Cursor::encode(value, id, step)
             })
-        } else {
-            None
         };
-        Page { items, next_cursor }
+        let first = rows.first();
+        let last = rows.last();
+
+        let (next_cursor, prev_cursor) = match self.step {
+            // Forward: more ahead iff we fetched an extra; a previous page
+            // exists iff we arrived here from a cursor.
+            Step::After => (
+                if has_extra { cursor_at(last, Step::After) } else { None },
+                if self.cursor.is_some() {
+                    cursor_at(first, Step::Before)
+                } else {
+                    None
+                },
+            ),
+            // Backward: we came from ahead, so a next page always exists; more
+            // behind iff we fetched an extra.
+            Step::Before => (
+                cursor_at(last, Step::After),
+                if has_extra {
+                    cursor_at(first, Step::Before)
+                } else {
+                    None
+                },
+            ),
+        };
+
+        Page {
+            items: rows,
+            next_cursor,
+            prev_cursor,
+        }
     }
 }
 
@@ -273,17 +347,18 @@ mod tests {
 
     #[test]
     fn cursor_roundtrips_int_and_text() {
-        let int = Cursor {
-            value: CursorValue::Int(-42),
-            id: 7,
-        };
-        assert_eq!(Cursor::decode(&int.encode()).unwrap(), int);
+        for step in [Step::After, Step::Before] {
+            let encoded = Cursor::encode(CursorValue::Int(-42), 7, step);
+            let decoded = Cursor::decode(&encoded).unwrap();
+            assert_eq!(decoded.value, CursorValue::Int(-42));
+            assert_eq!(decoded.id, 7);
+            assert_eq!(decoded.step, step);
 
-        let text = Cursor {
-            value: CursorValue::Text("tool/avrdude".to_owned()),
-            id: 3,
-        };
-        assert_eq!(Cursor::decode(&text.encode()).unwrap(), text);
+            let encoded = Cursor::encode(CursorValue::Text("tool/avrdude".to_owned()), 3, step);
+            let decoded = Cursor::decode(&encoded).unwrap();
+            assert_eq!(decoded.value, CursorValue::Text("tool/avrdude".to_owned()));
+            assert_eq!(decoded.step, step);
+        }
     }
 
     #[test]
@@ -293,19 +368,47 @@ mod tests {
     }
 
     #[test]
-    fn finish_sets_cursor_only_when_over_limit() {
+    fn first_page_has_next_but_no_prev() {
         let query = ListQuery {
             limit: Some(2),
             ..Default::default()
         };
-        let paginator = Paginator::new(&query).unwrap();
+        let paginator = Paginator::new(&query, Order::Asc).unwrap();
+        let page = paginator.finish(vec![1i64, 2, 3], |n| (CursorValue::Int(*n), *n));
+        assert_eq!(page.items, vec![1, 2]);
+        assert!(page.next_cursor.is_some());
+        assert!(page.prev_cursor.is_none());
+    }
 
-        let full = paginator.finish(vec![1, 2, 3], |n| (CursorValue::Int(*n), *n));
-        assert_eq!(full.items, vec![1, 2]);
-        assert!(full.next_cursor.is_some());
+    #[test]
+    fn last_page_has_prev_but_no_next() {
+        // Arrived via a forward cursor, fewer rows than the limit.
+        let forward = Cursor::encode(CursorValue::Int(2), 2, Step::After);
+        let query = ListQuery {
+            limit: Some(2),
+            cursor: Some(forward),
+            ..Default::default()
+        };
+        let paginator = Paginator::new(&query, Order::Asc).unwrap();
+        let page = paginator.finish(vec![3i64], |n| (CursorValue::Int(*n), *n));
+        assert_eq!(page.items, vec![3]);
+        assert!(page.next_cursor.is_none());
+        assert!(page.prev_cursor.is_some());
+    }
 
-        let partial = paginator.finish(vec![1], |n| (CursorValue::Int(*n), *n));
-        assert_eq!(partial.items, vec![1]);
-        assert!(partial.next_cursor.is_none());
+    #[test]
+    fn backward_page_reverses_and_offers_next() {
+        let backward = Cursor::encode(CursorValue::Int(4), 4, Step::Before);
+        let query = ListQuery {
+            limit: Some(2),
+            cursor: Some(backward),
+            ..Default::default()
+        };
+        let paginator = Paginator::new(&query, Order::Asc).unwrap();
+        // Rows fetched in flipped (desc) order; finish reverses to base order.
+        let page = paginator.finish(vec![3i64, 2, 1], |n| (CursorValue::Int(*n), *n));
+        assert_eq!(page.items, vec![2, 3]);
+        assert!(page.next_cursor.is_some());
+        assert!(page.prev_cursor.is_some());
     }
 }

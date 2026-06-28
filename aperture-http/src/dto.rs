@@ -30,23 +30,23 @@ impl From<VersionInfo> for VersionResponse {
     }
 }
 
-/// A page of results plus the cursor for the next page.
+/// A page of results plus the cursors for the neighbouring pages.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Page<T> {
     /// The rows in this page.
     pub items: Vec<T>,
-    /// Cursor to pass as `?cursor=` to fetch the next page. Null at the end.
+    /// Cursor to pass as `?cursor=` for the next page. Null at the end.
     pub next_cursor: Option<String>,
-    /// Whether another page follows.
-    pub has_more: bool,
+    /// Cursor to pass as `?cursor=` for the previous page. Null at the start.
+    pub prev_cursor: Option<String>,
 }
 
 impl<T> Page<T> {
     /// Maps a storage page into a response page.
     fn from_storage<S>(page: StoragePage<S>, map: impl Fn(S) -> T) -> Self {
         Self {
-            has_more: page.next_cursor.is_some(),
             next_cursor: page.next_cursor,
+            prev_cursor: page.prev_cursor,
             items: page.items.into_iter().map(map).collect(),
         }
     }
@@ -68,6 +68,7 @@ pub struct ArtifactSummaryResponse {
     /// Stored blob size of the newest version, in bytes.
     pub size_bytes: i64,
     /// When the newest version was downloaded.
+    #[schema(value_type = String, format = DateTime)]
     pub downloaded_at: Timestamp,
 }
 
@@ -102,8 +103,10 @@ pub struct ArtifactVersionResponse {
     /// Stored blob size in bytes.
     pub size_bytes: i64,
     /// When this version was downloaded.
+    #[schema(value_type = String, format = DateTime)]
     pub downloaded_at: Timestamp,
     /// When this version was last verified, if ever.
+    #[schema(value_type = Option<String>, format = DateTime)]
     pub verified_at: Option<Timestamp>,
 }
 
@@ -168,8 +171,10 @@ pub struct DownloadResponse {
     /// Lifecycle state.
     pub status: DownloadStatusResponse,
     /// When the attempt started.
+    #[schema(value_type = String, format = DateTime)]
     pub started_at: Timestamp,
     /// When it finished, if it did.
+    #[schema(value_type = Option<String>, format = DateTime)]
     pub finished_at: Option<Timestamp>,
     /// Resolved content digest, if it got that far.
     pub digest: Option<String>,
@@ -221,20 +226,23 @@ impl From<OrderParam> for Order {
     }
 }
 
-/// Pagination query params shared by every list endpoint.
+/// Query params for `GET /api/v1/artifacts`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[serde(default)]
 #[into_params(parameter_in = Query)]
-pub struct PageParams {
-    /// Maximum rows to return (1..=200, default 50).
+pub struct ArtifactListParams {
+    /// Maximum rows to return. Defaults to 50.
+    #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
-    /// Cursor from a previous page's `next_cursor`.
+    /// Cursor from a page's `next_cursor` or `prev_cursor`.
     pub cursor: Option<String>,
     /// Sort direction.
     pub order: Option<OrderParam>,
+    /// Match keys containing this substring.
+    pub q: Option<String>,
 }
 
-impl PageParams {
+impl ArtifactListParams {
     pub(crate) fn to_query(&self) -> ListQuery {
         ListQuery {
             limit: self.limit,
@@ -268,14 +276,19 @@ impl From<VersionSortParam> for VersionSort {
 #[serde(default)]
 #[into_params(parameter_in = Query)]
 pub struct VersionListParams {
-    /// Maximum rows to return (1..=200, default 50).
+    /// Maximum rows to return. Defaults to 50.
+    #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
-    /// Cursor from a previous page's `next_cursor`.
+    /// Cursor from a page's `next_cursor` or `prev_cursor`.
     pub cursor: Option<String>,
     /// Sort direction.
     pub order: Option<OrderParam>,
     /// Field to sort by. Defaults to downloaded time.
     pub sort: Option<VersionSortParam>,
+    /// Only versions with this exact media type.
+    pub media_type: Option<String>,
+    /// Only versions with this exact version string.
+    pub version: Option<String>,
 }
 
 impl VersionListParams {
@@ -322,9 +335,10 @@ impl From<DownloadStatusParam> for DownloadStatus {
 #[serde(default)]
 #[into_params(parameter_in = Query)]
 pub struct DownloadListParams {
-    /// Maximum rows to return (1..=200, default 50).
+    /// Maximum rows to return. Defaults to 50.
+    #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
-    /// Cursor from a previous page's `next_cursor`.
+    /// Cursor from a page's `next_cursor` or `prev_cursor`.
     pub cursor: Option<String>,
     /// Sort direction.
     pub order: Option<OrderParam>,

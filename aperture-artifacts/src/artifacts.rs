@@ -129,8 +129,13 @@ impl Artifacts {
     }
 
     /// Lists stored artifact keys with their newest version and version count.
-    pub async fn list_artifacts(&self, query: &ListQuery) -> Result<Page<ArtifactKey>> {
-        Ok(self.inner.storage.artifacts().list_keys(query).await?)
+    /// `q` matches a substring of the key.
+    pub async fn list_artifacts(
+        &self,
+        q: Option<&str>,
+        query: &ListQuery,
+    ) -> Result<Page<ArtifactKey>> {
+        Ok(self.inner.storage.artifacts().list_keys(q, query).await?)
     }
 
     /// Returns one artifact key with its newest version and version count.
@@ -138,18 +143,21 @@ impl Artifacts {
         Ok(self.inner.storage.artifacts().get_key(key).await?)
     }
 
-    /// Lists the stored versions of `key`.
+    /// Lists the stored versions of `key`, optionally filtered by exact
+    /// `media_type` and `version`.
     pub async fn list_versions(
         &self,
         key: &str,
         sort: VersionSort,
+        media_type: Option<&str>,
+        version: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Artifact>> {
         Ok(self
             .inner
             .storage
             .artifacts()
-            .list_versions(key, sort, query)
+            .list_versions(key, sort, media_type, version, query)
             .await?)
     }
 

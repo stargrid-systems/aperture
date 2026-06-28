@@ -17,15 +17,17 @@ paths:
       parameters:
       - name: limit
         in: query
-        description: Maximum rows to return (1..=200, default 50).
+        description: Maximum rows to return. Defaults to 50.
         required: false
         schema:
           type: integer
           format: int32
-          minimum: 0
+          default: 50
+          maximum: 200
+          minimum: 1
       - name: cursor
         in: query
-        description: Cursor from a previous page's `next_cursor`.
+        description: Cursor from a page's `next_cursor` or `prev_cursor`.
         required: false
         schema:
           type: string
@@ -35,6 +37,12 @@ paths:
         required: false
         schema:
           $ref: '#/components/schemas/OrderParam'
+      - name: q
+        in: query
+        description: Match keys containing this substring.
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           description: Artifacts
@@ -75,15 +83,17 @@ paths:
           type: string
       - name: limit
         in: query
-        description: Maximum rows to return (1..=200, default 50).
+        description: Maximum rows to return. Defaults to 50.
         required: false
         schema:
           type: integer
           format: int32
-          minimum: 0
+          default: 50
+          maximum: 200
+          minimum: 1
       - name: cursor
         in: query
-        description: Cursor from a previous page's `next_cursor`.
+        description: Cursor from a page's `next_cursor` or `prev_cursor`.
         required: false
         schema:
           type: string
@@ -99,6 +109,18 @@ paths:
         required: false
         schema:
           $ref: '#/components/schemas/VersionSortParam'
+      - name: media_type
+        in: query
+        description: Only versions with this exact media type.
+        required: false
+        schema:
+          type: string
+      - name: version
+        in: query
+        description: Only versions with this exact version string.
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           description: Versions
@@ -162,15 +184,17 @@ paths:
       parameters:
       - name: limit
         in: query
-        description: Maximum rows to return (1..=200, default 50).
+        description: Maximum rows to return. Defaults to 50.
         required: false
         schema:
           type: integer
           format: int32
-          minimum: 0
+          default: 50
+          maximum: 200
+          minimum: 1
       - name: cursor
         in: query
-        description: Cursor from a previous page's `next_cursor`.
+        description: Cursor from a page's `next_cursor` or `prev_cursor`.
         required: false
         schema:
           type: string
@@ -227,7 +251,8 @@ components:
           type: string
           description: Content digest of the newest version.
         downloaded_at:
-          $ref: '#/components/schemas/String'
+          type: string
+          format: date-time
           description: When the newest version was downloaded.
         key:
           type: string
@@ -262,7 +287,8 @@ components:
           type: string
           description: Content digest of the stored blob.
         downloaded_at:
-          $ref: '#/components/schemas/String'
+          type: string
+          format: date-time
           description: When this version was downloaded.
         key:
           type: string
@@ -280,10 +306,11 @@ components:
           type: string
           description: Where this version came from.
         verified_at:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/String'
-            description: When this version was last verified, if ever.
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When this version was last verified, if ever.
         version:
           type:
           - string
@@ -328,10 +355,11 @@ components:
           - 'null'
           description: Failure detail, if any.
         finished_at:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/String'
-            description: When it finished, if it did.
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When it finished, if it did.
         id:
           type: integer
           format: int64
@@ -354,7 +382,8 @@ components:
           type: string
           description: Where it was fetched from.
         started_at:
-          $ref: '#/components/schemas/String'
+          type: string
+          format: date-time
           description: When the attempt started.
         status:
           $ref: '#/components/schemas/DownloadStatusResponse'
@@ -369,14 +398,10 @@ components:
       - interrupted
     Page_ArtifactSummaryResponse:
       type: object
-      description: A page of results plus the cursor for the next page.
+      description: A page of results plus the cursors for the neighbouring pages.
       required:
       - items
-      - has_more
       properties:
-        has_more:
-          type: boolean
-          description: Whether another page follows.
         items:
           type: array
           items:
@@ -394,7 +419,8 @@ components:
                 type: string
                 description: Content digest of the newest version.
               downloaded_at:
-                $ref: '#/components/schemas/String'
+                type: string
+                format: date-time
                 description: When the newest version was downloaded.
               key:
                 type: string
@@ -420,17 +446,18 @@ components:
           type:
           - string
           - 'null'
-          description: Cursor to pass as `?cursor=` to fetch the next page. Null at the end.
+          description: Cursor to pass as `?cursor=` for the next page. Null at the end.
+        prev_cursor:
+          type:
+          - string
+          - 'null'
+          description: Cursor to pass as `?cursor=` for the previous page. Null at the start.
     Page_ArtifactVersionResponse:
       type: object
-      description: A page of results plus the cursor for the next page.
+      description: A page of results plus the cursors for the neighbouring pages.
       required:
       - items
-      - has_more
       properties:
-        has_more:
-          type: boolean
-          description: Whether another page follows.
         items:
           type: array
           items:
@@ -447,7 +474,8 @@ components:
                 type: string
                 description: Content digest of the stored blob.
               downloaded_at:
-                $ref: '#/components/schemas/String'
+                type: string
+                format: date-time
                 description: When this version was downloaded.
               key:
                 type: string
@@ -465,10 +493,11 @@ components:
                 type: string
                 description: Where this version came from.
               verified_at:
-                oneOf:
-                - type: 'null'
-                - $ref: '#/components/schemas/String'
-                  description: When this version was last verified, if ever.
+                type:
+                - string
+                - 'null'
+                format: date-time
+                description: When this version was last verified, if ever.
               version:
                 type:
                 - string
@@ -479,17 +508,18 @@ components:
           type:
           - string
           - 'null'
-          description: Cursor to pass as `?cursor=` to fetch the next page. Null at the end.
+          description: Cursor to pass as `?cursor=` for the next page. Null at the end.
+        prev_cursor:
+          type:
+          - string
+          - 'null'
+          description: Cursor to pass as `?cursor=` for the previous page. Null at the start.
     Page_DownloadResponse:
       type: object
-      description: A page of results plus the cursor for the next page.
+      description: A page of results plus the cursors for the neighbouring pages.
       required:
       - items
-      - has_more
       properties:
-        has_more:
-          type: boolean
-          description: Whether another page follows.
         items:
           type: array
           items:
@@ -513,10 +543,11 @@ components:
                 - 'null'
                 description: Failure detail, if any.
               finished_at:
-                oneOf:
-                - type: 'null'
-                - $ref: '#/components/schemas/String'
-                  description: When it finished, if it did.
+                type:
+                - string
+                - 'null'
+                format: date-time
+                description: When it finished, if it did.
               id:
                 type: integer
                 format: int64
@@ -539,7 +570,8 @@ components:
                 type: string
                 description: Where it was fetched from.
               started_at:
-                $ref: '#/components/schemas/String'
+                type: string
+                format: date-time
                 description: When the attempt started.
               status:
                 $ref: '#/components/schemas/DownloadStatusResponse'
@@ -549,9 +581,12 @@ components:
           type:
           - string
           - 'null'
-          description: Cursor to pass as `?cursor=` to fetch the next page. Null at the end.
-    String:
-      type: string
+          description: Cursor to pass as `?cursor=` for the next page. Null at the end.
+        prev_cursor:
+          type:
+          - string
+          - 'null'
+          description: Cursor to pass as `?cursor=` for the previous page. Null at the start.
     VersionResponse:
       type: object
       description: Version information returned by `GET /api/v1/version`.

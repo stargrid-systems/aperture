@@ -86,7 +86,7 @@ async fn lists_artifacts_with_summary() {
     assert_eq!(items[1]["key"], "spectra");
     assert_eq!(items[1]["version_count"], 2);
     assert_eq!(items[1]["digest"], "sha256:bbb");
-    assert_eq!(json["has_more"], false);
+    assert!(json["next_cursor"].is_null());
 }
 
 #[tokio::test]
@@ -97,12 +97,17 @@ async fn paginates_artifacts_with_cursor() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
     assert_eq!(first["items"][0]["key"], "firmware");
-    assert_eq!(first["has_more"], true);
+    assert!(first["prev_cursor"].is_null());
     let cursor = first["next_cursor"].as_str().unwrap();
 
     let (_, second) = get_json(&app, &format!("/api/v1/artifacts?limit=1&cursor={cursor}")).await;
     assert_eq!(second["items"][0]["key"], "spectra");
-    assert_eq!(second["has_more"], false);
+    assert!(second["next_cursor"].is_null());
+
+    // Page back to the first item using the prev cursor.
+    let back_cursor = second["prev_cursor"].as_str().expect("a previous page");
+    let (_, back) = get_json(&app, &format!("/api/v1/artifacts?limit=1&cursor={back_cursor}")).await;
+    assert_eq!(back["items"][0]["key"], "firmware");
 }
 
 #[tokio::test]
@@ -156,6 +161,24 @@ async fn evicts_a_version() {
 
     let (status, _) = get_json(&app, "/api/v1/artifacts/spectra/versions/sha256:aaa").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn filters_artifacts_and_versions() {
+    let (app, _artifacts) = seeded_app().await;
+
+    // Substring match on key.
+    let (status, json) = get_json(&app, "/api/v1/artifacts?q=spec").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["key"], "spectra");
+
+    // Exact version filter on versions.
+    let (_, hit) = get_json(&app, "/api/v1/artifacts/spectra/versions?version=0.2.0").await;
+    assert_eq!(hit["items"].as_array().unwrap().len(), 2);
+    let (_, miss) = get_json(&app, "/api/v1/artifacts/spectra/versions?version=9.9.9").await;
+    assert!(miss["items"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

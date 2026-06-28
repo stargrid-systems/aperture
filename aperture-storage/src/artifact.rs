@@ -220,25 +220,33 @@ impl ArtifactRepository {
     }
 
     /// Lists distinct keys, each with its newest version and version count.
-    /// Ordered by key, ascending by default.
-    pub async fn list_keys(&self, query: &ListQuery) -> Result<Page<ArtifactKey>> {
-        let paginator = Paginator::new(query)?;
-        let order = query.order.unwrap_or(Order::Asc);
-        let keyset = Keyset::unique("a.key", order);
-        let (cursor_sql, params) = keyset.condition(paginator.cursor(), 1);
+    /// Ordered by key, ascending by default. `q` matches a substring of the key.
+    pub async fn list_keys(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<ArtifactKey>> {
+        let paginator = Paginator::new(query, Order::Asc)?;
+        let keyset = Keyset::unique("a.key", paginator.query_order());
 
-        let where_clause = if cursor_sql.is_empty() {
-            String::new()
-        } else {
-            format!("AND {cursor_sql}")
-        };
+        // The latest-version predicate keeps one row per key; filters and the
+        // keyset condition are ANDed onto it.
+        let mut params: Vec<Value> = Vec::new();
+        let mut conditions = vec![
+            "a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key \
+             ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)"
+                .to_owned(),
+        ];
+        if let Some(q) = q {
+            params.push(Value::Text(format!("%{q}%")));
+            conditions.push(format!("a.key LIKE ?{}", params.len()));
+        }
+        let (cursor_sql, cursor_params) = keyset.condition(paginator.cursor(), params.len() + 1);
+        if !cursor_sql.is_empty() {
+            conditions.push(cursor_sql);
+            params.extend(cursor_params);
+        }
         let sql = format!(
             "SELECT {ARTIFACT_COLUMNS}, \
              (SELECT COUNT(*) FROM artifacts c WHERE c.key = a.key) AS version_count \
-             FROM artifacts a \
-             WHERE a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key \
-                ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1) {where_clause} \
-             ORDER BY {} LIMIT {}",
+             FROM artifacts a WHERE {} ORDER BY {} LIMIT {}",
+            conditions.join(" AND "),
             keyset.order_by(),
             paginator.fetch_limit(),
         );
@@ -258,32 +266,40 @@ impl ArtifactRepository {
     }
 
     /// Lists the stored versions of `key`. Ordered by `sort`, descending by
-    /// default.
+    /// default. Optionally filtered by exact `media_type` and `version`.
     pub async fn list_versions(
         &self,
         key: &str,
         sort: VersionSort,
+        media_type: Option<&str>,
+        version: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Artifact>> {
-        let paginator = Paginator::new(query)?;
-        let order = query.order.unwrap_or(Order::Desc);
+        let paginator = Paginator::new(query, Order::Desc)?;
         let column = match sort {
             VersionSort::DownloadedAt => "downloaded_at",
             VersionSort::SizeBytes => "size_bytes",
         };
-        let keyset = Keyset::with_id(column, order);
+        let keyset = Keyset::with_id(column, paginator.query_order());
 
         let mut params = vec![Value::Text(key.to_owned())];
+        let mut conditions = vec!["key = ?1".to_owned()];
+        if let Some(media_type) = media_type {
+            params.push(Value::Text(media_type.to_owned()));
+            conditions.push(format!("media_type = ?{}", params.len()));
+        }
+        if let Some(version) = version {
+            params.push(Value::Text(version.to_owned()));
+            conditions.push(format!("version = ?{}", params.len()));
+        }
         let (cursor_sql, cursor_params) = keyset.condition(paginator.cursor(), params.len() + 1);
-        params.extend(cursor_params);
-        let cursor_clause = if cursor_sql.is_empty() {
-            String::new()
-        } else {
-            format!("AND {cursor_sql}")
-        };
+        if !cursor_sql.is_empty() {
+            conditions.push(cursor_sql);
+            params.extend(cursor_params);
+        }
         let sql = format!(
-            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE key = ?1 {cursor_clause} \
-             ORDER BY {} LIMIT {}",
+            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE {} ORDER BY {} LIMIT {}",
+            conditions.join(" AND "),
             keyset.order_by(),
             paginator.fetch_limit(),
         );
@@ -417,9 +433,8 @@ impl ArtifactRepository {
         key: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Download>> {
-        let paginator = Paginator::new(query)?;
-        let order = query.order.unwrap_or(Order::Desc);
-        let keyset = Keyset::unique("id", order);
+        let paginator = Paginator::new(query, Order::Desc)?;
+        let keyset = Keyset::unique("id", paginator.query_order());
 
         let mut params: Vec<Value> = Vec::new();
         let mut conditions: Vec<String> = Vec::new();

@@ -6,7 +6,7 @@ use utoipa_axum::routes;
 
 use crate::AppState;
 use crate::dto::{
-    ArtifactSummaryResponse, ArtifactVersionResponse, Page, PageParams, VersionListParams,
+    ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, Page, VersionListParams,
     artifact_page, version_page,
 };
 use crate::error::ApiError;
@@ -23,17 +23,17 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[utoipa::path(
     get,
     path = "",
-    params(PageParams),
+    params(ArtifactListParams),
     responses((status = 200, description = "Artifacts", body = Page<ArtifactSummaryResponse>)),
 )]
 async fn list_artifacts(
     State(state): State<AppState>,
-    Query(params): Query<PageParams>,
+    Query(params): Query<ArtifactListParams>,
 ) -> Result<Json<Page<ArtifactSummaryResponse>>, ApiError> {
     let page = state
         .spectra()
         .artifacts()
-        .list_artifacts(&params.to_query())
+        .list_artifacts(params.q.as_deref(), &params.to_query())
         .await?;
     Ok(Json(artifact_page(page)))
 }
@@ -76,7 +76,13 @@ async fn list_versions(
     let page = state
         .spectra()
         .artifacts()
-        .list_versions(&key, params.sort(), &params.to_query())
+        .list_versions(
+            &key,
+            params.sort(),
+            params.media_type.as_deref(),
+            params.version.as_deref(),
+            &params.to_query(),
+        )
         .await?;
     Ok(Json(version_page(page)))
 }
