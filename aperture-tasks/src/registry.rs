@@ -1,7 +1,7 @@
 //! The registry of task definitions.
 //!
 //! Definitions are registered once at startup. The registry is the single source
-//! of truth for what kinds exist: the manager looks up runners by kind, and the
+//! of truth for what kinds exist: [`Tasks`] looks up definitions by kind, and the
 //! HTTP layer projects [`TaskRegistry::descriptors`] into the OpenAPI document.
 
 use std::collections::HashMap;

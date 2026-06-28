@@ -3,7 +3,7 @@ use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
-use aperture_tasks::{TaskManager, TaskRegistry, TaskStatus};
+use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
@@ -49,7 +49,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
 
     let mut registry = TaskRegistry::new();
     registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
-    let tasks = TaskManager::new(artifacts.storage().clone(), registry);
+    let tasks = Tasks::new(artifacts.storage().clone(), registry);
 
     let spectra = Spectra::new(Arc::clone(&artifacts), tasks.clone(), SpectraConfig::default());
     let state = AppState::new("test", spectra, tasks);

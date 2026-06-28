@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use utoipa::ToSchema;
 
 use crate::context::TaskContext;
-use crate::error::TaskError;
+use crate::error::RunError;
 
 /// What a task kind supports beyond running to completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -51,5 +51,5 @@ pub trait TaskDefinition: Send + Sync + 'static {
         &self,
         input: Self::Input,
         ctx: TaskContext,
-    ) -> impl Future<Output = Result<Self::Output, TaskError>> + Send;
+    ) -> impl Future<Output = Result<Self::Output, RunError>> + Send;
 }

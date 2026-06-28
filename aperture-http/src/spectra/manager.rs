@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition, DownloadInput, DownloadSource};
-use aperture_tasks::TaskManager;
+use aperture_tasks::Tasks;
 use tokio::time;
 
 use super::config::SpectraConfig;
@@ -16,7 +16,7 @@ use super::image::{SpectraImage, open_image};
 #[derive(Clone)]
 pub struct Spectra {
     artifacts: Arc<Artifacts>,
-    tasks: TaskManager,
+    tasks: Tasks,
     config: SpectraConfig,
     current: Arc<RwLock<Option<Arc<SpectraImage>>>>,
     preparing: Arc<AtomicBool>,
@@ -25,7 +25,7 @@ pub struct Spectra {
 impl Spectra {
     /// Creates a frontend backed by `artifacts`, fetched via `tasks`, pulling
     /// from `config`.
-    pub fn new(artifacts: Arc<Artifacts>, tasks: TaskManager, config: SpectraConfig) -> Self {
+    pub fn new(artifacts: Arc<Artifacts>, tasks: Tasks, config: SpectraConfig) -> Self {
         Self {
             artifacts,
             tasks,

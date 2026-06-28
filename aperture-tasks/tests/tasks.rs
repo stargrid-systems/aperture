@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::{Storage, TaskStatus};
-use aperture_tasks::{Capabilities, TaskContext, TaskDefinition, TaskError, TaskManager, TaskRegistry};
+use aperture_tasks::{
+    Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry, Tasks,
+};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -33,7 +35,7 @@ impl TaskDefinition for Double {
         Capabilities::default()
     }
 
-    async fn run(&self, input: DoubleIn, _ctx: TaskContext) -> Result<DoubleOut, TaskError> {
+    async fn run(&self, input: DoubleIn, _ctx: TaskContext) -> Result<DoubleOut, RunError> {
         Ok(DoubleOut {
             result: input.n * 2,
         })
@@ -63,15 +65,15 @@ impl TaskDefinition for Probe {
         }
     }
 
-    async fn run(&self, _input: Empty, ctx: TaskContext) -> Result<Empty, TaskError> {
+    async fn run(&self, _input: Empty, ctx: TaskContext) -> Result<Empty, RunError> {
         let progress = ctx.progress();
         progress.set_total(10);
         progress.set_done(4);
-        progress.set_message("working");
+        progress.set_message(ProgressMessage::new("working"));
         self.ready.notify_one();
         tokio::select! {
             _ = self.gate.notified() => Ok(Empty {}),
-            _ = ctx.cancellation_token().cancelled() => Err(TaskError::Cancelled),
+            _ = ctx.cancellation_token().cancelled() => Err(RunError::Cancelled),
         }
     }
 }
@@ -95,7 +97,7 @@ impl TaskDefinition for Parent {
         }
     }
 
-    async fn run(&self, _input: Empty, ctx: TaskContext) -> Result<Empty, TaskError> {
+    async fn run(&self, _input: Empty, ctx: TaskContext) -> Result<Empty, RunError> {
         let child = ctx.spawn_child::<Probe>(Empty {}).await?;
         *self.child_id.lock().unwrap() = Some(child.id());
         self.spawned.notify_one();
@@ -120,9 +122,9 @@ async fn spawn_and_wait_returns_decoded_output() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Double);
-    let manager = TaskManager::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = manager.spawn::<Double>(DoubleIn { n: 21 }).await.unwrap();
+    let handle = tasks.spawn::<Double>(DoubleIn { n: 21 }).await.unwrap();
     let id = handle.id();
     let output = handle.wait().await.unwrap();
     assert_eq!(output.result, 42);
@@ -138,15 +140,15 @@ async fn live_progress_is_visible_while_running() {
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let manager = TaskManager::new(storage, registry);
+    let tasks = Tasks::new(storage, registry);
 
-    let handle = manager.spawn::<Probe>(Empty {}).await.unwrap();
+    let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
     ready.notified().await;
 
     let progress = handle.progress().expect("running task has progress");
     assert_eq!(progress.total, Some(10));
     assert_eq!(progress.done, Some(4));
-    assert_eq!(progress.message.as_deref(), Some("working"));
+    assert_eq!(progress.message.expect("running task has a message").key, "working");
 
     gate.notify_one();
     handle.wait().await.unwrap();
@@ -158,15 +160,15 @@ async fn cancellable_task_records_cancelled() {
     let (probe, ready, _gate) = probe(true);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let manager = TaskManager::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = manager.spawn::<Probe>(Empty {}).await.unwrap();
+    let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
     let id = handle.id();
     ready.notified().await;
 
-    assert!(manager.cancel(id).unwrap());
+    assert!(tasks.cancel(id).unwrap());
     let result = handle.wait().await;
-    assert!(matches!(result, Err(TaskError::Cancelled)));
+    assert!(matches!(result, Err(TaskError::Run(RunError::Cancelled))));
 
     let recorded = storage.tasks().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Cancelled);
@@ -178,13 +180,13 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let manager = TaskManager::new(storage, registry);
+    let tasks = Tasks::new(storage, registry);
 
-    let handle = manager.spawn::<Probe>(Empty {}).await.unwrap();
+    let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
     let id = handle.id();
     ready.notified().await;
 
-    assert!(!manager.cancel(id).unwrap());
+    assert!(!tasks.cancel(id).unwrap());
 
     gate.notify_one();
     handle.wait().await.unwrap();
@@ -203,17 +205,17 @@ async fn child_inherits_parent_cancellation() {
     let mut registry = TaskRegistry::new();
     registry.register(probe);
     registry.register(parent);
-    let manager = TaskManager::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = manager.spawn::<Parent>(Empty {}).await.unwrap();
+    let handle = tasks.spawn::<Parent>(Empty {}).await.unwrap();
     let parent_id = handle.id();
     spawned.notified().await;
     child_ready.notified().await;
     let child = child_id.lock().unwrap().expect("child id published");
 
     // Cancelling the parent cancels the child through the shared token.
-    assert!(manager.cancel(parent_id).unwrap());
-    assert!(matches!(handle.wait().await, Err(TaskError::Cancelled)));
+    assert!(tasks.cancel(parent_id).unwrap());
+    assert!(matches!(handle.wait().await, Err(TaskError::Run(RunError::Cancelled))));
 
     let recorded = storage.tasks().get(child).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Cancelled);
@@ -230,8 +232,8 @@ async fn reconcile_marks_orphaned_invocations() {
         .unwrap();
     storage.tasks().mark_running(id, at(1_000)).await.unwrap();
 
-    let manager = TaskManager::new(storage.clone(), TaskRegistry::new());
-    assert_eq!(manager.reconcile().await.unwrap(), 1);
+    let tasks = Tasks::new(storage.clone(), TaskRegistry::new());
+    assert_eq!(tasks.reconcile().await.unwrap(), 1);
 
     let recorded = storage.tasks().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Interrupted);

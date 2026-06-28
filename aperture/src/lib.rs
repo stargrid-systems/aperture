@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
-use aperture_tasks::{TaskManager, TaskRegistry};
+use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
@@ -23,7 +23,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     // active as interrupted.
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
-    let tasks = TaskManager::new(artifacts.storage().clone(), registry);
+    let tasks = Tasks::new(artifacts.storage().clone(), registry);
     tasks.reconcile().await.into_diagnostic()?;
 
     let spectra = Spectra::new(Arc::clone(&artifacts), tasks.clone(), SpectraConfig::default());

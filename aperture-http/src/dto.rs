@@ -8,7 +8,8 @@ use std::collections::HashMap;
 
 use aperture_artifacts::{Artifact, ArtifactKey, ListQuery, Order, Page as StoragePage, VersionSort};
 use aperture_tasks::{
-    ParentFilter, Progress, StatusFilter, TaskDescriptor, TaskInvocation, TaskStatus,
+    ParentFilter, Progress, ProgressMessage, StatusFilter, TaskDescriptor, TaskInvocation,
+    TaskStatus,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -252,11 +253,29 @@ impl From<TaskStatus> for TaskStatusResponse {
     }
 }
 
+/// A localizable progress message: a translation key and its arguments.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProgressMessageResponse {
+    /// Translation key for the current step.
+    pub key: String,
+    /// Arguments to interpolate into the resolved message.
+    pub args: HashMap<String, String>,
+}
+
+impl From<ProgressMessage> for ProgressMessageResponse {
+    fn from(message: ProgressMessage) -> Self {
+        Self {
+            key: message.key,
+            args: message.args.into_iter().collect(),
+        }
+    }
+}
+
 /// Live progress of a running task.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProgressResponse {
-    /// A short description of the current step.
-    pub message: Option<String>,
+    /// A localizable description of the current step.
+    pub message: Option<ProgressMessageResponse>,
     /// Units of work completed so far.
     pub done: Option<u64>,
     /// Total units of work expected, if known.
@@ -266,7 +285,7 @@ pub struct ProgressResponse {
 impl From<Progress> for ProgressResponse {
     fn from(progress: Progress) -> Self {
         Self {
-            message: progress.message,
+            message: progress.message.map(ProgressMessageResponse::from),
             done: progress.done,
             total: progress.total,
         }

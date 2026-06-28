@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use aperture_tasks::{Capabilities, TaskContext, TaskDefinition, TaskError};
+use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -51,7 +51,7 @@ pub struct DownloadOutput {
     /// Content digest of the stored blob.
     pub digest: String,
     /// Stored blob size in bytes.
-    pub size_bytes: i64,
+    pub size_bytes: u64,
     /// Human-readable version, if known.
     pub version: Option<String>,
 }
@@ -83,7 +83,7 @@ impl TaskDefinition for DownloadDefinition {
         }
     }
 
-    async fn run(&self, input: DownloadInput, ctx: TaskContext) -> Result<DownloadOutput, TaskError> {
+    async fn run(&self, input: DownloadInput, ctx: TaskContext) -> Result<DownloadOutput, RunError> {
         let request = FetchRequest {
             key: input.key,
             source: input.source.into(),
@@ -92,10 +92,10 @@ impl TaskDefinition for DownloadDefinition {
             .artifacts
             .download(request, ctx.progress())
             .await
-            .map_err(|err| TaskError::Failed(err.into()))?;
+            .map_err(|err| RunError::Failed(err.into()))?;
         Ok(DownloadOutput {
             digest: artifact.digest,
-            size_bytes: artifact.size_bytes,
+            size_bytes: artifact.size_bytes.try_into().unwrap_or(0),
             version: artifact.version,
         })
     }

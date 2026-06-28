@@ -3,7 +3,7 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
-use aperture_tasks::{TaskDescriptor, TaskManager};
+use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
@@ -26,13 +26,13 @@ mod spectra;
 pub struct AppState {
     version: &'static str,
     spectra: Spectra,
-    tasks: TaskManager,
+    tasks: Tasks,
 }
 
 impl AppState {
     /// Wraps the gateway version, the Spectra frontend, and the task manager for
     /// use as request state. `version` is reported by `GET /api/v1/version`.
-    pub fn new(version: &'static str, spectra: Spectra, tasks: TaskManager) -> Self {
+    pub fn new(version: &'static str, spectra: Spectra, tasks: Tasks) -> Self {
         Self {
             version,
             spectra,
@@ -48,7 +48,7 @@ impl AppState {
         &self.spectra
     }
 
-    pub(crate) fn tasks(&self) -> &TaskManager {
+    pub(crate) fn tasks(&self) -> &Tasks {
         &self.tasks
     }
 }

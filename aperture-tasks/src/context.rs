@@ -6,16 +6,16 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::definition::TaskDefinition;
-use crate::error::TaskError;
-use crate::manager::{ManagerInner, TaskHandle};
+use crate::error::{RunError, TaskError};
 use crate::progress::{ProgressHandle, ProgressState};
+use crate::tasks::{TaskHandle, TasksInner};
 
 /// Everything a running task needs: its identity, a cooperative cancellation
 /// signal, a progress reporter, and the means to spawn sub-tasks under itself.
 #[derive(Clone)]
 pub struct TaskContext {
     id: i64,
-    inner: Arc<ManagerInner>,
+    inner: Arc<TasksInner>,
     cancel: CancellationToken,
     progress: Arc<ProgressState>,
 }
@@ -23,7 +23,7 @@ pub struct TaskContext {
 impl TaskContext {
     pub(crate) fn new(
         id: i64,
-        inner: Arc<ManagerInner>,
+        inner: Arc<TasksInner>,
         cancel: CancellationToken,
         progress: Arc<ProgressState>,
     ) -> Self {
@@ -50,11 +50,11 @@ impl TaskContext {
         &self.cancel
     }
 
-    /// Returns [`TaskError::Cancelled`] if cancellation has been requested, so a
+    /// Returns [`RunError::Cancelled`] if cancellation has been requested, so a
     /// body can bail at a safe point with `?`.
-    pub fn check_cancelled(&self) -> Result<(), TaskError> {
+    pub fn check_cancelled(&self) -> Result<(), RunError> {
         if self.cancel.is_cancelled() {
-            Err(TaskError::Cancelled)
+            Err(RunError::Cancelled)
         } else {
             Ok(())
         }

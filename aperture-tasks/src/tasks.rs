@@ -1,4 +1,4 @@
-//! The task manager: spawns tasks, tracks the running ones, and records every
+//! [`Tasks`]: spawns tasks, tracks the running ones, and records every
 //! invocation in storage.
 //!
 //! The durable record of every invocation lives in the storage catalog. A live
@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::TaskContext;
 use crate::definition::{Capabilities, TaskDefinition};
-use crate::error::TaskError;
+use crate::error::{RunError, TaskError};
 use crate::progress::{Progress, ProgressState};
 use crate::registry::TaskRegistry;
 
@@ -71,24 +71,24 @@ pub struct ActiveTask {
     pub started_at: Timestamp,
 }
 
-pub(crate) struct ManagerInner {
+pub(crate) struct TasksInner {
     storage: Storage,
     registry: TaskRegistry,
     running: Mutex<HashMap<i64, RunningTask>>,
     joinset: Mutex<JoinSet<()>>,
 }
 
-/// Spawns and tracks tasks. Cheap to clone: all clones share one manager.
+/// Spawns and tracks tasks. Cheap to clone: all clones share one instance.
 #[derive(Clone)]
-pub struct TaskManager {
-    inner: Arc<ManagerInner>,
+pub struct Tasks {
+    inner: Arc<TasksInner>,
 }
 
-impl TaskManager {
-    /// Creates a manager backed by `storage` and the kinds in `registry`.
+impl Tasks {
+    /// Creates a task runtime backed by `storage` and the kinds in `registry`.
     pub fn new(storage: Storage, registry: TaskRegistry) -> Self {
         Self {
-            inner: Arc::new(ManagerInner {
+            inner: Arc::new(TasksInner {
                 storage,
                 registry,
                 running: Mutex::new(HashMap::new()),
@@ -242,7 +242,7 @@ impl TaskManager {
     }
 }
 
-impl ManagerInner {
+impl TasksInner {
     /// Creates the invocation, marks it running, and spawns the body. The live
     /// entry is inserted before the body is spawned, so a fast completion always
     /// finds it. Returns the new id and a receiver of its completion phase.
@@ -327,7 +327,7 @@ impl ManagerInner {
         let now = Timestamp::now();
         let (status, output, error) = match outcome {
             Ok(value) => (TaskStatus::Succeeded, Some(value.to_string()), None),
-            Err(TaskError::Cancelled) => (TaskStatus::Cancelled, None, None),
+            Err(TaskError::Run(RunError::Cancelled)) => (TaskStatus::Cancelled, None, None),
             Err(err) => (TaskStatus::Failed, None, Some(err.to_string())),
         };
         if let Err(err) = self
@@ -353,7 +353,7 @@ impl ManagerInner {
 /// [`TaskHandle::progress`] while it runs.
 pub struct TaskHandle<O> {
     id: i64,
-    inner: Arc<ManagerInner>,
+    inner: Arc<TasksInner>,
     phase: watch::Receiver<Phase>,
     _output: PhantomData<fn() -> O>,
 }
@@ -394,20 +394,23 @@ impl<O: DeserializeOwned> TaskHandle<O> {
         match task.status {
             TaskStatus::Succeeded => {
                 let output = task.output.ok_or_else(|| {
-                    TaskError::Failed(anyhow::format_err!(
+                    TaskError::Run(RunError::Failed(anyhow::format_err!(
                         "task {} succeeded without output",
                         self.id
-                    ))
+                    )))
                 })?;
                 serde_json::from_str(&output).map_err(TaskError::DecodeOutput)
             }
-            TaskStatus::Cancelled => Err(TaskError::Cancelled),
-            TaskStatus::Failed | TaskStatus::Interrupted => Err(TaskError::Failed(
-                anyhow::format_err!("{}", task.error.unwrap_or_else(|| "task failed".to_owned())),
-            )),
-            TaskStatus::Pending | TaskStatus::Running => Err(TaskError::Failed(
+            TaskStatus::Cancelled => Err(TaskError::Run(RunError::Cancelled)),
+            TaskStatus::Failed | TaskStatus::Interrupted => {
+                Err(TaskError::Run(RunError::Failed(anyhow::format_err!(
+                    "{}",
+                    task.error.unwrap_or_else(|| "task failed".to_owned())
+                ))))
+            }
+            TaskStatus::Pending | TaskStatus::Running => Err(TaskError::Run(RunError::Failed(
                 anyhow::format_err!("task {} still active after settle", self.id),
-            )),
+            ))),
         }
     }
 }
