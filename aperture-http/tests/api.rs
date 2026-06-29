@@ -52,7 +52,8 @@ async fn seeded_app() -> (Router, Artifacts) {
         .unwrap();
 
     let spectra = Spectra::new(Arc::new(artifacts.clone()), SpectraConfig::default());
-    let state = AppState::new("test", spectra);
+    let logs = artifacts.storage().logs();
+    let state = AppState::new("test", spectra, logs);
     (app(state), artifacts)
 }
 

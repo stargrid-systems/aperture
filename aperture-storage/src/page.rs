@@ -266,6 +266,70 @@ impl Filters {
         }
     }
 
+    /// Adds `column LIKE ?` matching `value` as a literal prefix (wildcards
+    /// escaped), or nothing when `value` is `None`.
+    pub(crate) fn prefix(&mut self, column: &str, value: Option<&str>) {
+        if let Some(value) = value {
+            self.params
+                .push(Value::Text(format!("{}%", escape_like(value))));
+            self.separator();
+            let _ = write!(self.sql, "{column} LIKE ?{} ESCAPE '\\'", self.params.len());
+        }
+    }
+
+    /// Adds `column = ?` bound to the integer `value`, or nothing when `None`.
+    pub(crate) fn eq_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `column >= ?` bound to the integer `value`, or nothing when `None`.
+    pub(crate) fn gte_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} >= ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `column <= ?` bound to the integer `value`, or nothing when `None`.
+    pub(crate) fn lte_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} <= ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `json_extract(fields, '$.key') = ?` bound to `value`, or nothing
+    /// when `value` is `None`. `key` must be a fixed identifier, never user
+    /// input, since it is interpolated into SQL.
+    pub(crate) fn json_eq(&mut self, key: &str, value: Option<&str>) {
+        if let Some(value) = value {
+            self.params.push(Value::Text(value.to_owned()));
+            self.separator();
+            let _ = write!(
+                self.sql,
+                "json_extract(fields, '$.{key}') = ?{}",
+                self.params.len()
+            );
+        }
+    }
+
+    /// Adds a condition with one bind param. `sql` receives the 1-based
+    /// placeholder number and must produce the SQL fragment. The param is
+    /// pushed after the fragment is written so the placeholder number is
+    /// correct.
+    pub(crate) fn param(&mut self, value: Value, sql: impl FnOnce(usize) -> String) {
+        self.separator();
+        let placeholder = self.params.len() + 1;
+        let _ = write!(self.sql, "{}", sql(placeholder));
+        self.params.push(value);
+    }
+
     /// Adds the keyset resume condition for `paginator`, if it has a cursor.
     pub(crate) fn keyset(&mut self, keyset: &Keyset, paginator: &Paginator) {
         let (condition, params) = keyset.condition(paginator.cursor(), self.params.len() + 1);

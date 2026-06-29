@@ -12,6 +12,7 @@ use utoipa_axum::router::OpenApiRouter;
 use self::api::router as api_routes;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
+use aperture_artifacts::LogRepository;
 
 mod api;
 mod dto;
@@ -23,13 +24,18 @@ mod spectra;
 pub struct AppState {
     version: &'static str,
     spectra: Spectra,
+    logs: LogRepository,
 }
 
 impl AppState {
-    /// Wraps the gateway version and the Spectra frontend for use as request
-    /// state. `version` is reported by `GET /api/v1/version`.
-    pub fn new(version: &'static str, spectra: Spectra) -> Self {
-        Self { version, spectra }
+    /// Wraps the gateway version, the Spectra frontend, and the log repository
+    /// for use as request state.
+    pub fn new(version: &'static str, spectra: Spectra, logs: LogRepository) -> Self {
+        Self {
+            version,
+            spectra,
+            logs,
+        }
     }
 
     pub(crate) fn version(&self) -> &'static str {
@@ -38,6 +44,10 @@ impl AppState {
 
     pub(crate) fn spectra(&self) -> &Spectra {
         &self.spectra
+    }
+
+    pub(crate) fn logs(&self) -> &LogRepository {
+        &self.logs
     }
 }
 

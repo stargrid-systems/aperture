@@ -8,6 +8,7 @@ pub use aperture_storage::{
     Artifact, ArtifactKey, Download, DownloadStatus, ListQuery, Order, Page, Storage, StorageError,
     VersionSort,
 };
+pub use aperture_storage::{Event, EventFilter, Level, LogRepository, Span, SpanFilter};
 
 pub use self::artifacts::{
     Artifacts, DownloadHandle, FetchRequest, FetchSource, Located, SyncReport,
