@@ -194,3 +194,65 @@ async fn lists_downloads_with_filter() {
     let (_, none) = get_json(&app, "/api/v1/downloads?status=failed").await;
     assert!(none["items"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn lists_logs_and_targets() {
+    let (app, artifacts) = seeded_app().await;
+
+    // Insert a test log event.
+    let logs = artifacts.storage().logs();
+    logs.insert_event(
+        None,
+        aperture_artifacts::Level::Info,
+        "aperture::test",
+        Some("test log message"),
+        jiff::Timestamp::now(),
+        None,
+        None,
+        Some(r#"{"key":"value"}"#),
+    )
+    .await
+    .unwrap();
+
+    let (status, json) = get_json(&app, "/api/v1/logs").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().unwrap();
+    assert!(!items.is_empty());
+    assert_eq!(items[0]["target"], "aperture::test");
+    assert_eq!(items[0]["message"], "test log message");
+    assert_eq!(items[0]["level"], "info");
+    assert_eq!(items[0]["fields"]["key"], "value");
+
+    let (status, json) = get_json(&app, "/api/v1/logs/targets").await;
+    assert_eq!(status, StatusCode::OK);
+    let targets = json.as_array().unwrap();
+    assert!(targets.iter().any(|t| t == "aperture::test"));
+
+    let (status, json) = get_json(&app, "/api/v1/logs?q=test").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!json["items"].as_array().unwrap().is_empty());
+
+    let (status, json) = get_json(&app, "/api/v1/logs?min_level=warn").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().unwrap();
+    assert!(items.iter().all(|i| {
+        let level = i["level"].as_str().unwrap();
+        matches!(level, "warn" | "error")
+    }));
+}
+
+#[tokio::test]
+async fn get_unknown_span_returns_404() {
+    let (app, _artifacts) = seeded_app().await;
+
+    let (status, _) = get_json(&app, "/api/v1/logs/spans/99999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn bad_fields_filter_returns_400() {
+    let (app, _artifacts) = seeded_app().await;
+
+    let (status, _) = get_json(&app, "/api/v1/logs?fields=not-json").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
