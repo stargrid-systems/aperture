@@ -15,7 +15,7 @@ mod logs;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(get_version))
+        .routes(routes!(get_gateway_version))
         .nest("/artifacts", artifacts_routes())
         .nest("/downloads", downloads_routes())
         .nest("/logs", logs_routes())
@@ -27,6 +27,6 @@ pub fn router() -> OpenApiRouter<AppState> {
     path = "/version",
     responses((status = 200, description = "Gateway version", body = VersionResponse)),
 )]
-async fn get_version(State(state): State<AppState>) -> Json<VersionResponse> {
+async fn get_gateway_version(State(state): State<AppState>) -> Json<VersionResponse> {
     Json(VersionResponse::new(state.version()))
 }
