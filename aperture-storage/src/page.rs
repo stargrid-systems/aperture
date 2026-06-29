@@ -4,8 +4,8 @@
 //! The cursor carries the last (or first) row's sort value, its id, and the
 //! direction to travel. So a single `cursor` value pages either forward or
 //! backward, and the caller never needs a separate direction flag. This stays
-//! correct even when rows are inserted between page fetches, as long as the sort
-//! field and direction do not change.
+//! correct even when rows are inserted between page fetches, as long as the
+//! sort field and direction do not change.
 
 use std::fmt::Write;
 
@@ -158,7 +158,8 @@ pub(crate) struct Keyset {
 }
 
 impl Keyset {
-    /// Sorts by `column` (a real column unique per row) with no extra tiebreaker.
+    /// Sorts by `column` (a real column unique per row) with no extra
+    /// tiebreaker.
     pub(crate) fn unique(column: &'static str, order: Order) -> Self {
         Self {
             column,
@@ -187,7 +188,8 @@ impl Keyset {
     }
 
     /// The keyset `WHERE` condition that resumes from `cursor`, using bind
-    /// params starting at `first_param`. Empty (and no params) without a cursor.
+    /// params starting at `first_param`. Empty (and no params) without a
+    /// cursor.
     fn condition(&self, cursor: Option<&Cursor>, first_param: usize) -> (String, Vec<Value>) {
         let Some(cursor) = cursor else {
             return (String::new(), Vec::new());
@@ -427,7 +429,11 @@ impl Paginator {
             // Forward: more ahead iff we fetched an extra; a previous page
             // exists iff we arrived here from a cursor.
             Step::After => (
-                if has_extra { cursor_at(last, Step::After) } else { None },
+                if has_extra {
+                    cursor_at(last, Step::After)
+                } else {
+                    None
+                },
                 if self.cursor.is_some() {
                     cursor_at(first, Step::Before)
                 } else {
@@ -455,7 +461,8 @@ impl Paginator {
 }
 
 /// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
-/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the SQL.
+/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the
+/// SQL.
 fn escape_like(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -471,7 +478,7 @@ fn to_hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
-        out.push(char::from_digit((byte & 0x0f) as u32, 16).expect("nibble"));
+        out.push(char::from_digit((byte & 0x0F) as u32, 16).expect("nibble"));
     }
     out
 }

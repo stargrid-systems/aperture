@@ -10,7 +10,12 @@ async fn seeded_storage() -> Storage {
     let logs = storage.logs();
 
     let span_id = logs
-        .insert_span("download", Level::Info, "aperture_artifacts::fetch", at(1_000))
+        .insert_span(
+            "download",
+            Level::Info,
+            "aperture_artifacts::fetch",
+            at(1_000),
+        )
         .parent_id(None)
         .file(Some("src/fetch.rs"))
         .line(Some(42))
@@ -73,9 +78,15 @@ async fn list_events_newest_first() {
         .unwrap();
 
     assert_eq!(page.items.len(), 3);
-    assert_eq!(page.items[0].message.as_deref(), Some("artifact request failed"));
+    assert_eq!(
+        page.items[0].message.as_deref(),
+        Some("artifact request failed")
+    );
     assert_eq!(page.items[0].level, Level::Error);
-    assert_eq!(page.items[1].message.as_deref(), Some("retrying download after timeout"));
+    assert_eq!(
+        page.items[1].message.as_deref(),
+        Some("retrying download after timeout")
+    );
     assert_eq!(page.items[2].message.as_deref(), Some("starting download"));
 }
 
@@ -127,7 +138,11 @@ async fn filter_by_target_prefix() {
         .unwrap();
 
     assert_eq!(page.items.len(), 2);
-    assert!(page.items.iter().all(|e| e.target == "aperture_artifacts::fetch"));
+    assert!(
+        page.items
+            .iter()
+            .all(|e| e.target == "aperture_artifacts::fetch")
+    );
 }
 
 #[tokio::test]
@@ -195,7 +210,10 @@ async fn filter_by_time_range() {
         .unwrap();
 
     assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].message.as_deref(), Some("retrying download after timeout"));
+    assert_eq!(
+        page.items[0].message.as_deref(),
+        Some("retrying download after timeout")
+    );
 }
 
 #[tokio::test]
@@ -220,7 +238,11 @@ async fn filter_by_structured_fields() {
         .unwrap();
 
     assert_eq!(page.items.len(), 2);
-    assert!(page.items.iter().all(|e| e.target == "aperture_artifacts::fetch"));
+    assert!(
+        page.items
+            .iter()
+            .all(|e| e.target == "aperture_artifacts::fetch")
+    );
 }
 
 #[tokio::test]
@@ -245,7 +267,11 @@ async fn fts_message_search() {
         .unwrap();
 
     assert_eq!(page.items.len(), 2);
-    assert!(page.items.iter().all(|e| e.message.as_deref().unwrap().contains("download")));
+    assert!(
+        page.items
+            .iter()
+            .all(|e| e.message.as_deref().unwrap().contains("download"))
+    );
 }
 
 #[tokio::test]
@@ -292,7 +318,10 @@ async fn list_and_get_spans() {
     let events = logs.events_for_span(span_id).await.unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].message.as_deref(), Some("starting download"));
-    assert_eq!(events[1].message.as_deref(), Some("retrying download after timeout"));
+    assert_eq!(
+        events[1].message.as_deref(),
+        Some("retrying download after timeout")
+    );
 }
 
 #[tokio::test]

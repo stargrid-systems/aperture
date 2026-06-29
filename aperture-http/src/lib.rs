@@ -3,6 +3,7 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
+use aperture_artifacts::LogRepository;
 use axum::routing::get;
 use axum::{Json, Router};
 use utoipa::OpenApi;
@@ -10,10 +11,9 @@ use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa_axum::router::OpenApiRouter;
 
 use self::api::router as api_routes;
+use self::dto::{DownloadStatusParam, LevelResponse, OrderParam, VersionSortParam};
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
-use self::dto::{DownloadStatusParam, LevelResponse, OrderParam, VersionSortParam};
-use aperture_artifacts::LogRepository;
 
 mod api;
 mod dto;

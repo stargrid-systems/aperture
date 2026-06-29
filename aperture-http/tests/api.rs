@@ -46,10 +46,20 @@ async fn seeded_app() -> (Router, Artifacts) {
         .unwrap();
 
     let started = at(1_700_000_000_000);
-    let id = repo.start_download("spectra", "src", started).await.unwrap();
-    repo.finish_download(id, DownloadStatus::Succeeded, started, Some("sha256:bbb"), Some(1234), None)
+    let id = repo
+        .start_download("spectra", "src", started)
         .await
         .unwrap();
+    repo.finish_download(
+        id,
+        DownloadStatus::Succeeded,
+        started,
+        Some("sha256:bbb"),
+        Some(1234),
+        None,
+    )
+    .await
+    .unwrap();
 
     let spectra = Spectra::new(Arc::new(artifacts.clone()), SpectraConfig::default());
     let logs = artifacts.storage().logs();
@@ -106,7 +116,11 @@ async fn paginates_artifacts_with_cursor() {
 
     // Page back to the first item using the prev cursor.
     let back_cursor = second["prev_cursor"].as_str().expect("a previous page");
-    let (_, back) = get_json(&app, &format!("/api/v1/artifacts?limit=1&cursor={back_cursor}")).await;
+    let (_, back) = get_json(
+        &app,
+        &format!("/api/v1/artifacts?limit=1&cursor={back_cursor}"),
+    )
+    .await;
     assert_eq!(back["items"][0]["key"], "firmware");
 }
 
@@ -201,12 +215,16 @@ async fn lists_logs_and_targets() {
 
     // Insert a test log event.
     let logs = artifacts.storage().logs();
-    logs.insert_event(aperture_artifacts::Level::Info, "aperture::test", jiff::Timestamp::now())
-        .message(Some("test log message"))
-        .fields(Some(r#"{"key":"value"}"#))
-        .execute()
-        .await
-        .unwrap();
+    logs.insert_event(
+        aperture_artifacts::Level::Info,
+        "aperture::test",
+        jiff::Timestamp::now(),
+    )
+    .message(Some("test log message"))
+    .fields(Some(r#"{"key":"value"}"#))
+    .execute()
+    .await
+    .unwrap();
 
     let (status, json) = get_json(&app, "/api/v1/logs").await;
     assert_eq!(status, StatusCode::OK);

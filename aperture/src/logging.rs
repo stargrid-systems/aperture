@@ -18,7 +18,8 @@ use self::layer::{DbLogLayer, WorkerHandle};
 mod layer;
 
 /// Default console filter: aperture crates at INFO, everything else at WARN.
-const DEFAULT_FILTER: &str = "aperture=info,aperture_storage=info,aperture_http=info,aperture_artifacts=info,warn";
+const DEFAULT_FILTER: &str =
+    "aperture=info,aperture_storage=info,aperture_http=info,aperture_artifacts=info,warn";
 
 /// Filter for the database log layer.
 ///
@@ -27,7 +28,8 @@ const DEFAULT_FILTER: &str = "aperture=info,aperture_storage=info,aperture_http=
 /// events for each insert, which the layer captures, which causes more
 /// inserts, creating a feedback loop that fills the channel and holds the
 /// database lock continuously.
-const DB_FILTER: &str = "turso=warn,turso_core=warn,turso_sdk_kit=warn,tantivy=warn,backhand=warn,log=warn,trace";
+const DB_FILTER: &str =
+    "turso=warn,turso_core=warn,turso_sdk_kit=warn,tantivy=warn,backhand=warn,log=warn,trace";
 
 /// Sets up the tracing subscriber with a fmt layer (stdout) and a database
 /// layer.

@@ -5,12 +5,9 @@
 //! and tracking downloads that are in flight.
 
 pub use aperture_storage::{
-    Artifact, ArtifactKey, Download, DownloadStatus, ListQuery, Order, Page, Storage, StorageError,
-    VersionSort,
-};
-pub use aperture_storage::{
-    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter, Span,
-    SpanFilter, SpanInsertBuilder, SpanRecord,
+    Artifact, ArtifactKey, Download, DownloadStatus, Event, EventFilter, EventInsertBuilder,
+    EventRecord, Level, ListQuery, LogRepository, LogWriter, Order, Page, Span, SpanFilter,
+    SpanInsertBuilder, SpanRecord, Storage, StorageError, VersionSort,
 };
 
 pub use self::artifacts::{

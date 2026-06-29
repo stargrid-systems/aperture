@@ -51,14 +51,13 @@ impl Level {
             "info" => Ok(Self::Info),
             "warn" => Ok(Self::Warn),
             "error" => Ok(Self::Error),
-            other => Err(StorageError::Decode(format!(
-                "unknown log level {other:?}"
-            ))),
+            other => Err(StorageError::Decode(format!("unknown log level {other:?}"))),
         }
     }
 
     /// Numeric severity rank. Higher is more severe. Used for `min_level`
-    /// filtering via a CASE expression since SQLite has no native enum ordering.
+    /// filtering via a CASE expression since SQLite has no native enum
+    /// ordering.
     pub(crate) fn rank(self) -> i64 {
         match self {
             Self::Trace => 0,
@@ -72,9 +71,8 @@ impl Level {
 
 /// SQL CASE expression that maps the `level` text column to its numeric rank.
 /// Used inside `Filters::raw` for `min_level` filtering.
-const LEVEL_RANK_SQL: &str = "(CASE level \
-    WHEN 'trace' THEN 0 WHEN 'debug' THEN 1 WHEN 'info' THEN 2 \
-    WHEN 'warn' THEN 3 WHEN 'error' THEN 4 ELSE -1 END)";
+const LEVEL_RANK_SQL: &str = "(CASE level WHEN 'trace' THEN 0 WHEN 'debug' THEN 1 WHEN 'info' \
+                              THEN 2 WHEN 'warn' THEN 3 WHEN 'error' THEN 4 ELSE -1 END)";
 
 /// A persisted tracing span.
 #[derive(Debug, Clone)]
@@ -136,7 +134,8 @@ pub struct SpanRecord<'a> {
     pub fields: Option<&'a str>,
 }
 
-/// Plain-data description of an event to persist via [`LogWriter::insert_event`].
+/// Plain-data description of an event to persist via
+/// [`LogWriter::insert_event`].
 pub struct EventRecord<'a> {
     pub span_id: Option<i64>,
     pub level: Level,
@@ -149,8 +148,7 @@ pub struct EventRecord<'a> {
 }
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
-const EVENT_COLUMNS: &str =
-    "id, span_id, level, target, message, timestamp, file, line, fields";
+const EVENT_COLUMNS: &str = "id, span_id, level, target, message, timestamp, file, line, fields";
 
 /// Columns selected for a [`Span`], in [`row_to_span`] order.
 const SPAN_COLUMNS: &str =
@@ -290,8 +288,10 @@ impl LogRepository {
     /// Lists distinct event targets, optionally filtered by prefix.
     pub async fn list_targets(&self, q: Option<&str>) -> Result<Vec<String>> {
         let sql = match q {
-            Some(_) => "SELECT DISTINCT target FROM events \
-                        WHERE target LIKE ?1 ESCAPE '\\' ORDER BY target",
+            Some(_) => {
+                "SELECT DISTINCT target FROM events WHERE target LIKE ?1 ESCAPE '\\' ORDER BY \
+                 target"
+            }
             None => "SELECT DISTINCT target FROM events ORDER BY target",
         };
         let params: Vec<Value> = match q {
@@ -312,11 +312,7 @@ impl LogRepository {
 
     /// Lists spans matching the given filters, ordered by started_at descending
     /// by default.
-    pub async fn list_spans(
-        &self,
-        filter: &SpanFilter,
-        query: &ListQuery,
-    ) -> Result<Page<Span>> {
+    pub async fn list_spans(&self, filter: &SpanFilter, query: &ListQuery) -> Result<Page<Span>> {
         let paginator = Paginator::new(query, Order::Desc)?;
         let keyset = Keyset::with_id("started_at", paginator.query_order());
 
@@ -388,8 +384,8 @@ impl LogRepository {
         Ok(items)
     }
 
-    /// Deletes events and finished spans older than `before`. Returns the number
-    /// of deleted events. FTS entries are cleaned up by triggers.
+    /// Deletes events and finished spans older than `before`. Returns the
+    /// number of deleted events. FTS entries are cleaned up by triggers.
     pub async fn prune_before(&self, before: Timestamp) -> Result<u64> {
         let millis = before.as_millisecond();
         let event_count = self
@@ -412,10 +408,14 @@ impl LogRepository {
 
     /// Inserts a synthetic event recording that log records were dropped.
     pub async fn record_dropped(&self, count: u64, timestamp: Timestamp) -> Result<()> {
-        let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
-            .map_err(|err| StorageError::Decode(format!("failed to serialize dropped fields: {err}")))?;
+        let fields =
+            serde_json::to_string(&HashMap::from([("dropped", count)])).map_err(|err| {
+                StorageError::Decode(format!("failed to serialize dropped fields: {err}"))
+            })?;
         self.insert_event(Level::Warn, "aperture::log", timestamp)
-            .message(Some(&format!("dropped {count} log records due to full buffer")))
+            .message(Some(&format!(
+                "dropped {count} log records due to full buffer"
+            )))
             .fields(Some(&fields))
             .execute()
             .await?;
@@ -610,8 +610,10 @@ impl LogWriter {
 
     /// Inserts a synthetic event recording that log records were dropped.
     pub async fn record_dropped(&mut self, count: u64, timestamp: Timestamp) -> Result<()> {
-        let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
-            .map_err(|err| StorageError::Decode(format!("failed to serialize dropped fields: {err}")))?;
+        let fields =
+            serde_json::to_string(&HashMap::from([("dropped", count)])).map_err(|err| {
+                StorageError::Decode(format!("failed to serialize dropped fields: {err}"))
+            })?;
         self.insert_event(EventRecord {
             span_id: None,
             level: Level::Warn,
@@ -736,4 +738,3 @@ fn escape_like(value: &str) -> String {
     }
     out
 }
-

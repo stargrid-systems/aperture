@@ -163,7 +163,12 @@ impl Artifacts {
 
     /// Returns the `(key, digest)` version, if stored.
     pub async fn version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
-        Ok(self.inner.storage.artifacts().get_version(key, digest).await?)
+        Ok(self
+            .inner
+            .storage
+            .artifacts()
+            .get_version(key, digest)
+            .await?)
     }
 
     /// Lists download attempts, optionally filtered by status and key.
@@ -195,7 +200,11 @@ impl Artifacts {
             return Ok(DownloadHandle::ready(located));
         }
 
-        let slot = match self.inner.downloads.claim(&request.key, request.source_str()) {
+        let slot = match self
+            .inner
+            .downloads
+            .claim(&request.key, request.source_str())
+        {
             Claim::Joiner(slot) => {
                 return Ok(DownloadHandle::tracking(
                     Arc::clone(&self.inner),
@@ -287,18 +296,16 @@ impl Inner {
             .await?
             .iter()
             .any(|version| version.digest == artifact.digest);
-        if !still_referenced
-            && let Ok(parsed) = artifact.digest.parse::<Digest>()
-        {
+        if !still_referenced && let Ok(parsed) = artifact.digest.parse::<Digest>() {
             self.blobs.remove(&parsed).await?;
         }
         Ok(true)
     }
 
     /// Runs the download for `request`. On success it records the new version;
-    /// either way it records the outcome in the download history, then completes
-    /// the slot and releases it. Runs on its own task, so failures are logged
-    /// rather than returned.
+    /// either way it records the outcome in the download history, then
+    /// completes the slot and releases it. Runs on its own task, so
+    /// failures are logged rather than returned.
     async fn run_download(self: Arc<Self>, request: FetchRequest, id: i64, slot: Arc<Slot>) {
         let repository = self.storage.artifacts();
         let result = self.execute(&request, slot.progress()).await;
@@ -355,7 +362,9 @@ impl Inner {
                 media_type,
             } => {
                 let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(anyhow::format_err!("invalid reference {reference:?}: {err}"))
+                    ArtifactError::Fetch(anyhow::format_err!(
+                        "invalid reference {reference:?}: {err}"
+                    ))
                 })?;
                 self.fetch_oci(&reference, media_type, progress).await
             }
@@ -364,8 +373,8 @@ impl Inner {
 
     /// Stages an OCI fetch into the blob store: streams the layer into a
     /// temporary file, verifies the bytes against the advertised digest, then
-    /// places the blob under its digest. The fetcher only ever sees the sink, so
-    /// it cannot reach the store on its own.
+    /// places the blob under its digest. The fetcher only ever sees the sink,
+    /// so it cannot reach the store on its own.
     async fn fetch_oci(
         &self,
         reference: &Reference,

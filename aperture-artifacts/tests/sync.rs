@@ -18,7 +18,10 @@ async fn sync_interrupts_orphaned_running_downloads() {
     let repo = artifacts.storage().artifacts();
 
     let started = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
-    let id = repo.start_download("spectra", "src", started).await.unwrap();
+    let id = repo
+        .start_download("spectra", "src", started)
+        .await
+        .unwrap();
 
     artifacts.sync().await.unwrap();
 
@@ -57,7 +60,13 @@ async fn sync_removes_versions_without_blobs() {
     assert_eq!(report.removed_entries, 1);
 
     let versions = repo
-        .list_versions("spectra", VersionSort::DownloadedAt, None, None, &ListQuery::default())
+        .list_versions(
+            "spectra",
+            VersionSort::DownloadedAt,
+            None,
+            None,
+            &ListQuery::default(),
+        )
         .await
         .unwrap();
     assert!(versions.items.is_empty());

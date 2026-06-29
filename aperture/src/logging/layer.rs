@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Write as _};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use aperture_artifacts::{EventRecord, Level, LogWriter, SpanRecord};
@@ -20,9 +20,9 @@ use tokio::time::{MissedTickBehavior, interval};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId};
 use tracing::{Event, Level as TracingLevel, Subscriber};
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::Layer;
 
 /// A record sent from the layer to the background writer.
 enum Record {
@@ -142,12 +142,7 @@ impl<S> Layer<S> for DbLogLayer
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    fn on_new_span(
-        &self,
-        attrs: &SpanAttributes<'_>,
-        id: &SpanId,
-        _ctx: Context<'_, S>,
-    ) {
+    fn on_new_span(&self, attrs: &SpanAttributes<'_>, id: &SpanId, _ctx: Context<'_, S>) {
         let meta = attrs.metadata();
         let mut visitor = FieldCollector::new();
         attrs.record(&mut visitor);
@@ -243,15 +238,13 @@ async fn writer_task(
 }
 
 /// Flushes a batch of records to the database using prepared statements.
-async fn flush(
-    writer: &mut LogWriter,
-    batch: &mut Vec<Record>,
-    span_ids: &mut HashMap<u64, i64>,
-) {
+async fn flush(writer: &mut LogWriter, batch: &mut Vec<Record>, span_ids: &mut HashMap<u64, i64>) {
     for record in batch.drain(..) {
         match record {
             Record::SpanStart(s) => {
-                let parent_db_id = s.parent_tracing_id.and_then(|pid| span_ids.get(&pid).copied());
+                let parent_db_id = s
+                    .parent_tracing_id
+                    .and_then(|pid| span_ids.get(&pid).copied());
                 let result = writer
                     .insert_span(SpanRecord {
                         parent_id: parent_db_id,
@@ -275,7 +268,9 @@ async fn flush(
                 }
             }
             Record::Event(e) => {
-                let span_db_id = e.span_tracing_id.and_then(|sid| span_ids.get(&sid).copied());
+                let span_db_id = e
+                    .span_tracing_id
+                    .and_then(|sid| span_ids.get(&sid).copied());
                 let _ = writer
                     .insert_event(EventRecord {
                         span_id: span_db_id,

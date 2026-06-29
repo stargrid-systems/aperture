@@ -52,7 +52,8 @@ impl<T> Page<T> {
     }
 }
 
-/// A distinct artifact key with its newest version, for `GET /api/v1/artifacts`.
+/// A distinct artifact key with its newest version, for `GET
+/// /api/v1/artifacts`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ArtifactSummaryResponse {
     /// Logical artifact key.
@@ -182,7 +183,8 @@ pub struct DownloadResponse {
 }
 
 impl DownloadResponse {
-    /// Builds a response, attaching live `progress` when the attempt is running.
+    /// Builds a response, attaching live `progress` when the attempt is
+    /// running.
     pub(crate) fn new(download: Download, progress: Option<&DownloadProgress>) -> Self {
         Self {
             id: download.id,
@@ -296,7 +298,9 @@ impl VersionListParams {
     }
 
     pub(crate) fn sort(&self) -> VersionSort {
-        self.sort.map(Into::into).unwrap_or(VersionSort::DownloadedAt)
+        self.sort
+            .map(Into::into)
+            .unwrap_or(VersionSort::DownloadedAt)
     }
 }
 

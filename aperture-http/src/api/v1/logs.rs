@@ -1,3 +1,4 @@
+use aperture_artifacts::{EventFilter, ListQuery, SpanFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -9,7 +10,6 @@ use crate::dto::{
     LogTargetListParams, Page, event_page, span_page,
 };
 use crate::error::ApiError;
-use aperture_artifacts::{EventFilter, ListQuery, SpanFilter};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -109,7 +109,9 @@ async fn get_span(
 /// Parses a JSON object field filter string like `{"key":"value"}` into a list
 /// of key-value pairs.
 fn parse_field_filter(json: Option<&str>) -> Result<Vec<(String, String)>, ApiError> {
-    let Some(json) = json else { return Ok(Vec::new()) };
+    let Some(json) = json else {
+        return Ok(Vec::new());
+    };
     let obj: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(json).map_err(|_| ApiError::BAD_REQUEST)?;
     let mut pairs = Vec::new();

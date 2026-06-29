@@ -2,9 +2,9 @@
 //! history of fetch attempts.
 //!
 //! The catalog holds one row per stored version, identified by `(key, digest)`.
-//! A key can have several versions, kept around for rollback. Rows are only ever
-//! written once a version's blob is materialized, so every row is present and
-//! usable. In-flight and failed attempts live in `artifact_downloads`.
+//! A key can have several versions, kept around for rollback. Rows are only
+//! ever written once a version's blob is materialized, so every row is present
+//! and usable. In-flight and failed attempts live in `artifact_downloads`.
 
 use jiff::Timestamp;
 use turso::{Connection, Row, Value, params_from_iter};
@@ -229,7 +229,8 @@ impl ArtifactRepository {
     }
 
     /// Lists distinct keys, each with its newest version and version count.
-    /// Ordered by key, ascending by default. `q` matches a substring of the key.
+    /// Ordered by key, ascending by default. `q` matches a substring of the
+    /// key.
     pub async fn list_keys(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<ArtifactKey>> {
         let paginator = Paginator::new(query, Order::Asc)?;
         let keyset = Keyset::unique("a.key", paginator.query_order());
@@ -237,8 +238,8 @@ impl ArtifactRepository {
         let mut filters = Filters::new();
         // The latest-version predicate keeps one row per key.
         filters.raw(
-            "a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key \
-             ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)",
+            "a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key ORDER BY b.downloaded_at \
+             DESC, b.id DESC LIMIT 1)",
         );
         filters.like("a.key", q);
         filters.keyset(&keyset, &paginator);
@@ -320,7 +321,10 @@ impl ArtifactRepository {
 
     /// Lists every stored version. For internal reconciliation, not paginated.
     pub async fn all_versions(&self) -> Result<Vec<Artifact>> {
-        let sql = format!(sql!(SELECT {cols} FROM artifacts ORDER BY id), cols = ARTIFACT_COLUMNS);
+        let sql = format!(
+            sql!(SELECT {cols} FROM artifacts ORDER BY id),
+            cols = ARTIFACT_COLUMNS
+        );
         let mut rows = self.connection.query(&sql, ()).await.map_err(database)?;
         let mut artifacts = Vec::new();
         while let Some(row) = rows.next().await.map_err(database)? {
@@ -401,7 +405,8 @@ impl ArtifactRepository {
     }
 
     /// Lists attempts still in the [`DownloadStatus::Running`] state. After a
-    /// clean start these are leftovers from a process that stopped mid-download.
+    /// clean start these are leftovers from a process that stopped
+    /// mid-download.
     pub async fn list_running(&self) -> Result<Vec<Download>> {
         let sql = format!(
             sql!(SELECT {cols} FROM artifact_downloads WHERE status = ?1 ORDER BY id),
