@@ -5,6 +5,8 @@
 //! depends only on the domain types exposed here. That keeps the engine
 //! swappable behind this boundary.
 
+use std::time::Duration;
+
 use turso::{Builder, Connection, Database};
 
 pub use self::artifact::{
@@ -18,6 +20,11 @@ pub use self::log::{
 use self::error::database;
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
+
+/// Busy timeout for write contention between connections. turso uses WAL mode
+/// by default, but two writers still need to take turns. Without a timeout
+/// the second writer immediately receives "database is locked".
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 mod artifact;
 mod error;
@@ -51,6 +58,7 @@ impl Storage {
             .await
             .map_err(database)?;
         let query = db.connect().map_err(database)?;
+        query.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
         run(&query).await?;
         let database = db.clone();
         Ok(Self { database, query })
@@ -71,6 +79,7 @@ impl Storage {
     /// query connection used by HTTP handlers.
     pub async fn log_writer(&self) -> Result<LogWriter> {
         let conn = self.database.connect().map_err(database)?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
         LogWriter::new(conn).await
     }
 }
