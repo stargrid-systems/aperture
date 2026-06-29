@@ -12,6 +12,7 @@ use utoipa_axum::router::OpenApiRouter;
 use self::api::router as api_routes;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
+use self::dto::{DownloadStatusParam, LevelResponse, OrderParam, VersionSortParam};
 use aperture_artifacts::LogRepository;
 
 mod api;
@@ -52,7 +53,10 @@ impl AppState {
 }
 
 #[derive(OpenApi)]
-#[openapi(info(title = "Aperture API"))]
+#[openapi(
+    info(title = "Aperture API"),
+    components(schemas(OrderParam, VersionSortParam, DownloadStatusParam, LevelResponse))
+)]
 struct ApiDoc;
 
 fn api_router() -> OpenApiRouter<AppState> {
