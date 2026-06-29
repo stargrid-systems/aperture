@@ -5,15 +5,15 @@
 //! depends only on the domain types exposed here. That keeps the engine
 //! swappable behind this boundary.
 
-use turso::{Builder, Connection};
+use turso::{Builder, Connection, Database};
 
 pub use self::artifact::{
     Artifact, ArtifactKey, ArtifactRepository, Download, DownloadStatus, VersionSort,
 };
 pub use self::error::{Result, StorageError};
 pub use self::log::{
-    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, PreparedStatements,
-    Span, SpanFilter, SpanInsertBuilder, SpanRecord,
+    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter, Span,
+    SpanFilter, SpanInsertBuilder, SpanRecord,
 };
 use self::error::database;
 use self::migration::run;
@@ -27,9 +27,16 @@ mod migration;
 mod page;
 
 /// Handle to the gateway's persistent storage.
-#[derive(Clone)]
+///
+/// Clones share the same underlying [`Database`]. Each call to
+/// [`log_writer`](Self::log_writer) opens a new [`Connection`] with an
+/// independent concurrency guard, so a background writer task cannot conflict
+/// with the query connection used by HTTP handlers.
 pub struct Storage {
-    connection: Connection,
+    database: Database,
+    /// The shared query connection. Cheap to clone; all clones share one
+    /// concurrency guard.
+    query: Connection,
 }
 
 impl Storage {
@@ -43,18 +50,27 @@ impl Storage {
             .build()
             .await
             .map_err(database)?;
-        let connection = db.connect().map_err(database)?;
-        run(&connection).await?;
-        Ok(Self { connection })
+        let query = db.connect().map_err(database)?;
+        run(&query).await?;
+        let database = db.clone();
+        Ok(Self { database, query })
     }
 
     /// Returns the repository over the artifact catalog.
     pub fn artifacts(&self) -> ArtifactRepository {
-        ArtifactRepository::new(self.connection.clone())
+        ArtifactRepository::new(self.query.clone())
     }
 
-    /// Returns the repository over the structured log tables.
+    /// Returns the repository over the structured log tables (for queries).
     pub fn logs(&self) -> LogRepository {
-        LogRepository::new(self.connection.clone())
+        LogRepository::new(self.query.clone())
+    }
+
+    /// Opens a dedicated [`LogWriter`] with its own connection for batch
+    /// inserts from a background task. The connection is isolated from the
+    /// query connection used by HTTP handlers.
+    pub async fn log_writer(&self) -> Result<LogWriter> {
+        let conn = self.database.connect().map_err(database)?;
+        LogWriter::new(conn).await
     }
 }

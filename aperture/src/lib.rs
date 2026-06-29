@@ -20,7 +20,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;
     let log_repo = artifacts.storage().logs();
-    let log_worker = logging::init(log_repo.clone());
+    let log_writer = artifacts
+        .storage()
+        .log_writer()
+        .await
+        .map_err(|error| miette::miette!("{error:#}"))?;
+    let log_worker = logging::init(log_writer);
 
     artifacts.sync().await.into_diagnostic()?;
 

@@ -9,7 +9,7 @@
 //!
 //! [`DbLogLayer`]: layer::DbLogLayer
 
-use aperture_artifacts::LogRepository;
+use aperture_artifacts::LogWriter;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
@@ -27,13 +27,13 @@ const DEFAULT_FILTER: &str = "aperture=info,aperture_storage=info,aperture_http=
 /// Returns a [`WorkerHandle`] for clean shutdown. Keep it alive for the
 /// lifetime of the application and call [`WorkerHandle::shutdown`] before
 /// exiting to flush pending records.
-pub fn init(log_repo: LogRepository) -> WorkerHandle {
+pub fn init(writer: LogWriter) -> WorkerHandle {
     use tracing_subscriber::EnvFilter;
 
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
     let fmt_layer = fmt::layer().with_filter(filter);
-    let (db_layer, handle) = DbLogLayer::spawn(log_repo);
+    let (db_layer, handle) = DbLogLayer::spawn(writer);
     let db_layer = db_layer.with_filter(LevelFilter::TRACE);
 
     tracing_subscriber::registry()

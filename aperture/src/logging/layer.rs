@@ -1,7 +1,7 @@
 //! A `tracing_subscriber` layer that persists spans and events to the database.
 //!
 //! The layer captures tracing records and sends them through a bounded channel
-//! to a background task that batch-inserts them via [`LogRepository`]. If the
+//! to a background task that batch-inserts them via [`LogWriter`]. If the
 //! channel is full, records are dropped and a synthetic warning event is
 //! inserted to record how many were lost.
 
@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use aperture_artifacts::{EventRecord, Level, LogRepository, PreparedStatements, SpanRecord};
+use aperture_artifacts::{EventRecord, Level, LogWriter, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -115,13 +115,13 @@ impl DbLogLayer {
     /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
     /// should be kept alive for the lifetime of the application. Call
     /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
-    pub fn spawn(repo: LogRepository) -> (Self, WorkerHandle) {
+    pub fn spawn(writer: LogWriter) -> (Self, WorkerHandle) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let dropped = Arc::new(AtomicU64::new(0));
         let dropped_clone = dropped.clone();
 
-        let join = tokio::spawn(writer_task(repo, rx, dropped_clone, shutdown_rx));
+        let join = tokio::spawn(writer_task(writer, rx, dropped_clone, shutdown_rx));
 
         let handle = WorkerHandle {
             join: Some(join),
@@ -197,19 +197,11 @@ where
 
 /// Background writer task: drains the channel and batch-inserts records.
 async fn writer_task(
-    repo: LogRepository,
+    mut writer: LogWriter,
     mut rx: mpsc::Receiver<Record>,
     dropped: Arc<AtomicU64>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
-    let mut stmts = match repo.prepare_statements().await {
-        Ok(stmts) => stmts,
-        Err(err) => {
-            eprintln!("failed to prepare log statements: {err}");
-            return;
-        }
-    };
-
     let mut span_ids: HashMap<u64, i64> = HashMap::new();
     let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
     let mut interval = interval(FLUSH_INTERVAL);
@@ -222,28 +214,28 @@ async fn writer_task(
                 while let Ok(record) = rx.try_recv() {
                     batch.push(record);
                 }
-                flush(&mut stmts, &mut batch, &mut span_ids).await;
-                flush_dropped(&mut stmts, &dropped).await;
+                flush(&mut writer, &mut batch, &mut span_ids).await;
+                flush_dropped(&mut writer, &dropped).await;
                 break;
             }
             maybe_record = rx.recv() => {
                 match maybe_record {
                     Some(record) => batch.push(record),
                     None => {
-                        flush(&mut stmts, &mut batch, &mut span_ids).await;
-                        flush_dropped(&mut stmts, &dropped).await;
+                        flush(&mut writer, &mut batch, &mut span_ids).await;
+                        flush_dropped(&mut writer, &dropped).await;
                         break;
                     }
                 }
                 if batch.len() >= FLUSH_BATCH {
-                    flush(&mut stmts, &mut batch, &mut span_ids).await;
-                    flush_dropped(&mut stmts, &dropped).await;
+                    flush(&mut writer, &mut batch, &mut span_ids).await;
+                    flush_dropped(&mut writer, &dropped).await;
                 }
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    flush(&mut stmts, &mut batch, &mut span_ids).await;
-                    flush_dropped(&mut stmts, &dropped).await;
+                    flush(&mut writer, &mut batch, &mut span_ids).await;
+                    flush_dropped(&mut writer, &dropped).await;
                 }
             }
         }
@@ -252,7 +244,7 @@ async fn writer_task(
 
 /// Flushes a batch of records to the database using prepared statements.
 async fn flush(
-    stmts: &mut PreparedStatements,
+    writer: &mut LogWriter,
     batch: &mut Vec<Record>,
     span_ids: &mut HashMap<u64, i64>,
 ) {
@@ -260,7 +252,7 @@ async fn flush(
         match record {
             Record::SpanStart(s) => {
                 let parent_db_id = s.parent_tracing_id.and_then(|pid| span_ids.get(&pid).copied());
-                let result = stmts
+                let result = writer
                     .insert_span(SpanRecord {
                         parent_id: parent_db_id,
                         name: &s.name,
@@ -278,13 +270,13 @@ async fn flush(
             }
             Record::SpanEnd(s) => {
                 if let Some(&db_id) = span_ids.get(&s.tracing_id) {
-                    let _ = stmts.close_span(db_id, s.ended_at).await;
+                    let _ = writer.close_span(db_id, s.ended_at).await;
                     span_ids.remove(&s.tracing_id);
                 }
             }
             Record::Event(e) => {
                 let span_db_id = e.span_tracing_id.and_then(|sid| span_ids.get(&sid).copied());
-                let _ = stmts
+                let _ = writer
                     .insert_event(EventRecord {
                         span_id: span_db_id,
                         level: e.level,
@@ -302,10 +294,10 @@ async fn flush(
 }
 
 /// Inserts a synthetic event for dropped records, if any.
-async fn flush_dropped(stmts: &mut PreparedStatements, dropped: &AtomicU64) {
+async fn flush_dropped(writer: &mut LogWriter, dropped: &AtomicU64) {
     let count = dropped.swap(0, Ordering::Relaxed);
     if count > 0 {
-        let _ = stmts.record_dropped(count, now()).await;
+        let _ = writer.record_dropped(count, now()).await;
     }
 }
 

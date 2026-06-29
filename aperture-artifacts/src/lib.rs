@@ -9,8 +9,8 @@ pub use aperture_storage::{
     VersionSort,
 };
 pub use aperture_storage::{
-    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, PreparedStatements,
-    Span, SpanFilter, SpanInsertBuilder, SpanRecord,
+    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter, Span,
+    SpanFilter, SpanInsertBuilder, SpanRecord,
 };
 
 pub use self::artifacts::{

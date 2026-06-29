@@ -124,6 +124,30 @@ pub struct SpanFilter {
     pub until: Option<Timestamp>,
 }
 
+/// Plain-data description of a span to persist via [`LogWriter::insert_span`].
+pub struct SpanRecord<'a> {
+    pub parent_id: Option<i64>,
+    pub name: &'a str,
+    pub level: Level,
+    pub target: &'a str,
+    pub file: Option<&'a str>,
+    pub line: Option<i64>,
+    pub started_at: Timestamp,
+    pub fields: Option<&'a str>,
+}
+
+/// Plain-data description of an event to persist via [`LogWriter::insert_event`].
+pub struct EventRecord<'a> {
+    pub span_id: Option<i64>,
+    pub level: Level,
+    pub target: &'a str,
+    pub message: Option<&'a str>,
+    pub timestamp: Timestamp,
+    pub file: Option<&'a str>,
+    pub line: Option<i64>,
+    pub fields: Option<&'a str>,
+}
+
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
 const EVENT_COLUMNS: &str =
     "id, span_id, level, target, message, timestamp, file, line, fields";
@@ -132,7 +156,13 @@ const EVENT_COLUMNS: &str =
 const SPAN_COLUMNS: &str =
     "id, parent_id, name, level, target, file, line, started_at, ended_at, fields";
 
-/// Repository over the structured log tables.
+/// Repository over the structured log tables for query operations.
+///
+/// Clones share a single underlying connection. Use [`Storage::log_writer`] to
+/// obtain a [`LogWriter`] with an isolated connection for batch insertion from
+/// a background task.
+///
+/// [`Storage::log_writer`]: crate::Storage::log_writer
 #[derive(Clone)]
 pub struct LogRepository {
     connection: Connection,
@@ -200,22 +230,6 @@ impl LogRepository {
             .await
             .map_err(database)?;
         Ok(())
-    }
-
-    /// Prepares all statements needed for batch log insertion.
-    ///
-    /// Prepare once and reuse across many inserts. More efficient than the
-    /// builder API in a hot loop because the SQL is parsed only once.
-    pub async fn prepare_statements(&self) -> Result<PreparedStatements> {
-        let insert_span = self.connection.prepare(SQL_INSERT_SPAN).await.map_err(database)?;
-        let insert_event = self.connection.prepare(SQL_INSERT_EVENT).await.map_err(database)?;
-        let close_span = self.connection.prepare(SQL_CLOSE_SPAN).await.map_err(database)?;
-        Ok(PreparedStatements {
-            connection: self.connection.clone(),
-            insert_span,
-            insert_event,
-            close_span,
-        })
     }
 
     /// Lists log events matching the given filters, ordered by timestamp
@@ -522,73 +536,64 @@ impl<'a> EventInsertBuilder<'a> {
     }
 }
 
-/// Data needed to insert a span via [`PreparedStatements::insert_span`].
-pub struct SpanRecord<'a> {
-    pub parent_id: Option<i64>,
-    pub name: &'a str,
-    pub level: Level,
-    pub target: &'a str,
-    pub file: Option<&'a str>,
-    pub line: Option<i64>,
-    pub started_at: Timestamp,
-    pub fields: Option<&'a str>,
-}
-
-/// Data needed to insert an event via [`PreparedStatements::insert_event`].
-pub struct EventRecord<'a> {
-    pub span_id: Option<i64>,
-    pub level: Level,
-    pub target: &'a str,
-    pub message: Option<&'a str>,
-    pub timestamp: Timestamp,
-    pub file: Option<&'a str>,
-    pub line: Option<i64>,
-    pub fields: Option<&'a str>,
-}
-
-/// Prepared statements for batch log insertion.
+/// Batch writer for structured logs. Owns a dedicated connection (independent
+/// of the query connection) so it can be used from a background task without
+/// conflicting with concurrent reads.
 ///
-/// Prepare once with [`LogRepository::prepare_statements`] and reuse for
-/// multiple inserts. More efficient than the builder API in a hot loop because
-/// the SQL is parsed only once.
-pub struct PreparedStatements {
-    connection: Connection,
+/// Prepared statements are reused across inserts for efficiency. Obtain one
+/// with [`Storage::log_writer`].
+///
+/// [`Storage::log_writer`]: crate::Storage::log_writer
+pub struct LogWriter {
+    conn: Connection,
     insert_span: Statement,
     insert_event: Statement,
     close_span: Statement,
 }
 
-impl PreparedStatements {
+impl LogWriter {
+    pub(crate) async fn new(conn: Connection) -> Result<Self> {
+        let insert_span = conn.prepare(SQL_INSERT_SPAN).await.map_err(database)?;
+        let insert_event = conn.prepare(SQL_INSERT_EVENT).await.map_err(database)?;
+        let close_span = conn.prepare(SQL_CLOSE_SPAN).await.map_err(database)?;
+        Ok(Self {
+            conn,
+            insert_span,
+            insert_event,
+            close_span,
+        })
+    }
+
     /// Inserts a span and returns its assigned id.
-    pub async fn insert_span(&mut self, span: SpanRecord<'_>) -> Result<i64> {
+    pub async fn insert_span(&mut self, record: SpanRecord<'_>) -> Result<i64> {
         let params = params_from_iter([
-            int_or_null(span.parent_id),
-            Value::Text(span.name.to_owned()),
-            Value::Text(span.level.as_db().to_owned()),
-            Value::Text(span.target.to_owned()),
-            text_ref_or_null(span.file),
-            int_or_null(span.line),
-            Value::Integer(span.started_at.as_millisecond()),
-            text_ref_or_null(span.fields),
+            int_or_null(record.parent_id),
+            Value::Text(record.name.to_owned()),
+            Value::Text(record.level.as_db().to_owned()),
+            Value::Text(record.target.to_owned()),
+            text_ref_or_null(record.file),
+            int_or_null(record.line),
+            Value::Integer(record.started_at.as_millisecond()),
+            text_ref_or_null(record.fields),
         ]);
         self.insert_span.execute(params).await.map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     /// Inserts a log event and returns its assigned id.
-    pub async fn insert_event(&mut self, event: EventRecord<'_>) -> Result<i64> {
+    pub async fn insert_event(&mut self, record: EventRecord<'_>) -> Result<i64> {
         let params = params_from_iter([
-            int_or_null(event.span_id),
-            Value::Text(event.level.as_db().to_owned()),
-            Value::Text(event.target.to_owned()),
-            text_ref_or_null(event.message),
-            Value::Integer(event.timestamp.as_millisecond()),
-            text_ref_or_null(event.file),
-            int_or_null(event.line),
-            text_ref_or_null(event.fields),
+            int_or_null(record.span_id),
+            Value::Text(record.level.as_db().to_owned()),
+            Value::Text(record.target.to_owned()),
+            text_ref_or_null(record.message),
+            Value::Integer(record.timestamp.as_millisecond()),
+            text_ref_or_null(record.file),
+            int_or_null(record.line),
+            text_ref_or_null(record.fields),
         ]);
         self.insert_event.execute(params).await.map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     /// Records the end time of a span.
@@ -731,3 +736,4 @@ fn escape_like(value: &str) -> String {
     }
     out
 }
+
