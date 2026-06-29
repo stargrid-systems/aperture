@@ -201,18 +201,12 @@ async fn lists_logs_and_targets() {
 
     // Insert a test log event.
     let logs = artifacts.storage().logs();
-    logs.insert_event(
-        None,
-        aperture_artifacts::Level::Info,
-        "aperture::test",
-        Some("test log message"),
-        jiff::Timestamp::now(),
-        None,
-        None,
-        Some(r#"{"key":"value"}"#),
-    )
-    .await
-    .unwrap();
+    logs.insert_event(aperture_artifacts::Level::Info, "aperture::test", jiff::Timestamp::now())
+        .message(Some("test log message"))
+        .fields(Some(r#"{"key":"value"}"#))
+        .execute()
+        .await
+        .unwrap();
 
     let (status, json) = get_json(&app, "/api/v1/logs").await;
     assert_eq!(status, StatusCode::OK);

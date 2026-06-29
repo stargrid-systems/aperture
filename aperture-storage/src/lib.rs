@@ -11,7 +11,10 @@ pub use self::artifact::{
     Artifact, ArtifactKey, ArtifactRepository, Download, DownloadStatus, VersionSort,
 };
 pub use self::error::{Result, StorageError};
-pub use self::log::{Event, EventFilter, Level, LogRepository, Span, SpanFilter};
+pub use self::log::{
+    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, PreparedStatements,
+    Span, SpanFilter, SpanInsertBuilder, SpanRecord,
+};
 use self::error::database;
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};

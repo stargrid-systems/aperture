@@ -6,28 +6,29 @@
 //! inserted to record how many were lost.
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::error::Error;
+use std::fmt::{Debug, Write as _};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use aperture_artifacts::{Level, LogRepository};
+use aperture_artifacts::{EventRecord, Level, LogRepository, PreparedStatements, SpanRecord};
 use jiff::Timestamp;
-use serde_json::{Map, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId};
 use tracing::{Event, Level as TracingLevel, Subscriber};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
-use tokio::time::{MissedTickBehavior, interval};
 
 /// A record sent from the layer to the background writer.
 enum Record {
     SpanStart(SpanStart),
     SpanEnd(SpanEnd),
-    Event(EventRecord),
+    Event(EventMsg),
 }
 
 struct SpanStart {
@@ -47,7 +48,7 @@ struct SpanEnd {
     ended_at: Timestamp,
 }
 
-struct EventRecord {
+struct EventMsg {
     span_tracing_id: Option<u64>,
     level: Level,
     target: String,
@@ -76,19 +77,58 @@ pub struct DbLogLayer {
     dropped: Arc<AtomicU64>,
 }
 
+/// Handle to the background writer task. Keep it alive for as long as the
+/// layer is active. Call [`shutdown`](Self::shutdown) for a clean flush
+/// before the process exits.
+///
+/// If this handle is dropped without calling `shutdown`, the writer task is
+/// aborted immediately and pending records may be lost.
+pub struct WorkerHandle {
+    join: Option<JoinHandle<()>>,
+    shutdown: Option<oneshot::Sender<()>>,
+}
+
+impl WorkerHandle {
+    /// Signals the writer to drain remaining records, flush to the database,
+    /// and exit. Waits for the writer to finish.
+    pub async fn shutdown(mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.await;
+        }
+    }
+}
+
+impl Drop for WorkerHandle {
+    fn drop(&mut self) {
+        if let Some(join) = self.join.take() {
+            join.abort();
+        }
+    }
+}
+
 impl DbLogLayer {
     /// Creates the layer and spawns the background writer task.
     ///
-    /// Returns the layer. The background task runs for the lifetime of the
-    /// process and should not be cancelled.
-    pub fn spawn(repo: LogRepository) -> Self {
+    /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
+    /// should be kept alive for the lifetime of the application. Call
+    /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
+    pub fn spawn(repo: LogRepository) -> (Self, WorkerHandle) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let dropped = Arc::new(AtomicU64::new(0));
         let dropped_clone = dropped.clone();
 
-        tokio::spawn(writer_task(repo, rx, dropped_clone));
+        let join = tokio::spawn(writer_task(repo, rx, dropped_clone, shutdown_rx));
 
-        Self { tx, dropped }
+        let handle = WorkerHandle {
+            join: Some(join),
+            shutdown: Some(shutdown_tx),
+        };
+
+        (Self { tx, dropped }, handle)
     }
 
     fn try_send(&self, record: Record) {
@@ -135,7 +175,7 @@ where
 
         let span_tracing_id = ctx.event_span(event).map(|s| s.id().into_u64());
 
-        self.try_send(Record::Event(EventRecord {
+        self.try_send(Record::Event(EventMsg {
             span_tracing_id,
             level: tracing_to_db_level(meta.level()),
             target: meta.target().to_owned(),
@@ -156,7 +196,20 @@ where
 }
 
 /// Background writer task: drains the channel and batch-inserts records.
-async fn writer_task(repo: LogRepository, mut rx: mpsc::Receiver<Record>, dropped: Arc<AtomicU64>) {
+async fn writer_task(
+    repo: LogRepository,
+    mut rx: mpsc::Receiver<Record>,
+    dropped: Arc<AtomicU64>,
+    mut shutdown: oneshot::Receiver<()>,
+) {
+    let mut stmts = match repo.prepare_statements().await {
+        Ok(stmts) => stmts,
+        Err(err) => {
+            eprintln!("failed to prepare log statements: {err}");
+            return;
+        }
+    };
+
     let mut span_ids: HashMap<u64, i64> = HashMap::new();
     let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
     let mut interval = interval(FLUSH_INTERVAL);
@@ -165,47 +218,59 @@ async fn writer_task(repo: LogRepository, mut rx: mpsc::Receiver<Record>, droppe
     loop {
         tokio::select! {
             biased;
+            _ = &mut shutdown => {
+                while let Ok(record) = rx.try_recv() {
+                    batch.push(record);
+                }
+                flush(&mut stmts, &mut batch, &mut span_ids).await;
+                flush_dropped(&mut stmts, &dropped).await;
+                break;
+            }
             maybe_record = rx.recv() => {
                 match maybe_record {
                     Some(record) => batch.push(record),
                     None => {
-                        flush(&repo, &mut batch, &mut span_ids).await;
-                        flush_dropped(&repo, &dropped).await;
+                        flush(&mut stmts, &mut batch, &mut span_ids).await;
+                        flush_dropped(&mut stmts, &dropped).await;
                         break;
                     }
                 }
                 if batch.len() >= FLUSH_BATCH {
-                    flush(&repo, &mut batch, &mut span_ids).await;
-                    flush_dropped(&repo, &dropped).await;
+                    flush(&mut stmts, &mut batch, &mut span_ids).await;
+                    flush_dropped(&mut stmts, &dropped).await;
                 }
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    flush(&repo, &mut batch, &mut span_ids).await;
-                    flush_dropped(&repo, &dropped).await;
+                    flush(&mut stmts, &mut batch, &mut span_ids).await;
+                    flush_dropped(&mut stmts, &dropped).await;
                 }
             }
         }
     }
 }
 
-/// Flushes a batch of records to the database.
-async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, span_ids: &mut HashMap<u64, i64>) {
+/// Flushes a batch of records to the database using prepared statements.
+async fn flush(
+    stmts: &mut PreparedStatements,
+    batch: &mut Vec<Record>,
+    span_ids: &mut HashMap<u64, i64>,
+) {
     for record in batch.drain(..) {
         match record {
             Record::SpanStart(s) => {
                 let parent_db_id = s.parent_tracing_id.and_then(|pid| span_ids.get(&pid).copied());
-                let result = repo
-                    .insert_span(
-                        parent_db_id,
-                        &s.name,
-                        s.level,
-                        &s.target,
-                        s.file.as_deref(),
-                        s.line,
-                        s.started_at,
-                        s.fields.as_deref(),
-                    )
+                let result = stmts
+                    .insert_span(SpanRecord {
+                        parent_id: parent_db_id,
+                        name: &s.name,
+                        level: s.level,
+                        target: &s.target,
+                        file: s.file.as_deref(),
+                        line: s.line,
+                        started_at: s.started_at,
+                        fields: s.fields.as_deref(),
+                    })
                     .await;
                 if let Ok(db_id) = result {
                     span_ids.insert(s.tracing_id, db_id);
@@ -213,23 +278,23 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, span_ids: &mut Has
             }
             Record::SpanEnd(s) => {
                 if let Some(&db_id) = span_ids.get(&s.tracing_id) {
-                    let _ = repo.close_span(db_id, s.ended_at).await;
+                    let _ = stmts.close_span(db_id, s.ended_at).await;
                     span_ids.remove(&s.tracing_id);
                 }
             }
             Record::Event(e) => {
                 let span_db_id = e.span_tracing_id.and_then(|sid| span_ids.get(&sid).copied());
-                let _ = repo
-                    .insert_event(
-                        span_db_id,
-                        e.level,
-                        &e.target,
-                        e.message.as_deref(),
-                        e.timestamp,
-                        e.file.as_deref(),
-                        e.line,
-                        e.fields.as_deref(),
-                    )
+                let _ = stmts
+                    .insert_event(EventRecord {
+                        span_id: span_db_id,
+                        level: e.level,
+                        target: &e.target,
+                        message: e.message.as_deref(),
+                        timestamp: e.timestamp,
+                        file: e.file.as_deref(),
+                        line: e.line,
+                        fields: e.fields.as_deref(),
+                    })
                     .await;
             }
         }
@@ -237,24 +302,29 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, span_ids: &mut Has
 }
 
 /// Inserts a synthetic event for dropped records, if any.
-async fn flush_dropped(repo: &LogRepository, dropped: &AtomicU64) {
+async fn flush_dropped(stmts: &mut PreparedStatements, dropped: &AtomicU64) {
     let count = dropped.swap(0, Ordering::Relaxed);
     if count > 0 {
-        let _ = repo.record_dropped(count, now()).await;
+        let _ = stmts.record_dropped(count, now()).await;
     }
 }
 
-/// Field visitor that collects all fields into a JSON object and extracts the
+/// Field visitor that collects all fields into a JSON string and extracts the
 /// "message" field specially.
+///
+/// Writes JSON directly to a `String` for efficiency, avoiding an
+/// intermediate `Map<String, Value>`.
 struct FieldCollector {
-    fields: Map<String, Value>,
+    json: String,
+    first: bool,
     message: Option<String>,
 }
 
 impl FieldCollector {
     fn new() -> Self {
         Self {
-            fields: Map::new(),
+            json: String::new(),
+            first: true,
             message: None,
         }
     }
@@ -263,54 +333,105 @@ impl FieldCollector {
         self.message.take()
     }
 
-    fn into_json(self) -> Option<String> {
-        if self.fields.is_empty() {
+    fn into_json(mut self) -> Option<String> {
+        if self.first {
             None
         } else {
-            serde_json::to_string(&Value::Object(self.fields)).ok()
+            self.json.push('}');
+            Some(self.json)
         }
+    }
+
+    fn write_key(&mut self, name: &str) {
+        if self.first {
+            self.first = false;
+            self.json.push('{');
+        } else {
+            self.json.push(',');
+        }
+        write_json_string(&mut self.json, name);
+        self.json.push(':');
+    }
+
+    fn store_str(&mut self, name: &str, value: &str) {
+        if name == "message" {
+            self.message = Some(value.to_owned());
+        }
+        self.write_key(name);
+        write_json_string(&mut self.json, value);
     }
 }
 
 impl Visit for FieldCollector {
     fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
-        let value_str = format!("{value:?}");
-        self.store(field, Value::String(value_str));
+        let s = format!("{value:?}");
+        self.store_str(field.name(), &s);
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.store(field, Value::String(value.to_owned()));
+        self.store_str(field.name(), value);
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.store(field, Value::Bool(value));
+        self.write_key(field.name());
+        self.json.push_str(if value { "true" } else { "false" });
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.store(field, Value::from(value));
+        self.write_key(field.name());
+        write!(self.json, "{value}").unwrap();
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.store(field, Value::from(value));
+        self.write_key(field.name());
+        write!(self.json, "{value}").unwrap();
+    }
+
+    fn record_i128(&mut self, field: &Field, value: i128) {
+        self.write_key(field.name());
+        write!(self.json, "{value}").unwrap();
+    }
+
+    fn record_u128(&mut self, field: &Field, value: u128) {
+        self.write_key(field.name());
+        write!(self.json, "{value}").unwrap();
     }
 
     fn record_f64(&mut self, field: &Field, value: f64) {
-        self.store(field, serde_json::Number::from_f64(value)
-            .map(Value::Number)
-            .unwrap_or(Value::Null));
+        self.write_key(field.name());
+        if let Some(n) = serde_json::Number::from_f64(value) {
+            write!(self.json, "{n}").unwrap();
+        } else {
+            self.json.push_str("null");
+        }
+    }
+
+    fn record_bytes(&mut self, field: &Field, value: &[u8]) {
+        let hex: String = value.iter().map(|b| format!("{b:02x}")).collect();
+        self.store_str(field.name(), &hex);
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
+        let s = format!("{value}");
+        self.store_str(field.name(), &s);
     }
 }
 
-impl FieldCollector {
-    fn store(&mut self, field: &Field, value: Value) {
-        let name = field.name();
-        if name == "message"
-            && let Value::String(s) = &value
-        {
-            self.message = Some(s.clone());
+/// Writes a JSON-escaped string into `out`.
+fn write_json_string(out: &mut String, value: &str) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c < '\x20' => write!(out, "\\u{:04x}", c as u32).unwrap(),
+            c => out.push(c),
         }
-        self.fields.insert(name.to_owned(), value);
     }
+    out.push('"');
 }
 
 /// Maps a `tracing::Level` to the storage `Level`.

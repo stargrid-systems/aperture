@@ -10,57 +10,41 @@ async fn seeded_storage() -> Storage {
     let logs = storage.logs();
 
     let span_id = logs
-        .insert_span(
-            None,
-            "download",
-            Level::Info,
-            "aperture_artifacts::fetch",
-            Some("src/fetch.rs"),
-            Some(42),
-            at(1_000),
-            Some(r#"{"key":"spectra"}"#),
-        )
+        .insert_span("download", Level::Info, "aperture_artifacts::fetch", at(1_000))
+        .parent_id(None)
+        .file(Some("src/fetch.rs"))
+        .line(Some(42))
+        .fields(Some(r#"{"key":"spectra"}"#))
+        .execute()
         .await
         .unwrap();
 
-    logs.insert_event(
-        Some(span_id),
-        Level::Info,
-        "aperture_artifacts::fetch",
-        Some("starting download"),
-        at(1_100),
-        Some("src/fetch.rs"),
-        Some(10),
-        Some(r#"{"key":"spectra","source":"ghcr.io"}"#),
-    )
-    .await
-    .unwrap();
+    logs.insert_event(Level::Info, "aperture_artifacts::fetch", at(1_100))
+        .span_id(Some(span_id))
+        .message(Some("starting download"))
+        .file(Some("src/fetch.rs"))
+        .line(Some(10))
+        .fields(Some(r#"{"key":"spectra","source":"ghcr.io"}"#))
+        .execute()
+        .await
+        .unwrap();
 
-    logs.insert_event(
-        Some(span_id),
-        Level::Warn,
-        "aperture_artifacts::fetch",
-        Some("retrying download after timeout"),
-        at(1_200),
-        Some("src/fetch.rs"),
-        Some(25),
-        Some(r#"{"key":"spectra","attempt":2}"#),
-    )
-    .await
-    .unwrap();
+    logs.insert_event(Level::Warn, "aperture_artifacts::fetch", at(1_200))
+        .span_id(Some(span_id))
+        .message(Some("retrying download after timeout"))
+        .file(Some("src/fetch.rs"))
+        .line(Some(25))
+        .fields(Some(r#"{"key":"spectra","attempt":2}"#))
+        .execute()
+        .await
+        .unwrap();
 
-    logs.insert_event(
-        None,
-        Level::Error,
-        "aperture_http::error",
-        Some("artifact request failed"),
-        at(1_300),
-        None,
-        None,
-        Some(r#"{"status":500}"#),
-    )
-    .await
-    .unwrap();
+    logs.insert_event(Level::Error, "aperture_http::error", at(1_300))
+        .message(Some("artifact request failed"))
+        .fields(Some(r#"{"status":500}"#))
+        .execute()
+        .await
+        .unwrap();
 
     logs.close_span(span_id, at(1_400)).await.unwrap();
 
@@ -372,18 +356,11 @@ async fn paginate_events() {
     let logs = storage.logs();
 
     for i in 0..5 {
-        logs.insert_event(
-            None,
-            Level::Info,
-            "test",
-            Some(&format!("event {i}")),
-            at(i * 100),
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        logs.insert_event(Level::Info, "test", at(i * 100))
+            .message(Some(&format!("event {i}")))
+            .execute()
+            .await
+            .unwrap();
     }
 
     let first = logs

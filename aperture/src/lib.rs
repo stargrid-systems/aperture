@@ -11,9 +11,7 @@ use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
 
-use self::log_layer::DbLogLayer;
-
-mod log_layer;
+mod logging;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,7 +20,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;
     let log_repo = artifacts.storage().logs();
-    init_tracing(log_repo.clone());
+    let log_worker = logging::init(log_repo.clone());
 
     artifacts.sync().await.into_diagnostic()?;
 
@@ -39,7 +37,11 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
-    axum::serve(listener, app).await.into_diagnostic()?;
+    let result = axum::serve(listener, app).await.into_diagnostic();
+
+    log_worker.shutdown().await;
+
+    result?;
     Ok(())
 }
 
@@ -54,21 +56,4 @@ async fn open_artifacts(data_dir: &Path) -> miette::Result<Arc<Artifacts>> {
         .await
         .into_diagnostic()?;
     Ok(Arc::new(artifacts))
-}
-
-/// Sets up the tracing subscriber with a fmt layer (stdout) and a database layer.
-fn init_tracing(log_repo: aperture_artifacts::LogRepository) {
-    use tracing_subscriber::EnvFilter;
-    use tracing_subscriber::filter::LevelFilter;
-    use tracing_subscriber::fmt;
-    use tracing_subscriber::prelude::*;
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let fmt_layer = fmt::layer().with_filter(filter);
-    let db_layer = DbLogLayer::spawn(log_repo).with_filter(LevelFilter::TRACE);
-
-    tracing_subscriber::registry()
-        .with(fmt_layer)
-        .with(db_layer)
-        .init();
 }

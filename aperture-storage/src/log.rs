@@ -3,11 +3,25 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use turso::{Connection, Row, Value, params_from_iter};
+use turso::{Connection, Row, Statement, Value, params_from_iter};
 
 use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
+
+const SQL_INSERT_SPAN: &str = sql!(
+    INSERT INTO spans
+    (parent_id, name, level, target, file, line, started_at, fields)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+);
+
+const SQL_INSERT_EVENT: &str = sql!(
+    INSERT INTO events
+    (span_id, level, target, message, timestamp, file, line, fields)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+);
+
+const SQL_CLOSE_SPAN: &str = sql!(UPDATE spans SET ended_at = ?1 WHERE id = ?2);
 
 /// Severity level of a tracing event or span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,48 +143,55 @@ impl LogRepository {
         Self { connection }
     }
 
-    /// Inserts a span and returns its assigned id.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_span(
-        &self,
-        parent_id: Option<i64>,
-        name: &str,
+    /// Starts building a span insert. Required fields are passed here; optional
+    /// fields are set via builder methods. Call `execute().await` to persist.
+    pub fn insert_span<'a>(
+        &'a self,
+        name: &'a str,
         level: Level,
-        target: &str,
-        file: Option<&str>,
-        line: Option<i64>,
+        target: &'a str,
         started_at: Timestamp,
-        fields: Option<&str>,
-    ) -> Result<i64> {
-        let params = params_from_iter([
-            int_or_null(parent_id),
-            Value::Text(name.to_owned()),
-            Value::Text(level.as_db().to_owned()),
-            Value::Text(target.to_owned()),
-            text_ref_or_null(file),
-            int_or_null(line),
-            Value::Integer(started_at.as_millisecond()),
-            text_ref_or_null(fields),
-        ]);
-        self.connection
-            .execute(
-                sql!(
-                    INSERT INTO spans
-                    (parent_id, name, level, target, file, line, started_at, fields)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                ),
-                params,
-            )
-            .await
-            .map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+    ) -> SpanInsertBuilder<'a> {
+        SpanInsertBuilder {
+            repo: self,
+            parent_id: None,
+            name,
+            level,
+            target,
+            file: None,
+            line: None,
+            started_at,
+            fields: None,
+        }
+    }
+
+    /// Starts building an event insert. Required fields are passed here;
+    /// optional fields are set via builder methods. Call `execute().await` to
+    /// persist.
+    pub fn insert_event<'a>(
+        &'a self,
+        level: Level,
+        target: &'a str,
+        timestamp: Timestamp,
+    ) -> EventInsertBuilder<'a> {
+        EventInsertBuilder {
+            repo: self,
+            span_id: None,
+            level,
+            target,
+            timestamp,
+            message: None,
+            file: None,
+            line: None,
+            fields: None,
+        }
     }
 
     /// Records the end time of a span.
     pub async fn close_span(&self, id: i64, ended_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
-                sql!(UPDATE spans SET ended_at = ?1 WHERE id = ?2),
+                SQL_CLOSE_SPAN,
                 params_from_iter([
                     Value::Integer(ended_at.as_millisecond()),
                     Value::Integer(id),
@@ -181,41 +202,20 @@ impl LogRepository {
         Ok(())
     }
 
-    /// Inserts a log event and returns its assigned id.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_event(
-        &self,
-        span_id: Option<i64>,
-        level: Level,
-        target: &str,
-        message: Option<&str>,
-        timestamp: Timestamp,
-        file: Option<&str>,
-        line: Option<i64>,
-        fields: Option<&str>,
-    ) -> Result<i64> {
-        let params = params_from_iter([
-            int_or_null(span_id),
-            Value::Text(level.as_db().to_owned()),
-            Value::Text(target.to_owned()),
-            text_ref_or_null(message),
-            Value::Integer(timestamp.as_millisecond()),
-            text_ref_or_null(file),
-            int_or_null(line),
-            text_ref_or_null(fields),
-        ]);
-        self.connection
-            .execute(
-                sql!(
-                    INSERT INTO events
-                    (span_id, level, target, message, timestamp, file, line, fields)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                ),
-                params,
-            )
-            .await
-            .map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+    /// Prepares all statements needed for batch log insertion.
+    ///
+    /// Prepare once and reuse across many inserts. More efficient than the
+    /// builder API in a hot loop because the SQL is parsed only once.
+    pub async fn prepare_statements(&self) -> Result<PreparedStatements> {
+        let insert_span = self.connection.prepare(SQL_INSERT_SPAN).await.map_err(database)?;
+        let insert_event = self.connection.prepare(SQL_INSERT_EVENT).await.map_err(database)?;
+        let close_span = self.connection.prepare(SQL_CLOSE_SPAN).await.map_err(database)?;
+        Ok(PreparedStatements {
+            connection: self.connection.clone(),
+            insert_span,
+            insert_event,
+            close_span,
+        })
     }
 
     /// Lists log events matching the given filters, ordered by timestamp
@@ -400,16 +400,223 @@ impl LogRepository {
     pub async fn record_dropped(&self, count: u64, timestamp: Timestamp) -> Result<()> {
         let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
             .map_err(|err| StorageError::Decode(format!("failed to serialize dropped fields: {err}")))?;
-        self.insert_event(
-            None,
-            Level::Warn,
-            "aperture::log",
-            Some(&format!("dropped {count} log records due to full buffer")),
+        self.insert_event(Level::Warn, "aperture::log", timestamp)
+            .message(Some(&format!("dropped {count} log records due to full buffer")))
+            .fields(Some(&fields))
+            .execute()
+            .await?;
+        Ok(())
+    }
+}
+
+/// Builder for a span insert. Created by [`LogRepository::insert_span`].
+pub struct SpanInsertBuilder<'a> {
+    repo: &'a LogRepository,
+    parent_id: Option<i64>,
+    name: &'a str,
+    level: Level,
+    target: &'a str,
+    file: Option<&'a str>,
+    line: Option<i64>,
+    started_at: Timestamp,
+    fields: Option<&'a str>,
+}
+
+impl<'a> SpanInsertBuilder<'a> {
+    pub fn parent_id(mut self, id: Option<i64>) -> Self {
+        self.parent_id = id;
+        self
+    }
+
+    pub fn file(mut self, file: Option<&'a str>) -> Self {
+        self.file = file;
+        self
+    }
+
+    pub fn line(mut self, line: Option<i64>) -> Self {
+        self.line = line;
+        self
+    }
+
+    pub fn fields(mut self, fields: Option<&'a str>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    pub async fn execute(self) -> Result<i64> {
+        let params = params_from_iter([
+            int_or_null(self.parent_id),
+            Value::Text(self.name.to_owned()),
+            Value::Text(self.level.as_db().to_owned()),
+            Value::Text(self.target.to_owned()),
+            text_ref_or_null(self.file),
+            int_or_null(self.line),
+            Value::Integer(self.started_at.as_millisecond()),
+            text_ref_or_null(self.fields),
+        ]);
+        self.repo
+            .connection
+            .execute(SQL_INSERT_SPAN, params)
+            .await
+            .map_err(database)?;
+        Ok(self.repo.connection.last_insert_rowid())
+    }
+}
+
+/// Builder for an event insert. Created by [`LogRepository::insert_event`].
+pub struct EventInsertBuilder<'a> {
+    repo: &'a LogRepository,
+    span_id: Option<i64>,
+    level: Level,
+    target: &'a str,
+    timestamp: Timestamp,
+    message: Option<&'a str>,
+    file: Option<&'a str>,
+    line: Option<i64>,
+    fields: Option<&'a str>,
+}
+
+impl<'a> EventInsertBuilder<'a> {
+    pub fn span_id(mut self, id: Option<i64>) -> Self {
+        self.span_id = id;
+        self
+    }
+
+    pub fn message(mut self, message: Option<&'a str>) -> Self {
+        self.message = message;
+        self
+    }
+
+    pub fn file(mut self, file: Option<&'a str>) -> Self {
+        self.file = file;
+        self
+    }
+
+    pub fn line(mut self, line: Option<i64>) -> Self {
+        self.line = line;
+        self
+    }
+
+    pub fn fields(mut self, fields: Option<&'a str>) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    pub async fn execute(self) -> Result<i64> {
+        let params = params_from_iter([
+            int_or_null(self.span_id),
+            Value::Text(self.level.as_db().to_owned()),
+            Value::Text(self.target.to_owned()),
+            text_ref_or_null(self.message),
+            Value::Integer(self.timestamp.as_millisecond()),
+            text_ref_or_null(self.file),
+            int_or_null(self.line),
+            text_ref_or_null(self.fields),
+        ]);
+        self.repo
+            .connection
+            .execute(SQL_INSERT_EVENT, params)
+            .await
+            .map_err(database)?;
+        Ok(self.repo.connection.last_insert_rowid())
+    }
+}
+
+/// Data needed to insert a span via [`PreparedStatements::insert_span`].
+pub struct SpanRecord<'a> {
+    pub parent_id: Option<i64>,
+    pub name: &'a str,
+    pub level: Level,
+    pub target: &'a str,
+    pub file: Option<&'a str>,
+    pub line: Option<i64>,
+    pub started_at: Timestamp,
+    pub fields: Option<&'a str>,
+}
+
+/// Data needed to insert an event via [`PreparedStatements::insert_event`].
+pub struct EventRecord<'a> {
+    pub span_id: Option<i64>,
+    pub level: Level,
+    pub target: &'a str,
+    pub message: Option<&'a str>,
+    pub timestamp: Timestamp,
+    pub file: Option<&'a str>,
+    pub line: Option<i64>,
+    pub fields: Option<&'a str>,
+}
+
+/// Prepared statements for batch log insertion.
+///
+/// Prepare once with [`LogRepository::prepare_statements`] and reuse for
+/// multiple inserts. More efficient than the builder API in a hot loop because
+/// the SQL is parsed only once.
+pub struct PreparedStatements {
+    connection: Connection,
+    insert_span: Statement,
+    insert_event: Statement,
+    close_span: Statement,
+}
+
+impl PreparedStatements {
+    /// Inserts a span and returns its assigned id.
+    pub async fn insert_span(&mut self, span: SpanRecord<'_>) -> Result<i64> {
+        let params = params_from_iter([
+            int_or_null(span.parent_id),
+            Value::Text(span.name.to_owned()),
+            Value::Text(span.level.as_db().to_owned()),
+            Value::Text(span.target.to_owned()),
+            text_ref_or_null(span.file),
+            int_or_null(span.line),
+            Value::Integer(span.started_at.as_millisecond()),
+            text_ref_or_null(span.fields),
+        ]);
+        self.insert_span.execute(params).await.map_err(database)?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
+    /// Inserts a log event and returns its assigned id.
+    pub async fn insert_event(&mut self, event: EventRecord<'_>) -> Result<i64> {
+        let params = params_from_iter([
+            int_or_null(event.span_id),
+            Value::Text(event.level.as_db().to_owned()),
+            Value::Text(event.target.to_owned()),
+            text_ref_or_null(event.message),
+            Value::Integer(event.timestamp.as_millisecond()),
+            text_ref_or_null(event.file),
+            int_or_null(event.line),
+            text_ref_or_null(event.fields),
+        ]);
+        self.insert_event.execute(params).await.map_err(database)?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
+    /// Records the end time of a span.
+    pub async fn close_span(&mut self, id: i64, ended_at: Timestamp) -> Result<()> {
+        self.close_span
+            .execute(params_from_iter([
+                Value::Integer(ended_at.as_millisecond()),
+                Value::Integer(id),
+            ]))
+            .await
+            .map_err(database)?;
+        Ok(())
+    }
+
+    /// Inserts a synthetic event recording that log records were dropped.
+    pub async fn record_dropped(&mut self, count: u64, timestamp: Timestamp) -> Result<()> {
+        let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
+            .map_err(|err| StorageError::Decode(format!("failed to serialize dropped fields: {err}")))?;
+        self.insert_event(EventRecord {
+            span_id: None,
+            level: Level::Warn,
+            target: "aperture::log",
+            message: Some(&format!("dropped {count} log records due to full buffer")),
             timestamp,
-            None,
-            None,
-            Some(&fields),
-        )
+            file: None,
+            line: None,
+            fields: Some(&fields),
+        })
         .await?;
         Ok(())
     }
