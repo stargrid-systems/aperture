@@ -7,10 +7,10 @@
 //!   Override with `RUST_LOG`.
 //! - A [`DbLogLayer`] that persists spans and events to the database.
 //!
-//! The `log` crate is bridged into tracing via [`LogTracer`] so that records
-//! from dependencies (turso, tantivy, backhand, etc.) appear as tracing events.
-//! The real target, file, and line are carried as `log.*` fields and extracted
-//! by [`DbLogLayer`] rather than using the static `"log"` target.
+//! The `log` crate is bridged into tracing by `tracing-subscriber`'s
+//! `tracing-log` feature (enabled automatically). The real target, file, and
+//! line from `log` records are carried as `log.*` fields and extracted by
+//! [`DbLogLayer`] rather than using the static `"log"` target.
 //!
 //! [`DbLogLayer`]: layer::DbLogLayer
 //!
@@ -37,11 +37,6 @@ const DEFAULT_FILTER: &str =
 /// exiting to flush pending records.
 pub fn init(writer: LogWriter, boot_id: String) -> WorkerHandle {
     use tracing_subscriber::EnvFilter;
-
-    // Bridge `log` crate records into tracing events. This only fails if a
-    // global logger was already installed, which does not happen in our
-    // binary.
-    let _ = tracing_log::LogTracer::init();
 
     let console_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
