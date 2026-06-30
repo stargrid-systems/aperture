@@ -6,8 +6,8 @@
 
 pub use aperture_storage::{
     Artifact, ArtifactKey, Download, DownloadStatus, Event, EventFilter, EventInsertBuilder,
-    EventRecord, Level, ListQuery, LogRepository, LogWriter, Order, Page, Span, SpanFilter,
-    SpanInsertBuilder, SpanRecord, Storage, StorageError, VersionSort,
+    EventRecord, Level, ListQuery, LogRepository, LogWriter, Order, Page, ParentFilter, Span,
+    SpanFilter, SpanInsertBuilder, SpanRecord, Storage, StorageError, VersionSort,
 };
 
 pub use self::artifacts::{

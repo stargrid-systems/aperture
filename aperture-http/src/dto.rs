@@ -19,13 +19,16 @@ use utoipa::{IntoParams, ToSchema};
 pub struct VersionResponse {
     /// Version of the Aperture gateway.
     pub aperture: String,
+    /// Unique id of this gateway boot session.
+    pub boot_id: String,
 }
 
 impl VersionResponse {
-    /// Builds a response reporting the given gateway version.
-    pub fn new(version: &str) -> Self {
+    /// Builds a response reporting the given gateway version and boot id.
+    pub fn new(version: &str, boot_id: &str) -> Self {
         Self {
             aperture: version.to_owned(),
+            boot_id: boot_id.to_owned(),
         }
     }
 }
@@ -566,6 +569,10 @@ pub struct LogSpanListParams {
     pub since: Option<Timestamp>,
     /// Only spans started at or before this time (RFC 3339).
     pub until: Option<Timestamp>,
+    /// Only direct children of this span id.
+    pub parent_id: Option<i64>,
+    /// When true, only root spans (no parent) are returned.
+    pub parent_null: Option<bool>,
 }
 
 /// Query params for `GET /api/v1/logs/targets`.

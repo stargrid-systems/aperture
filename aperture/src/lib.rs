@@ -19,13 +19,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;
-    let log_repo = artifacts.storage().logs();
+    let boot_id = uuid::Uuid::new_v4().to_string();
     let log_writer = artifacts
         .storage()
         .log_writer()
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
-    let log_worker = logging::init(log_writer);
+    let log_worker = logging::init(log_writer, boot_id.clone());
 
     artifacts.sync().await.into_diagnostic()?;
 
@@ -37,7 +37,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(VERSION, spectra, log_repo);
+    let state = AppState::new(VERSION, boot_id, spectra);
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;

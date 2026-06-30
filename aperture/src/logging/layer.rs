@@ -68,6 +68,25 @@ const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 /// Maximum records to batch before flushing.
 const FLUSH_BATCH: usize = 128;
 
+/// Target prefixes whose log-bridged events below WARN are dropped before
+/// queueing. These crates produce trace-level diagnostics as a side effect
+/// of database writes, which would cause a feedback loop if persisted.
+///
+/// Native tracing events from these targets are already excluded by the
+/// `Targets` filter on the DB layer. This list catches the same crates when
+/// they emit through the `log` crate, whose bridged events carry the static
+/// target `"log"` instead of the real crate target.
+const NOISY_LOG_PREFIXES: &[&str] = &["turso", "tantivy", "backhand"];
+
+/// Returns `true` if a log-bridged event from `target` at `level` should be
+/// dropped before queueing. Events at WARN or above are always kept.
+fn is_noisy_log_event(target: &str, level: &TracingLevel) -> bool {
+    if *level >= TracingLevel::WARN {
+        return false;
+    }
+    NOISY_LOG_PREFIXES.iter().any(|p| target.starts_with(p))
+}
+
 /// A tracing layer that persists spans and events to the database.
 ///
 /// Cheap to clone: all clones share one channel sender and drop counter.
@@ -75,6 +94,7 @@ const FLUSH_BATCH: usize = 128;
 pub struct DbLogLayer {
     tx: mpsc::Sender<Record>,
     dropped: Arc<AtomicU64>,
+    boot_id: Arc<String>,
 }
 
 /// Handle to the background writer task. Keep it alive for as long as the
@@ -115,7 +135,7 @@ impl DbLogLayer {
     /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
     /// should be kept alive for the lifetime of the application. Call
     /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
-    pub fn spawn(writer: LogWriter) -> (Self, WorkerHandle) {
+    pub fn spawn(writer: LogWriter, boot_id: String) -> (Self, WorkerHandle) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let dropped = Arc::new(AtomicU64::new(0));
@@ -128,7 +148,11 @@ impl DbLogLayer {
             shutdown: Some(shutdown_tx),
         };
 
-        (Self { tx, dropped }, handle)
+        (Self {
+            tx,
+            dropped,
+            boot_id: Arc::new(boot_id),
+        }, handle)
     }
 
     fn try_send(&self, record: Record) {
@@ -144,7 +168,7 @@ where
 {
     fn on_new_span(&self, attrs: &SpanAttributes<'_>, id: &SpanId, _ctx: Context<'_, S>) {
         let meta = attrs.metadata();
-        let mut visitor = FieldCollector::new();
+        let mut visitor = FieldCollector::new(&self.boot_id);
         attrs.record(&mut visitor);
 
         let tracing_id = id.into_u64();
@@ -165,19 +189,40 @@ where
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let meta = event.metadata();
-        let mut visitor = FieldCollector::new();
+        let mut visitor = FieldCollector::new(&self.boot_id);
         event.record(&mut visitor);
 
+        // For log-bridged events the metadata target is "log". The real
+        // target lives in the `log.target` field. Use whichever is
+        // available.
+        let target = visitor
+            .log_target()
+            .map(str::to_owned)
+            .unwrap_or_else(|| meta.target().to_owned());
+
+        // Drop noisy log-bridged events from database-engine crates before
+        // they enter the channel to prevent feedback loops.
+        if is_noisy_log_event(&target, meta.level()) {
+            return;
+        }
+
         let span_tracing_id = ctx.event_span(event).map(|s| s.id().into_u64());
+
+        let file = visitor
+            .take_log_file()
+            .or_else(|| meta.file().map(str::to_owned));
+        let line = visitor
+            .take_log_line()
+            .or_else(|| meta.line().map(|l| l as i64));
 
         self.try_send(Record::Event(EventMsg {
             span_tracing_id,
             level: tracing_to_db_level(meta.level()),
-            target: meta.target().to_owned(),
+            target,
             message: visitor.take_message(),
             timestamp: now(),
-            file: meta.file().map(str::to_owned),
-            line: meta.line().map(|l| l as i64),
+            file,
+            line,
             fields: visitor.into_json(),
         }));
     }
@@ -305,19 +350,44 @@ struct FieldCollector {
     json: String,
     first: bool,
     message: Option<String>,
+    /// Real target from a `log`-bridged event (`log.target` field).
+    log_target: Option<String>,
+    /// Source file from a `log`-bridged event (`log.file` field).
+    log_file: Option<String>,
+    /// Source line from a `log`-bridged event (`log.line` field).
+    log_line: Option<i64>,
 }
 
 impl FieldCollector {
-    fn new() -> Self {
+    fn new(boot_id: &str) -> Self {
+        let mut json = String::new();
+        let _ = write!(json, "{{\"boot_id\":");
+        write_json_string(&mut json, boot_id);
         Self {
-            json: String::new(),
-            first: true,
+            json,
+            first: false,
             message: None,
+            log_target: None,
+            log_file: None,
+            log_line: None,
         }
     }
 
     fn take_message(&mut self) -> Option<String> {
         self.message.take()
+    }
+
+    /// Returns the real target from a `log`-bridged event, if present.
+    fn log_target(&self) -> Option<&str> {
+        self.log_target.as_deref()
+    }
+
+    fn take_log_file(&mut self) -> Option<String> {
+        self.log_file.take()
+    }
+
+    fn take_log_line(&mut self) -> Option<i64> {
+        self.log_line.take()
     }
 
     fn into_json(mut self) -> Option<String> {
@@ -341,16 +411,28 @@ impl FieldCollector {
     }
 
     fn store_str(&mut self, name: &str, value: &str) {
-        if name == "message" {
-            self.message = Some(value.to_owned());
+        match name {
+            "message" => {
+                self.message = Some(value.to_owned());
+                self.write_key(name);
+                write_json_string(&mut self.json, value);
+            }
+            "log.target" => self.log_target = Some(value.to_owned()),
+            "log.file" => self.log_file = Some(value.to_owned()),
+            "log.module_path" => {}
+            _ => {
+                self.write_key(name);
+                write_json_string(&mut self.json, value);
+            }
         }
-        self.write_key(name);
-        write_json_string(&mut self.json, value);
     }
 }
 
 impl Visit for FieldCollector {
     fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+        if field.name().starts_with("log.") {
+            return;
+        }
         let s = format!("{value:?}");
         self.store_str(field.name(), &s);
     }
@@ -370,8 +452,12 @@ impl Visit for FieldCollector {
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.write_key(field.name());
-        write!(self.json, "{value}").unwrap();
+        if field.name() == "log.line" {
+            self.log_line = Some(value as i64);
+        } else {
+            self.write_key(field.name());
+            write!(self.json, "{value}").unwrap();
+        }
     }
 
     fn record_i128(&mut self, field: &Field, value: i128) {

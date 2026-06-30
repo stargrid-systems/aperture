@@ -34,7 +34,7 @@ async fn seeded_app() -> (Router, Artifacts) {
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Artifacts::new(storage, root);
 
-    let repo = artifacts.storage().artifacts();
+    let repo = artifacts.storage().artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:fff", 1_000))
         .await
         .unwrap();
@@ -62,8 +62,7 @@ async fn seeded_app() -> (Router, Artifacts) {
     .unwrap();
 
     let spectra = Spectra::new(Arc::new(artifacts.clone()), SpectraConfig::default());
-    let logs = artifacts.storage().logs();
-    let state = AppState::new("test", spectra, logs);
+    let state = AppState::new("test", "test-boot-id".to_owned(), spectra);
     (app(state), artifacts)
 }
 
@@ -214,7 +213,7 @@ async fn lists_logs_and_targets() {
     let (app, artifacts) = seeded_app().await;
 
     // Insert a test log event.
-    let logs = artifacts.storage().logs();
+    let logs = artifacts.storage().logs().unwrap();
     logs.insert_event(
         aperture_artifacts::Level::Info,
         "aperture::test",

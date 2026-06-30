@@ -11,6 +11,8 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
+use super::operation_ids;
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_logs))
@@ -23,6 +25,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[utoipa::path(
     get,
     path = "",
+    operation_id = operation_ids::LIST_LOGS,
     params(LogListParams),
     responses((status = 200, description = "Log events", body = Page<LogEventResponse>)),
 )]
@@ -41,7 +44,8 @@ async fn list_logs(
         until: params.until,
         fields,
     };
-    let page = state.logs().list_events(&filter, &query).await?;
+    let logs = state.logs()?;
+    let page = logs.list_events(&filter, &query).await?;
     Ok(Json(event_page(page)))
 }
 
@@ -49,6 +53,7 @@ async fn list_logs(
 #[utoipa::path(
     get,
     path = "/targets",
+    operation_id = operation_ids::LIST_LOG_TARGETS,
     params(LogTargetListParams),
     responses((status = 200, description = "Target names", body = Vec<String>)),
 )]
@@ -56,7 +61,8 @@ async fn list_log_targets(
     State(state): State<AppState>,
     Query(params): Query<LogTargetListParams>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    let targets = state.logs().list_targets(params.q.as_deref()).await?;
+    let logs = state.logs()?;
+    let targets = logs.list_targets(params.q.as_deref()).await?;
     Ok(Json(targets))
 }
 
@@ -64,6 +70,7 @@ async fn list_log_targets(
 #[utoipa::path(
     get,
     path = "/spans",
+    operation_id = operation_ids::LIST_SPANS,
     params(LogSpanListParams),
     responses((status = 200, description = "Spans", body = Page<LogSpanResponse>)),
 )]
@@ -72,13 +79,20 @@ async fn list_spans(
     Query(params): Query<LogSpanListParams>,
 ) -> Result<Json<Page<LogSpanResponse>>, ApiError> {
     let query = params.to_query();
+    let parent = match (params.parent_id, params.parent_null) {
+        (Some(id), _) => aperture_artifacts::ParentFilter::ChildrenOf(id),
+        (None, Some(true)) => aperture_artifacts::ParentFilter::RootOnly,
+        (None, _) => aperture_artifacts::ParentFilter::default(),
+    };
     let filter = SpanFilter {
         min_level: params.min_level.map(Into::into),
         target: params.target,
         since: params.since,
         until: params.until,
+        parent,
     };
-    let page = state.logs().list_spans(&filter, &query).await?;
+    let logs = state.logs()?;
+    let page = logs.list_spans(&filter, &query).await?;
     Ok(Json(span_page(page)))
 }
 
@@ -86,6 +100,7 @@ async fn list_spans(
 #[utoipa::path(
     get,
     path = "/spans/{id}",
+    operation_id = operation_ids::GET_SPAN,
     params(("id" = i64, Path, description = "Span id")),
     responses(
         (status = 200, description = "Span with events", body = LogSpanDetailResponse),
@@ -96,9 +111,10 @@ async fn get_span(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
-    let span = state.logs().get_span(id).await?;
+    let logs = state.logs()?;
+    let span = logs.get_span(id).await?;
     let span = span.ok_or(ApiError::NOT_FOUND)?;
-    let events = state.logs().events_for_span(id).await?;
+    let events = logs.events_for_span(id).await?;
     let events = events.into_iter().map(Into::into).collect();
     Ok(Json(LogSpanDetailResponse {
         span: span.into(),

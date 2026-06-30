@@ -9,6 +9,8 @@ use self::logs::router as logs_routes;
 use crate::AppState;
 use crate::dto::VersionResponse;
 
+pub mod operation_ids;
+
 mod artifacts;
 mod downloads;
 mod logs;
@@ -25,8 +27,9 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[utoipa::path(
     get,
     path = "/version",
+    operation_id = operation_ids::GET_GATEWAY_VERSION,
     responses((status = 200, description = "Gateway version", body = VersionResponse)),
 )]
 async fn get_gateway_version(State(state): State<AppState>) -> Json<VersionResponse> {
-    Json(VersionResponse::new(state.version()))
+    Json(VersionResponse::new(state.version(), state.boot_id()))
 }

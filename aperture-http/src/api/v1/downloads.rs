@@ -9,6 +9,8 @@ use crate::AppState;
 use crate::dto::{DownloadListParams, DownloadResponse, Page, download_page};
 use crate::error::ApiError;
 
+use super::operation_ids;
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(list_downloads))
 }
@@ -18,6 +20,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[utoipa::path(
     get,
     path = "",
+    operation_id = operation_ids::LIST_DOWNLOADS,
     params(DownloadListParams),
     responses((status = 200, description = "Downloads", body = Page<DownloadResponse>)),
 )]

@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use turso::{Builder, Connection, Database};
+use turso::{Builder, Database};
 
 pub use self::artifact::{
     Artifact, ArtifactKey, ArtifactRepository, Download, DownloadStatus, VersionSort,
@@ -15,8 +15,8 @@ pub use self::artifact::{
 use self::error::database;
 pub use self::error::{Result, StorageError};
 pub use self::log::{
-    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter, Span,
-    SpanFilter, SpanInsertBuilder, SpanRecord,
+    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter,
+    ParentFilter, Span, SpanFilter, SpanInsertBuilder, SpanRecord,
 };
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
@@ -35,15 +35,13 @@ mod page;
 
 /// Handle to the gateway's persistent storage.
 ///
-/// Clones share the same underlying [`Database`]. Each call to
-/// [`log_writer`](Self::log_writer) opens a new [`Connection`] with an
-/// independent concurrency guard, so a background writer task cannot conflict
-/// with the query connection used by HTTP handlers.
+/// Each call to [`artifacts`](Self::artifacts), [`logs`](Self::logs), or
+/// [`log_writer`](Self::log_writer) opens a fresh [`Connection`] from the
+/// underlying [`Database`]. Connections are independent and do not share a
+/// concurrency guard, so simultaneous handlers and background tasks cannot
+/// conflict with each other.
 pub struct Storage {
     database: Database,
-    /// The shared query connection. Cheap to clone; all clones share one
-    /// concurrency guard.
-    query: Connection,
 }
 
 impl Storage {
@@ -61,17 +59,25 @@ impl Storage {
         query.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
         run(&query).await?;
         let database = db.clone();
-        Ok(Self { database, query })
+        Ok(Self { database })
     }
 
-    /// Returns the repository over the artifact catalog.
-    pub fn artifacts(&self) -> ArtifactRepository {
-        ArtifactRepository::new(self.query.clone())
+    /// Opens a new connection and returns the repository over the artifact
+    /// catalog. Each call is independent and does not share a concurrency
+    /// guard with other connections.
+    pub fn artifacts(&self) -> Result<ArtifactRepository> {
+        let conn = self.database.connect().map_err(database)?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
+        Ok(ArtifactRepository::new(conn))
     }
 
-    /// Returns the repository over the structured log tables (for queries).
-    pub fn logs(&self) -> LogRepository {
-        LogRepository::new(self.query.clone())
+    /// Opens a new connection and returns the repository over the structured
+    /// log tables. Each call is independent and does not share a concurrency
+    /// guard with other connections.
+    pub fn logs(&self) -> Result<LogRepository> {
+        let conn = self.database.connect().map_err(database)?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
+        Ok(LogRepository::new(conn))
     }
 
     /// Opens a dedicated [`LogWriter`] with its own connection for batch

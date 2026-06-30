@@ -114,12 +114,26 @@ pub struct EventFilter {
     pub fields: Vec<(String, String)>,
 }
 
+/// Filter for the `parent_id` column of a span query.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ParentFilter {
+    /// No parent filtering.
+    #[default]
+    Any,
+    /// Only root spans (parent_id IS NULL).
+    RootOnly,
+    /// Only direct children of the given span id.
+    ChildrenOf(i64),
+}
+
 /// Filters for span queries.
+#[derive(Default)]
 pub struct SpanFilter {
     pub min_level: Option<Level>,
     pub target: Option<String>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
+    pub parent: ParentFilter,
 }
 
 /// Plain-data description of a span to persist via [`LogWriter::insert_span`].
@@ -161,7 +175,6 @@ const SPAN_COLUMNS: &str =
 /// a background task.
 ///
 /// [`Storage::log_writer`]: crate::Storage::log_writer
-#[derive(Clone)]
 pub struct LogRepository {
     connection: Connection,
 }
@@ -320,6 +333,12 @@ impl LogRepository {
 
         if let Some(min_level) = filter.min_level {
             filters.raw(&format!("{LEVEL_RANK_SQL} >= {}", min_level.rank()));
+        }
+
+        match filter.parent {
+            ParentFilter::Any => {}
+            ParentFilter::RootOnly => filters.raw("parent_id IS NULL"),
+            ParentFilter::ChildrenOf(id) => filters.eq_int("parent_id", Some(id)),
         }
 
         filters.prefix("target", filter.target.as_deref());

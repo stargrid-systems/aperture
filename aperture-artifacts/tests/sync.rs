@@ -15,7 +15,7 @@ async fn sync_interrupts_orphaned_running_downloads() {
     let root = temp_root("interrupted");
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Artifacts::new(storage, root.clone());
-    let repo = artifacts.storage().artifacts();
+    let repo = artifacts.storage().artifacts().unwrap();
 
     let started = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
     let id = repo
@@ -39,7 +39,7 @@ async fn sync_removes_versions_without_blobs() {
     let root = temp_root("orphan-version");
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Artifacts::new(storage, root.clone());
-    let repo = artifacts.storage().artifacts();
+    let repo = artifacts.storage().artifacts().unwrap();
 
     // A catalog version whose blob never made it to disk.
     repo.record_version(&Artifact {

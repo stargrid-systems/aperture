@@ -11,6 +11,8 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
+use super::operation_ids;
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
@@ -23,6 +25,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[utoipa::path(
     get,
     path = "",
+    operation_id = operation_ids::LIST_ARTIFACTS,
     params(ArtifactListParams),
     responses((status = 200, description = "Artifacts", body = Page<ArtifactSummaryResponse>)),
 )]
@@ -42,6 +45,7 @@ async fn list_artifacts(
 #[utoipa::path(
     get,
     path = "/{key}",
+    operation_id = operation_ids::GET_ARTIFACT,
     params(("key" = String, Path, description = "Artifact key")),
     responses(
         (status = 200, description = "Artifact", body = ArtifactSummaryResponse),
@@ -62,6 +66,7 @@ async fn get_artifact(
 #[utoipa::path(
     get,
     path = "/{key}/versions",
+    operation_id = operation_ids::LIST_ARTIFACT_VERSIONS,
     params(
         ("key" = String, Path, description = "Artifact key"),
         VersionListParams,
@@ -91,6 +96,7 @@ async fn list_versions(
 #[utoipa::path(
     get,
     path = "/{key}/versions/{digest}",
+    operation_id = operation_ids::GET_ARTIFACT_VERSION,
     params(
         ("key" = String, Path, description = "Artifact key"),
         ("digest" = String, Path, description = "Content digest"),
@@ -114,6 +120,7 @@ async fn get_version(
 #[utoipa::path(
     delete,
     path = "/{key}/versions/{digest}",
+    operation_id = operation_ids::DELETE_ARTIFACT_VERSION,
     params(
         ("key" = String, Path, description = "Artifact key"),
         ("digest" = String, Path, description = "Content digest"),

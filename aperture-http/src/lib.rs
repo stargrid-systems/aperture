@@ -3,7 +3,7 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
-use aperture_artifacts::LogRepository;
+use aperture_artifacts::{LogRepository, StorageError};
 use axum::routing::get;
 use axum::{Json, Router};
 use utoipa::OpenApi;
@@ -24,18 +24,18 @@ mod spectra;
 #[derive(Clone)]
 pub struct AppState {
     version: &'static str,
+    boot_id: String,
     spectra: Spectra,
-    logs: LogRepository,
 }
 
 impl AppState {
-    /// Wraps the gateway version, the Spectra frontend, and the log repository
-    /// for use as request state.
-    pub fn new(version: &'static str, spectra: Spectra, logs: LogRepository) -> Self {
+    /// Wraps the gateway version, boot id, and Spectra frontend for use as
+    /// request state.
+    pub fn new(version: &'static str, boot_id: String, spectra: Spectra) -> Self {
         Self {
             version,
+            boot_id,
             spectra,
-            logs,
         }
     }
 
@@ -43,12 +43,17 @@ impl AppState {
         self.version
     }
 
+    pub(crate) fn boot_id(&self) -> &str {
+        &self.boot_id
+    }
+
     pub(crate) fn spectra(&self) -> &Spectra {
         &self.spectra
     }
 
-    pub(crate) fn logs(&self) -> &LogRepository {
-        &self.logs
+    /// Opens a fresh connection to the log tables for this request.
+    pub(crate) fn logs(&self) -> Result<LogRepository, StorageError> {
+        self.spectra.artifacts().storage().logs()
     }
 }
 
