@@ -17,6 +17,7 @@ anyhow = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
 turso = { workspace = true, features = ["fts"] }
 uuid = { workspace = true }
 

@@ -574,6 +574,8 @@ pub struct LogSpanListParams {
     pub parent_id: Option<i64>,
     /// When true, only root spans (no parent) are returned.
     pub parent_null: Option<bool>,
+    /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.
+    pub fields: Option<String>,
 }
 
 /// Query params for `GET /api/v1/logs/targets`.

@@ -231,6 +231,7 @@ impl ArtifactRepository {
     /// Lists distinct keys, each with its newest version and version count.
     /// Ordered by key, ascending by default. `q` matches a substring of the
     /// key.
+    #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_keys(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<ArtifactKey>> {
         let paginator = Paginator::new(query, Order::Asc)?;
         let keyset = Keyset::unique("a.key", paginator.query_order());
@@ -272,6 +273,7 @@ impl ArtifactRepository {
 
     /// Lists the stored versions of `key`. Ordered by `sort`, descending by
     /// default. Optionally filtered by exact `media_type` and `version`.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_versions(
         &self,
         key: &str,
@@ -347,6 +349,7 @@ impl ArtifactRepository {
 
     /// Records the start of a download attempt and returns its assigned id.
     /// The row begins in the [`DownloadStatus::Running`] state.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn start_download(
         &self,
         artifact: &str,
@@ -429,6 +432,7 @@ impl ArtifactRepository {
 
     /// Lists download attempts, newest first, optionally filtered by `status`
     /// and artifact `key`.
+    #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_downloads(
         &self,
         status: Option<DownloadStatus>,

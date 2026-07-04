@@ -94,6 +94,7 @@ async fn list_spans(
     State(state): State<AppState>,
     Query(params): Query<LogSpanListParams>,
 ) -> Result<Json<Page<LogSpanResponse>>, ApiError> {
+    let fields = parse_field_filter(params.fields.as_deref())?;
     let query = params.to_query();
     let parent = match (params.parent_id, params.parent_null) {
         (Some(id), _) => aperture_artifacts::ParentFilter::ChildrenOf(id),
@@ -106,6 +107,7 @@ async fn list_spans(
         since: params.since,
         until: params.until,
         parent,
+        fields,
     };
     let logs = state.logs()?;
     let page = logs.list_spans(&filter, &query).await?;

@@ -24,6 +24,8 @@ const SQL_INSERT_EVENT: &str = sql!(
 
 const SQL_CLOSE_SPAN: &str = sql!(UPDATE spans SET ended_at = ?1 WHERE id = ?2);
 
+const SQL_CLOSE_OPEN_SPANS: &str = sql!(UPDATE spans SET ended_at = ?1 WHERE ended_at IS NULL);
+
 /// Severity level of a tracing event or span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -144,6 +146,7 @@ pub struct SpanFilter {
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
     pub parent: ParentFilter,
+    pub fields: Vec<(String, String)>,
 }
 
 /// Plain-data description of a span to persist via [`LogWriter::insert_span`].
@@ -255,6 +258,7 @@ impl LogRepository {
 
     /// Lists log events matching the given filters, ordered by timestamp
     /// descending by default.
+    #[tracing::instrument(level = "info", skip(self, filter, query))]
     pub async fn list_events(
         &self,
         filter: &EventFilter,
@@ -305,6 +309,7 @@ impl LogRepository {
     }
 
     /// Lists distinct event targets, optionally filtered by prefix.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_targets(&self, q: Option<&str>) -> Result<Vec<String>> {
         let sql = match q {
             Some(_) => {
@@ -331,6 +336,7 @@ impl LogRepository {
 
     /// Lists spans matching the given filters, ordered by started_at descending
     /// by default.
+    #[tracing::instrument(level = "info", skip(self, filter, query))]
     pub async fn list_spans(&self, filter: &SpanFilter, query: &ListQuery) -> Result<Page<Span>> {
         let paginator = Paginator::new(query, Order::Desc)?;
         let keyset = Keyset::with_id("started_at", paginator.query_order());
@@ -350,6 +356,9 @@ impl LogRepository {
         filters.prefix("target", filter.target.as_deref());
         filters.gte_int("started_at", filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int("started_at", filter.until.map(|ts| ts.as_millisecond()));
+        for (key, value) in &filter.fields {
+            filters.json_eq(key, Some(value));
+        }
         filters.keyset(&keyset, &paginator);
 
         let sql = format!(
@@ -375,6 +384,7 @@ impl LogRepository {
     }
 
     /// Returns a single span by id, if it exists.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn get_span(&self, id: i64) -> Result<Option<Span>> {
         let sql = format!(
             sql!(SELECT {cols} FROM spans WHERE id = ?1),
@@ -392,6 +402,7 @@ impl LogRepository {
     }
 
     /// Returns all events belonging to `span_id`, ordered by timestamp.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn events_for_span(&self, span_id: i64) -> Result<Vec<Event>> {
         let sql = format!(
             sql!(SELECT {cols} FROM events WHERE span_id = ?1 ORDER BY timestamp),
@@ -407,6 +418,18 @@ impl LogRepository {
             items.push(row_to_event(&row)?);
         }
         Ok(items)
+    }
+
+    /// Closes every span that is still open by setting its `ended_at` to the
+    /// given timestamp. Returns the number of rows updated.
+    pub async fn close_open_spans(&self, ended_at: Timestamp) -> Result<u64> {
+        self.connection
+            .execute(
+                SQL_CLOSE_OPEN_SPANS,
+                params_from_iter([Value::Integer(ended_at.as_millisecond())]),
+            )
+            .await
+            .map_err(database)
     }
 
     /// Deletes events and finished spans older than `before`. Returns the
@@ -433,6 +456,7 @@ impl LogRepository {
 
 /// Lists all distinct boot sessions, derived from the `boot_id` structured
 /// field of stored events. Ordered newest first.
+#[tracing::instrument(level = "info", skip(self))]
 pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
     const SQL_LIST_BOOTS: &str = r#"
         SELECT json_extract(fields, '$.boot_id') AS boot_id,
