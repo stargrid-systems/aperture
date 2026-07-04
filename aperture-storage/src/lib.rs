@@ -15,7 +15,7 @@ pub use self::artifact::{
 use self::error::database;
 pub use self::error::{Result, StorageError};
 pub use self::log::{
-    Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter,
+    BootInfo, Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter,
     ParentFilter, Span, SpanFilter, SpanInsertBuilder, SpanRecord,
 };
 use self::migration::run;

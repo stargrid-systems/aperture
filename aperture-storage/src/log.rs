@@ -103,6 +103,15 @@ pub struct Event {
     pub fields: Option<String>,
 }
 
+/// One boot session observed in the log store.
+#[derive(Debug, Clone)]
+pub struct BootInfo {
+    pub boot_id: String,
+    pub first_seen: Timestamp,
+    pub last_seen: Timestamp,
+    pub event_count: i64,
+}
+
 /// Filters for log event queries.
 pub struct EventFilter {
     pub min_level: Option<Level>,
@@ -268,11 +277,7 @@ impl LogRepository {
             filters.json_eq(key, Some(value));
         }
 
-        if let Some(q) = &filter.query {
-            filters.param(Value::Text(q.clone()), |idx| {
-                format!("message MATCH ?{idx}")
-            });
-        }
+        filters.like_any(&["message", "target", "fields"], filter.query.as_deref());
 
         filters.keyset(&keyset, &paginator);
 
@@ -424,6 +429,41 @@ impl LogRepository {
             .map_err(database)?;
         Ok(event_count)
     }
+
+/// Lists all distinct boot sessions, derived from the `boot_id` structured
+/// field of stored events. Ordered newest first.
+pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
+    const SQL_LIST_BOOTS: &str = r#"
+        SELECT json_extract(fields, '$.boot_id') AS boot_id,
+               MIN(timestamp) AS first_seen,
+               MAX(timestamp) AS last_seen,
+               COUNT(*) AS event_count
+        FROM events
+        WHERE fields IS NOT NULL
+          AND json_extract(fields, '$.boot_id') IS NOT NULL
+        GROUP BY boot_id
+        ORDER BY first_seen DESC
+    "#;
+    let mut rows = self
+        .connection
+        .query(SQL_LIST_BOOTS, params_from_iter(Vec::<Value>::new()))
+        .await
+        .map_err(database)?;
+    let mut boots = Vec::new();
+    while let Some(row) = rows.next().await.map_err(database)? {
+        let boot_id = match row.get_value(0).map_err(database)? {
+            Value::Text(text) => text,
+            _ => continue,
+        };
+        boots.push(BootInfo {
+            boot_id,
+            first_seen: req_ts(&row, 1)?,
+            last_seen: req_ts(&row, 2)?,
+            event_count: req_int(&row, 3)?,
+        });
+    }
+    Ok(boots)
+}
 
     /// Inserts a synthetic event recording that log records were dropped.
     pub async fn record_dropped(&self, count: u64, timestamp: Timestamp) -> Result<()> {

@@ -412,11 +412,9 @@ impl FieldCollector {
 
     fn store_str(&mut self, name: &str, value: &str) {
         match name {
-            "message" => {
-                self.message = Some(value.to_owned());
-                self.write_key(name);
-                write_json_string(&mut self.json, value);
-            }
+            // `message` is a dedicated column on the events table, so it is
+            // not also recorded as a structured field.
+            "message" => self.message = Some(value.to_owned()),
             "log.target" => self.log_target = Some(value.to_owned()),
             "log.file" => self.log_file = Some(value.to_owned()),
             "log.module_path" => {}

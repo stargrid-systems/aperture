@@ -6,8 +6,8 @@ use utoipa_axum::routes;
 
 use crate::AppState;
 use crate::dto::{
-    LogEventResponse, LogListParams, LogSpanDetailResponse, LogSpanListParams, LogSpanResponse,
-    LogTargetListParams, Page, event_page, span_page,
+    BootResponse, LogEventResponse, LogListParams, LogSpanDetailResponse, LogSpanListParams,
+    LogSpanResponse, LogTargetListParams, Page, boots_response, event_page, span_page,
 };
 use crate::error::ApiError;
 
@@ -17,6 +17,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_logs))
         .routes(routes!(list_log_targets))
+        .routes(routes!(list_log_boots))
         .routes(routes!(list_spans))
         .routes(routes!(get_span))
 }
@@ -64,6 +65,21 @@ async fn list_log_targets(
     let logs = state.logs()?;
     let targets = logs.list_targets(params.q.as_deref()).await?;
     Ok(Json(targets))
+}
+
+/// Lists distinct boot sessions, newest first.
+#[utoipa::path(
+    get,
+    path = "/boots",
+    operation_id = operation_ids::LIST_LOG_BOOTS,
+    responses((status = 200, description = "Boot sessions", body = Vec<BootResponse>)),
+)]
+async fn list_log_boots(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<BootResponse>>, ApiError> {
+    let logs = state.logs()?;
+    let boots = logs.list_boots().await?;
+    Ok(Json(boots_response(boots, state.boot_id())))
 }
 
 /// Lists tracing spans with optional filtering.

@@ -279,6 +279,28 @@ impl Filters {
         }
     }
 
+    /// Adds `(c1 LIKE ? ESCAPE '\' OR c2 LIKE ? ESCAPE '\' ...)` where each
+    /// column references the same reused param value, or nothing when `value`
+    /// is `None`. Wildcards in `value` are escaped, so it matches as a literal
+    /// substring.
+    pub(crate) fn like_any(&mut self, columns: &[&str], value: Option<&str>) {
+        let Some(value) = value else { return; };
+        self.params
+            .push(Value::Text(format!("%{}%", escape_like(value))));
+        self.separator();
+        let placeholder = self.params.len();
+        let mut first = true;
+        self.sql.push('(');
+        for col in columns {
+            if !first {
+                self.sql.push_str(" OR ");
+            }
+            first = false;
+            let _ = write!(self.sql, "{col} LIKE ?{placeholder} ESCAPE '\\'");
+        }
+        self.sql.push(')');
+    }
+
     /// Adds `column = ?` bound to the integer `value`, or nothing when `None`.
     pub(crate) fn eq_int(&mut self, column: &str, value: Option<i64>) {
         if let Some(value) = value {
@@ -319,17 +341,6 @@ impl Filters {
                 self.params.len()
             );
         }
-    }
-
-    /// Adds a condition with one bind param. `sql` receives the 1-based
-    /// placeholder number and must produce the SQL fragment. The param is
-    /// pushed after the fragment is written so the placeholder number is
-    /// correct.
-    pub(crate) fn param(&mut self, value: Value, sql: impl FnOnce(usize) -> String) {
-        self.separator();
-        let placeholder = self.params.len() + 1;
-        let _ = write!(self.sql, "{}", sql(placeholder));
-        self.params.push(value);
     }
 
     /// Adds the keyset resume condition for `paginator`, if it has a cursor.

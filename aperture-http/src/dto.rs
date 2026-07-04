@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use aperture_artifacts::{
-    Artifact, ArtifactKey, Download, DownloadProgress, DownloadStatus, Event, Level, ListQuery,
-    Order, Page as StoragePage, Span, VersionSort,
+    Artifact, ArtifactKey, BootInfo, Download, DownloadProgress, DownloadStatus, Event, Level,
+    ListQuery, Order, Page as StoragePage, Span, VersionSort,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -592,4 +592,35 @@ pub(crate) fn event_page(page: StoragePage<Event>) -> Page<LogEventResponse> {
 /// Maps a storage page of spans into the response envelope.
 pub(crate) fn span_page(page: StoragePage<Span>) -> Page<LogSpanResponse> {
     Page::from_storage(page, LogSpanResponse::from)
+}
+
+/// One boot session observed in the log store, returned by
+/// `GET /api/v1/logs/boots`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BootResponse {
+    /// Unique boot id (UUID).
+    pub boot_id: String,
+    /// Timestamp of the earliest event in this boot.
+    pub first_seen: Timestamp,
+    /// Timestamp of the latest event in this boot.
+    pub last_seen: Timestamp,
+    /// Number of events recorded so far in this boot.
+    pub event_count: i64,
+    /// True if this is the currently running gateway boot.
+    pub is_current: bool,
+}
+
+/// Maps a list of storage [`BootInfo`] into boot responses, marking the
+/// current boot id.
+pub(crate) fn boots_response(boots: Vec<BootInfo>, current_boot_id: &str) -> Vec<BootResponse> {
+    boots
+        .into_iter()
+        .map(|b| BootResponse {
+            is_current: b.boot_id == current_boot_id,
+            boot_id: b.boot_id,
+            first_seen: b.first_seen,
+            last_seen: b.last_seen,
+            event_count: b.event_count,
+        })
+        .collect()
 }

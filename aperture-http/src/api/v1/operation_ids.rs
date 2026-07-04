@@ -37,3 +37,6 @@ pub const LIST_SPANS: &str = "listSpans";
 
 /// `GET /api/v1/logs/spans/{id}`
 pub const GET_SPAN: &str = "getSpan";
+
+/// `GET /api/v1/logs/boots`
+pub const LIST_LOG_BOOTS: &str = "listLogBoots";

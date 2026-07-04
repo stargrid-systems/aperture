@@ -246,7 +246,7 @@ async fn filter_by_structured_fields() {
 }
 
 #[tokio::test]
-async fn fts_message_search() {
+async fn query_matches_message() {
     let storage = seeded_storage().await;
     let logs = storage.logs().unwrap();
 
@@ -272,6 +272,56 @@ async fn fts_message_search() {
             .iter()
             .all(|e| e.message.as_deref().unwrap().contains("download"))
     );
+}
+
+#[tokio::test]
+async fn query_matches_target() {
+    let storage = seeded_storage().await;
+    let logs = storage.logs().unwrap();
+
+    let page = logs
+        .list_events(
+            &EventFilter {
+                min_level: None,
+                target: None,
+                query: Some("aperture_http".to_owned()),
+                span_id: None,
+                since: None,
+                until: None,
+                fields: Vec::new(),
+            },
+            &ListQuery::default(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].target, "aperture_http::error");
+}
+
+#[tokio::test]
+async fn query_matches_structured_field() {
+    let storage = seeded_storage().await;
+    let logs = storage.logs().unwrap();
+
+    let page = logs
+        .list_events(
+            &EventFilter {
+                min_level: None,
+                target: None,
+                query: Some("ghcr.io".to_owned()),
+                span_id: None,
+                since: None,
+                until: None,
+                fields: Vec::new(),
+            },
+            &ListQuery::default(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].message.as_deref(), Some("starting download"));
 }
 
 #[tokio::test]
@@ -507,4 +557,44 @@ async fn nested_spans_preserve_parent_child() {
         .unwrap();
     assert_eq!(grandchildren.items.len(), 1);
     assert_eq!(grandchildren.items[0].name, "grandchild");
+}
+
+#[tokio::test]
+async fn list_boots_groups_by_boot_id_field() {
+    use aperture_storage::BootInfo;
+    let storage = Storage::open(":memory:").await.unwrap();
+    let logs = storage.logs().unwrap();
+
+    // Two distinct boot ids, with events interleaved in time but grouped apart.
+    logs.insert_event(Level::Info, "aperture", at(1_000))
+        .message(Some("first boot start"))
+        .fields(Some(r#"{"boot_id":"aaaa"}"#))
+        .execute()
+        .await
+        .unwrap();
+    logs.insert_event(Level::Info, "aperture", at(2_000))
+        .message(Some("first boot end"))
+        .fields(Some(r#"{"boot_id":"aaaa"}"#))
+        .execute()
+        .await
+        .unwrap();
+    logs.insert_event(Level::Info, "aperture", at(3_000))
+        .message(Some("second boot start"))
+        .fields(Some(r#"{"boot_id":"bbbb"}"#))
+        .execute()
+        .await
+        .unwrap();
+
+    let boots: Vec<BootInfo> = logs.list_boots().await.unwrap();
+
+    // Newest first.
+    assert_eq!(boots.len(), 2);
+    assert_eq!(boots[0].boot_id, "bbbb");
+    assert_eq!(boots[0].event_count, 1);
+    assert_eq!(boots[0].first_seen, at(3_000));
+    assert_eq!(boots[0].last_seen, at(3_000));
+    assert_eq!(boots[1].boot_id, "aaaa");
+    assert_eq!(boots[1].event_count, 2);
+    assert_eq!(boots[1].first_seen, at(1_000));
+    assert_eq!(boots[1].last_seen, at(2_000));
 }
