@@ -12,6 +12,8 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
+use super::operation_ids;
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_tasks, create_task))
@@ -28,6 +30,7 @@ pub fn definitions_router() -> OpenApiRouter<AppState> {
 #[utoipa::path(
     get,
     path = "",
+    operation_id = operation_ids::LIST_TASKS,
     params(TaskListParams),
     responses((status = 200, description = "Tasks", body = Page<TaskResponse>)),
 )]
@@ -61,6 +64,7 @@ async fn list_tasks(
 #[utoipa::path(
     post,
     path = "",
+    operation_id = operation_ids::CREATE_TASK,
     request_body = CreateTaskRequest,
     responses(
         (status = 202, description = "Task created", body = TaskResponse),
@@ -79,6 +83,7 @@ async fn create_task(
 #[utoipa::path(
     get,
     path = "/{id}",
+    operation_id = operation_ids::GET_TASK,
     params(("id" = i64, Path, description = "Task id")),
     responses(
         (status = 200, description = "Task", body = TaskResponse),
@@ -98,6 +103,7 @@ async fn get_task(
 #[utoipa::path(
     post,
     path = "/{id}/cancel",
+    operation_id = operation_ids::CANCEL_TASK,
     params(("id" = i64, Path, description = "Task id")),
     responses(
         (status = 202, description = "Cancellation requested"),
@@ -120,6 +126,7 @@ async fn cancel_task(
 #[utoipa::path(
     get,
     path = "",
+    operation_id = operation_ids::LIST_TASK_DEFINITIONS,
     responses((status = 200, description = "Task definitions", body = Vec<TaskDefinitionResponse>)),
 )]
 async fn list_definitions(State(state): State<AppState>) -> Json<Vec<TaskDefinitionResponse>> {

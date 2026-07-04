@@ -312,7 +312,7 @@ impl TaskRepository {
             None => {}
         }
         for filter in json {
-            filters.json_eq(filter.field.column(), filter.path, filter.value);
+            filters.json_path_eq(filter.field.column(), filter.path, filter.value);
         }
         filters.keyset(&keyset, &paginator);
 

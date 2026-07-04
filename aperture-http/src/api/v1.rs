@@ -8,12 +8,14 @@ use self::tasks::{definitions_router as task_definitions_routes, router as tasks
 use crate::AppState;
 use crate::dto::VersionResponse;
 
+pub mod operation_ids;
+
 mod artifacts;
 mod tasks;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(get_version))
+        .routes(routes!(get_gateway_version))
         .nest("/artifacts", artifacts_routes())
         .nest("/tasks", tasks_routes())
         .nest("/task-definitions", task_definitions_routes())
@@ -23,8 +25,9 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[utoipa::path(
     get,
     path = "/version",
+    operation_id = operation_ids::GET_GATEWAY_VERSION,
     responses((status = 200, description = "Gateway version", body = VersionResponse)),
 )]
-async fn get_version(State(state): State<AppState>) -> Json<VersionResponse> {
+async fn get_gateway_version(State(state): State<AppState>) -> Json<VersionResponse> {
     Json(VersionResponse::new(state.version()))
 }

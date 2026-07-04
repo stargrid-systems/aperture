@@ -286,7 +286,7 @@ impl Filters {
     /// from the caller. `path` and `value` are user input and are always bound,
     /// never interpolated, so the path cannot inject SQL. The `CAST` lets a
     /// numeric or boolean field match a text value too.
-    pub(crate) fn json_eq(&mut self, column: &str, path: &str, value: &str) {
+    pub(crate) fn json_path_eq(&mut self, column: &str, path: &str, value: &str) {
         self.separator();
         self.params.push(Value::Text(format!("$.{path}")));
         let path_ph = self.params.len();
