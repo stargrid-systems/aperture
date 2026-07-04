@@ -302,13 +302,27 @@ impl Inner {
         // The blob is present (shared from another key), so record without
         // pulling.
         if self.blobs.contains(&resolved.digest).await {
-            let artifact = reuse_artifact(request, &resolved, now);
+            let artifact = build_artifact(
+                request,
+                &resolved.digest,
+                &resolved.media_type,
+                resolved.version.clone(),
+                resolved.size,
+                now,
+            );
             repository.record_version(&artifact).await?;
             return Ok(artifact);
         }
 
         let fetched = self.execute(request, progress).await?;
-        let artifact = version_artifact(request, &fetched, Timestamp::now());
+        let artifact = build_artifact(
+            request,
+            &fetched.digest,
+            &fetched.media_type,
+            fetched.version.clone(),
+            fetched.size,
+            Timestamp::now(),
+        );
         repository.record_version(&artifact).await?;
         Ok(artifact)
     }
@@ -472,33 +486,26 @@ fn is_fresh(resolved_at: Timestamp, now: Timestamp) -> bool {
     now.as_millisecond() - resolved_at.as_millisecond() < RESOLUTION_TTL_MS
 }
 
-fn version_artifact(request: &FetchRequest, fetched: &Fetched, finished: Timestamp) -> Artifact {
+/// Builds a version record. Content is digest-addressed, so `at` stamps both
+/// the download and the verification: a present blob is proof enough.
+fn build_artifact(
+    request: &FetchRequest,
+    digest: &Digest,
+    media_type: &MediaType,
+    version: Option<String>,
+    size: u64,
+    at: Timestamp,
+) -> Artifact {
     Artifact {
         id: 0,
         key: request.key.clone(),
         source: request.source_str().to_owned(),
-        digest: fetched.digest.to_string(),
-        media_type: Some(fetched.media_type.to_string()),
-        version: fetched.version.clone(),
-        size_bytes: fetched.size as i64,
-        downloaded_at: finished,
-        verified_at: Some(finished),
-    }
-}
-
-/// Builds a version record for a blob already present on disk. The content is
-/// digest-addressed, so its presence is proof enough to mark it verified.
-fn reuse_artifact(request: &FetchRequest, resolved: &Resolved, now: Timestamp) -> Artifact {
-    Artifact {
-        id: 0,
-        key: request.key.clone(),
-        source: request.source_str().to_owned(),
-        digest: resolved.digest.to_string(),
-        media_type: Some(resolved.media_type.to_string()),
-        version: resolved.version.clone(),
-        size_bytes: resolved.size as i64,
-        downloaded_at: now,
-        verified_at: Some(now),
+        digest: digest.to_string(),
+        media_type: Some(media_type.to_string()),
+        version,
+        size_bytes: size as i64,
+        downloaded_at: at,
+        verified_at: Some(at),
     }
 }
 

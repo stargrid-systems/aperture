@@ -8,9 +8,8 @@ use self::tasks::{definitions_router as task_definitions_routes, router as tasks
 use crate::AppState;
 use crate::dto::VersionResponse;
 
-pub mod operation_ids;
-
 mod artifacts;
+pub mod operation_ids;
 mod tasks;
 
 pub fn router() -> OpenApiRouter<AppState> {
