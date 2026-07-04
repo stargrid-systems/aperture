@@ -106,6 +106,39 @@ pub enum StatusFilter {
     Exact(TaskStatus),
 }
 
+/// Which JSON payload of a task a [`JsonFilter`] reaches into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonField {
+    /// The task input.
+    Input,
+    /// The task output.
+    Output,
+}
+
+impl JsonField {
+    /// The column holding this payload. A fixed identifier, safe to interpolate.
+    fn column(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+        }
+    }
+}
+
+/// Matches a task whose `field` JSON equals `value` at `path`. `path` is a JSON
+/// path body without the leading `$.`, for example `key` or `source.reference`.
+/// The match is textual, so numeric and boolean fields compare by their text
+/// form.
+#[derive(Debug, Clone, Copy)]
+pub struct JsonFilter<'a> {
+    /// Which payload to look in.
+    pub field: JsonField,
+    /// The JSON path body, without the leading `$.`.
+    pub path: &'a str,
+    /// The value the field must equal.
+    pub value: &'a str,
+}
+
 /// How to filter a task listing by its place in the hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParentFilter {
@@ -250,12 +283,14 @@ impl TaskRepository {
     }
 
     /// Lists invocations, newest first, optionally filtered by `status`, `kind`,
-    /// and `parent`.
+    /// `parent`, and any number of `json` field matches over the input/output
+    /// payloads. All filters combine with `AND`.
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
         kind: Option<&str>,
         parent: Option<ParentFilter>,
+        json: &[JsonFilter<'_>],
         query: &ListQuery,
     ) -> Result<Page<TaskInvocation>> {
         let paginator = Paginator::new(query, Order::Desc)?;
@@ -275,6 +310,9 @@ impl TaskRepository {
             Some(ParentFilter::Root) => filters.raw("parent_id IS NULL"),
             Some(ParentFilter::Of(id)) => filters.eq_int("parent_id", Some(id)),
             None => {}
+        }
+        for filter in json {
+            filters.json_eq(filter.field.column(), filter.path, filter.value);
         }
         filters.keyset(&keyset, &paginator);
 

@@ -224,6 +224,49 @@ async fn reads_recorded_tasks() {
 }
 
 #[tokio::test]
+async fn filters_tasks_by_json_field() {
+    let (app, artifacts) = seeded_app().await;
+    let repo = artifacts.storage().tasks();
+    let spectra = repo
+        .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .await
+        .unwrap();
+    repo.finish(spectra, TaskStatus::Succeeded, at(1_050), Some(r#"{"version":"1.0"}"#), None)
+        .await
+        .unwrap();
+    let other = repo
+        .create("download", None, r#"{"key":"other"}"#, at(1_100))
+        .await
+        .unwrap();
+    repo.finish(other, TaskStatus::Failed, at(1_150), None, Some("boom"))
+        .await
+        .unwrap();
+
+    // Download history for one artifact key.
+    let (status, list) =
+        get_json(&app, "/api/v1/tasks?kind=download&input_path=key&input_value=spectra").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["input"]["key"], "spectra");
+
+    // Filter by an output field.
+    let (status, list) =
+        get_json(&app, "/api/v1/tasks?output_path=version&output_value=1.0").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+
+    // A path without its value is a bad request.
+    let (status, _) = get_json(&app, "/api/v1/tasks?input_path=key").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A malformed path is a bad request.
+    let (status, _) =
+        get_json(&app, "/api/v1/tasks?input_path=key;drop&input_value=x").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn create_rejects_unknown_kind() {
     let (app, _artifacts) = seeded_app().await;
     let (status, _) = post_json(&app, "/api/v1/tasks", json!({"kind": "nope", "input": {}})).await;

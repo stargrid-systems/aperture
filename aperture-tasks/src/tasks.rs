@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::{
-    ListQuery, Page, ParentFilter, StatusFilter, Storage, TaskInvocation, TaskStatus,
+    JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, Storage, TaskInvocation, TaskStatus,
 };
 use jiff::Timestamp;
 use serde::de::DeserializeOwned;
@@ -124,20 +124,21 @@ impl Tasks {
         Ok(invocation)
     }
 
-    /// Lists recorded invocations, optionally filtered by status, kind, and
-    /// parent.
+    /// Lists recorded invocations, optionally filtered by status, kind, parent,
+    /// and any number of `json` field matches over the input/output payloads.
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
         kind: Option<&str>,
         parent: Option<ParentFilter>,
+        json: &[JsonFilter<'_>],
         query: &ListQuery,
     ) -> Result<Page<TaskInvocation>, TaskError> {
         Ok(self
             .inner
             .storage
             .tasks()
-            .list(status, kind, parent, query)
+            .list(status, kind, parent, json, query)
             .await?)
     }
 

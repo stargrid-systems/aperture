@@ -36,11 +36,13 @@ async fn list_tasks(
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
     let tasks = state.tasks();
+    let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
     let page = tasks
         .list(
             params.status.map(Into::into),
             params.kind.as_deref(),
             params.parent_filter(),
+            &json,
             &params.to_query(),
         )
         .await?;

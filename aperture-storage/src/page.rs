@@ -281,6 +281,23 @@ impl Filters {
         let _ = write!(self.sql, "{column} IN ({placeholders})");
     }
 
+    /// Adds `CAST(json_extract(column, '$.<path>') AS TEXT) = ?`, matching a
+    /// field inside the JSON stored in `column`. `column` is a fixed identifier
+    /// from the caller. `path` and `value` are user input and are always bound,
+    /// never interpolated, so the path cannot inject SQL. The `CAST` lets a
+    /// numeric or boolean field match a text value too.
+    pub(crate) fn json_eq(&mut self, column: &str, path: &str, value: &str) {
+        self.separator();
+        self.params.push(Value::Text(format!("$.{path}")));
+        let path_ph = self.params.len();
+        self.params.push(Value::Text(value.to_owned()));
+        let value_ph = self.params.len();
+        let _ = write!(
+            self.sql,
+            "CAST(json_extract({column}, ?{path_ph}) AS TEXT) = ?{value_ph}"
+        );
+    }
+
     /// Adds `column LIKE ?` matching `value` as a literal substring (wildcards
     /// escaped), or nothing when `value` is `None`.
     pub(crate) fn like(&mut self, column: &str, value: Option<&str>) {

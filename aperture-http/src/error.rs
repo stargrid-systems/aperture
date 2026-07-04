@@ -11,6 +11,8 @@ use axum::response::{IntoResponse, Response};
 pub(crate) struct ApiError(StatusCode);
 
 impl ApiError {
+    /// The request was malformed.
+    pub(crate) const BAD_REQUEST: Self = Self(StatusCode::BAD_REQUEST);
     /// The requested resource does not exist.
     pub(crate) const NOT_FOUND: Self = Self(StatusCode::NOT_FOUND);
     /// The request conflicts with the resource's current state.

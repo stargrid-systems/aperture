@@ -12,7 +12,9 @@ use self::error::database;
 pub use self::error::{Result, StorageError};
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
-pub use self::task::{ParentFilter, StatusFilter, TaskInvocation, TaskRepository, TaskStatus};
+pub use self::task::{
+    JsonField, JsonFilter, ParentFilter, StatusFilter, TaskInvocation, TaskRepository, TaskStatus,
+};
 
 mod artifact;
 mod error;

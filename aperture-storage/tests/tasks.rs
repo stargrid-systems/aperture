@@ -1,4 +1,6 @@
-use aperture_storage::{ListQuery, ParentFilter, StatusFilter, Storage, TaskStatus};
+use aperture_storage::{
+    JsonField, JsonFilter, ListQuery, ParentFilter, StatusFilter, Storage, TaskStatus,
+};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -95,28 +97,28 @@ async fn list_filters_by_status_kind_and_parent() {
         .unwrap();
 
     let active = repo
-        .list(Some(StatusFilter::Active), None, None, &ListQuery::default())
+        .list(Some(StatusFilter::Active), None, None, &[], &ListQuery::default())
         .await
         .unwrap();
     let active_ids: Vec<i64> = active.items.iter().map(|task| task.id).collect();
     assert_eq!(active_ids, vec![download, parent]);
 
     let finished = repo
-        .list(Some(StatusFilter::Finished), None, None, &ListQuery::default())
+        .list(Some(StatusFilter::Finished), None, None, &[], &ListQuery::default())
         .await
         .unwrap();
     assert_eq!(finished.items.len(), 1);
     assert_eq!(finished.items[0].id, install);
 
     let downloads = repo
-        .list(None, Some("download"), None, &ListQuery::default())
+        .list(None, Some("download"), None, &[], &ListQuery::default())
         .await
         .unwrap();
     assert_eq!(downloads.items.len(), 1);
     assert_eq!(downloads.items[0].id, download);
 
     let roots = repo
-        .list(None, None, Some(ParentFilter::Root), &ListQuery::default())
+        .list(None, None, Some(ParentFilter::Root), &[], &ListQuery::default())
         .await
         .unwrap();
     assert_eq!(roots.items.len(), 1);
@@ -125,6 +127,90 @@ async fn list_filters_by_status_kind_and_parent() {
     let children = repo.children(parent).await.unwrap();
     let child_ids: Vec<i64> = children.iter().map(|task| task.id).collect();
     assert_eq!(child_ids, vec![download, install]);
+}
+
+#[tokio::test]
+async fn list_filters_by_json_input_and_output() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.tasks();
+
+    let spectra = repo
+        .create_running(
+            "download",
+            None,
+            r#"{"key":"spectra","source":{"reference":"ghcr.io/x/spectra:1"}}"#,
+            at(1_000),
+        )
+        .await
+        .unwrap();
+    repo.finish(spectra, TaskStatus::Succeeded, at(1_050), Some(r#"{"version":"1.0"}"#), None)
+        .await
+        .unwrap();
+    let other = repo
+        .create_running("download", None, r#"{"key":"other"}"#, at(1_100))
+        .await
+        .unwrap();
+    repo.finish(other, TaskStatus::Succeeded, at(1_150), Some(r#"{"version":"2.0"}"#), None)
+        .await
+        .unwrap();
+
+    // Filter by a top-level input field: the download history for one key.
+    let by_key = repo
+        .list(
+            None,
+            Some("download"),
+            None,
+            &[JsonFilter { field: JsonField::Input, path: "key", value: "spectra" }],
+            &ListQuery::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(by_key.items.iter().map(|t| t.id).collect::<Vec<_>>(), vec![spectra]);
+
+    // Filter by a nested input path.
+    let by_reference = repo
+        .list(
+            None,
+            None,
+            None,
+            &[JsonFilter {
+                field: JsonField::Input,
+                path: "source.reference",
+                value: "ghcr.io/x/spectra:1",
+            }],
+            &ListQuery::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(by_reference.items.len(), 1);
+    assert_eq!(by_reference.items[0].id, spectra);
+
+    // Filter by an output field.
+    let by_version = repo
+        .list(
+            None,
+            None,
+            None,
+            &[JsonFilter { field: JsonField::Output, path: "version", value: "2.0" }],
+            &ListQuery::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(by_version.items.len(), 1);
+    assert_eq!(by_version.items[0].id, other);
+
+    // A non-matching value returns nothing.
+    let none = repo
+        .list(
+            None,
+            None,
+            None,
+            &[JsonFilter { field: JsonField::Input, path: "key", value: "missing" }],
+            &ListQuery::default(),
+        )
+        .await
+        .unwrap();
+    assert!(none.items.is_empty());
 }
 
 #[tokio::test]

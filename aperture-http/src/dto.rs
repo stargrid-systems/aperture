@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use aperture_artifacts::{Artifact, ArtifactKey, ListQuery, Order, Page as StoragePage, VersionSort};
 use aperture_tasks::{
-    ParentFilter, Progress, ProgressMessage, StatusFilter, TaskDescriptor, TaskInvocation,
-    TaskStatus,
+    JsonField, JsonFilter, ParentFilter, Progress, ProgressMessage, StatusFilter, TaskDescriptor,
+    TaskInvocation, TaskStatus,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -432,6 +432,16 @@ pub struct TaskListParams {
     pub parent: Option<i64>,
     /// Only top-level tasks (no parent). Ignored when `parent` is set.
     pub root: Option<bool>,
+    /// Only tasks whose input JSON has `input_value` at this path, for example
+    /// `key` or `source.reference`. Requires `input_value`.
+    pub input_path: Option<String>,
+    /// The value the field at `input_path` must equal.
+    pub input_value: Option<String>,
+    /// Only tasks whose output JSON has `output_value` at this path. Requires
+    /// `output_value`.
+    pub output_path: Option<String>,
+    /// The value the field at `output_path` must equal.
+    pub output_value: Option<String>,
 }
 
 impl TaskListParams {
@@ -450,6 +460,40 @@ impl TaskListParams {
             _ => None,
         }
     }
+
+    /// Builds the input/output JSON filters. Returns `Err` if a path is given
+    /// without its value (or the reverse) or a path is not a simple JSON path.
+    pub(crate) fn json_filters(&self) -> Result<Vec<JsonFilter<'_>>, InvalidFilter> {
+        let mut filters = Vec::new();
+        let pairs = [
+            (JsonField::Input, &self.input_path, &self.input_value),
+            (JsonField::Output, &self.output_path, &self.output_value),
+        ];
+        for (field, path, value) in pairs {
+            match (path.as_deref(), value.as_deref()) {
+                (Some(path), Some(value)) if is_json_path(path) => {
+                    filters.push(JsonFilter { field, path, value });
+                }
+                (None, None) => {}
+                _ => return Err(InvalidFilter),
+            }
+        }
+        Ok(filters)
+    }
+}
+
+/// A task list request carried a malformed JSON filter.
+pub(crate) struct InvalidFilter;
+
+/// Accepts a simple JSON path body: object keys and array indexes, joined by
+/// dots. Rejects anything else so a malformed path fails fast instead of
+/// erroring inside the database.
+fn is_json_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 128
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'[' | b']'))
 }
 
 fn parse_json(raw: &str) -> Value {
