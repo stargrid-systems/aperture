@@ -13,6 +13,26 @@ use aperture_artifacts::{
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+/// Deserializes either a single comma-separated string or a sequence of
+/// strings into a `Vec<String>`. Accepts `target=A,B` (single param, comma
+/// separated) and `target=A&target=B` (repeated param) forms, as well as a
+/// single value `target=A`. Empty values produce an empty `Vec`.
+fn deserialize_single_or_vec_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(s) => s.split(',').filter(|p| !p.is_empty()).map(str::to_owned).collect(),
+        OneOrMany::Many(v) => v,
+    })
+}
 use uuid::Uuid;
 
 /// Version information returned by `GET /api/v1/version`.
@@ -536,8 +556,10 @@ pub struct LogListParams {
     pub order: Option<OrderParam>,
     /// Only events at this severity or higher.
     pub min_level: Option<LevelResponse>,
-    /// Only events whose target starts with this prefix.
-    pub target: Option<String>,
+    /// Only events whose target starts with any of these (comma-separated)
+    /// prefixes. Example: `aperture,aperture_http`.
+    #[serde(default, deserialize_with = "deserialize_single_or_vec_string")]
+    pub target: Vec<String>,
     /// Substring search across message, target, and structured fields.
     pub q: Option<String>,
     /// Only events belonging to this span.
@@ -564,8 +586,10 @@ pub struct LogSpanListParams {
     pub order: Option<OrderParam>,
     /// Only spans at this severity or higher.
     pub min_level: Option<LevelResponse>,
-    /// Only spans whose target starts with this prefix.
-    pub target: Option<String>,
+    /// Only spans whose target starts with any of these (comma-separated)
+    /// prefixes. Example: `aperture,aperture_storage`.
+    #[serde(default, deserialize_with = "deserialize_single_or_vec_string")]
+    pub target: Vec<String>,
     /// Only spans started at or after this time (RFC 3339).
     pub since: Option<Timestamp>,
     /// Only spans started at or before this time (RFC 3339).

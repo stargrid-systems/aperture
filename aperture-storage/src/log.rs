@@ -118,7 +118,7 @@ pub struct BootInfo {
 /// Filters for log event queries.
 pub struct EventFilter {
     pub min_level: Option<Level>,
-    pub target: Option<String>,
+    pub target: Vec<String>,
     pub query: Option<String>,
     pub span_id: Option<i64>,
     pub since: Option<Timestamp>,
@@ -142,7 +142,7 @@ pub enum ParentFilter {
 #[derive(Default)]
 pub struct SpanFilter {
     pub min_level: Option<Level>,
-    pub target: Option<String>,
+    pub target: Vec<String>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
     pub parent: ParentFilter,
@@ -273,7 +273,7 @@ impl LogRepository {
             filters.raw(&format!("{LEVEL_RANK_SQL} >= {}", min_level.rank()));
         }
 
-        filters.prefix("target", filter.target.as_deref());
+        filters.prefix_any("target", &filter.target);
         filters.eq_int("span_id", filter.span_id);
         filters.gte_int("timestamp", filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int("timestamp", filter.until.map(|ts| ts.as_millisecond()));
@@ -353,7 +353,7 @@ impl LogRepository {
             ParentFilter::ChildrenOf(id) => filters.eq_int("parent_id", Some(id)),
         }
 
-        filters.prefix("target", filter.target.as_deref());
+        filters.prefix_any("target", &filter.target);
         filters.gte_int("started_at", filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int("started_at", filter.until.map(|ts| ts.as_millisecond()));
         for (key, value) in &filter.fields {

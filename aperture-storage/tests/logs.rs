@@ -65,7 +65,7 @@ async fn list_events_newest_first() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,
@@ -99,7 +99,7 @@ async fn filter_by_min_level() {
         .list_events(
             &EventFilter {
                 min_level: Some(Level::Warn),
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,
@@ -125,7 +125,7 @@ async fn filter_by_target_prefix() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: Some("aperture_artifacts".to_owned()),
+                target: vec!["aperture_artifacts".to_owned()],
                 query: None,
                 span_id: None,
                 since: None,
@@ -155,7 +155,7 @@ async fn filter_by_span_id() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,
@@ -172,7 +172,7 @@ async fn filter_by_span_id() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: Some(span_id),
                 since: None,
@@ -197,7 +197,7 @@ async fn filter_by_time_range() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: Some(at(1_150)),
@@ -225,7 +225,7 @@ async fn filter_by_structured_fields() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,
@@ -254,7 +254,7 @@ async fn query_matches_message() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: Some("download".to_owned()),
                 span_id: None,
                 since: None,
@@ -283,7 +283,7 @@ async fn query_matches_target() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: Some("aperture_http".to_owned()),
                 span_id: None,
                 since: None,
@@ -308,7 +308,7 @@ async fn query_matches_structured_field() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: Some("ghcr.io".to_owned()),
                 span_id: None,
                 since: None,
@@ -381,7 +381,7 @@ async fn prune_before_deletes_old_events() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,
@@ -406,7 +406,7 @@ async fn record_dropped_inserts_synthetic_event() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,
@@ -441,7 +441,7 @@ async fn paginate_events() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,
@@ -465,7 +465,7 @@ async fn paginate_events() {
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: None,
+                target: Vec::new(),
                 query: None,
                 span_id: None,
                 since: None,

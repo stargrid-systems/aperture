@@ -268,15 +268,28 @@ impl Filters {
         }
     }
 
-    /// Adds `column LIKE ?` matching `value` as a literal prefix (wildcards
-    /// escaped), or nothing when `value` is `None`.
-    pub(crate) fn prefix(&mut self, column: &str, value: Option<&str>) {
-        if let Some(value) = value {
-            self.params
-                .push(Value::Text(format!("{}%", escape_like(value))));
-            self.separator();
-            let _ = write!(self.sql, "{column} LIKE ?{} ESCAPE '\\'", self.params.len());
+    /// Adds `(column LIKE ?1 ESCAPE '\' OR column LIKE ?2 ESCAPE '\' ...)`
+    /// matching any of `prefixes` as a literal prefix. Wildcards in each
+    /// prefix are escaped. Nothing happens when `prefixes` is empty.
+    pub(crate) fn prefix_any(&mut self, column: &str, prefixes: &[String]) {
+        if prefixes.is_empty() {
+            return;
         }
+        let mut placeholders: Vec<String> = Vec::with_capacity(prefixes.len());
+        for p in prefixes {
+            self.params
+                .push(Value::Text(format!("{}%", escape_like(p))));
+            placeholders.push(format!("?{}", self.params.len()));
+        }
+        self.separator();
+        let _ = write!(self.sql, "(");
+        for (i, ph) in placeholders.iter().enumerate() {
+            if i > 0 {
+                let _ = write!(self.sql, " OR ");
+            }
+            let _ = write!(self.sql, "{column} LIKE {ph} ESCAPE '\\'");
+        }
+        let _ = write!(self.sql, ")");
     }
 
     /// Adds `(c1 LIKE ? ESCAPE '\' OR c2 LIKE ? ESCAPE '\' ...)` where each
