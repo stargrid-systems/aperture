@@ -23,6 +23,7 @@ use tracing::{Event, Level as TracingLevel, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
+use uuid::Uuid;
 
 /// A record sent from the layer to the background writer.
 enum Record {
@@ -94,7 +95,7 @@ fn is_noisy_log_event(target: &str, level: &TracingLevel) -> bool {
 pub struct DbLogLayer {
     tx: mpsc::Sender<Record>,
     dropped: Arc<AtomicU64>,
-    boot_id: Arc<String>,
+    boot_id: Arc<Uuid>,
 }
 
 /// Handle to the background writer task. Keep it alive for as long as the
@@ -135,7 +136,7 @@ impl DbLogLayer {
     /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
     /// should be kept alive for the lifetime of the application. Call
     /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
-    pub fn spawn(writer: LogWriter, boot_id: String) -> (Self, WorkerHandle) {
+    pub fn spawn(writer: LogWriter, boot_id: Uuid) -> (Self, WorkerHandle) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let dropped = Arc::new(AtomicU64::new(0));
@@ -359,10 +360,10 @@ struct FieldCollector {
 }
 
 impl FieldCollector {
-    fn new(boot_id: &str) -> Self {
+    fn new(boot_id: &Uuid) -> Self {
         let mut json = String::new();
         let _ = write!(json, "{{\"boot_id\":");
-        write_json_string(&mut json, boot_id);
+        write_json_string(&mut json, &boot_id.to_string());
         Self {
             json,
             first: false,
@@ -483,8 +484,24 @@ impl Visit for FieldCollector {
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
-        let s = format!("{value}");
-        self.store_str(field.name(), &s);
+        // Record the entire source chain as a JSON array under the field name.
+        // The head entry is always the Display of `value`; each subsequent
+        // entry is the Display of `Error::source` walking down the chain.
+        // The same field name is reused so callers using `error = &err` still
+        // find the value under `error`, just shaped as an array.
+        self.write_key(field.name());
+        self.json.push('[');
+        let mut current: Option<&(dyn Error + 'static)> = Some(value);
+        let mut first = true;
+        while let Some(error) = current {
+            if !first {
+                self.json.push(',');
+            }
+            first = false;
+            write_json_string(&mut self.json, &format!("{error}"));
+            current = error.source();
+        }
+        self.json.push(']');
     }
 }
 

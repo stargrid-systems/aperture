@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use utoipa::OpenApi;
 use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa_axum::router::OpenApiRouter;
+use uuid::Uuid;
 
 use self::api::router as api_routes;
 use self::dto::{DownloadStatusParam, LevelResponse, OrderParam, VersionSortParam};
@@ -24,14 +25,14 @@ mod spectra;
 #[derive(Clone)]
 pub struct AppState {
     version: &'static str,
-    boot_id: String,
+    boot_id: Uuid,
     spectra: Spectra,
 }
 
 impl AppState {
     /// Wraps the gateway version, boot id, and Spectra frontend for use as
     /// request state.
-    pub fn new(version: &'static str, boot_id: String, spectra: Spectra) -> Self {
+    pub fn new(version: &'static str, boot_id: Uuid, spectra: Spectra) -> Self {
         Self {
             version,
             boot_id,
@@ -43,8 +44,8 @@ impl AppState {
         self.version
     }
 
-    pub(crate) fn boot_id(&self) -> &str {
-        &self.boot_id
+    pub(crate) fn boot_id(&self) -> Uuid {
+        self.boot_id
     }
 
     pub(crate) fn spectra(&self) -> &Spectra {

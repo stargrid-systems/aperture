@@ -562,25 +562,27 @@ async fn nested_spans_preserve_parent_child() {
 #[tokio::test]
 async fn list_boots_groups_by_boot_id_field() {
     use aperture_storage::BootInfo;
+    let a = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+    let b = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
     let storage = Storage::open(":memory:").await.unwrap();
     let logs = storage.logs().unwrap();
 
     // Two distinct boot ids, with events interleaved in time but grouped apart.
     logs.insert_event(Level::Info, "aperture", at(1_000))
         .message(Some("first boot start"))
-        .fields(Some(r#"{"boot_id":"aaaa"}"#))
+        .fields(Some(r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(2_000))
         .message(Some("first boot end"))
-        .fields(Some(r#"{"boot_id":"aaaa"}"#))
+        .fields(Some(r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(3_000))
         .message(Some("second boot start"))
-        .fields(Some(r#"{"boot_id":"bbbb"}"#))
+        .fields(Some(r#"{"boot_id":"00000000-0000-0000-0000-000000000002"}"#))
         .execute()
         .await
         .unwrap();
@@ -589,11 +591,11 @@ async fn list_boots_groups_by_boot_id_field() {
 
     // Newest first.
     assert_eq!(boots.len(), 2);
-    assert_eq!(boots[0].boot_id, "bbbb");
+    assert_eq!(boots[0].boot_id, b);
     assert_eq!(boots[0].event_count, 1);
     assert_eq!(boots[0].first_seen, at(3_000));
     assert_eq!(boots[0].last_seen, at(3_000));
-    assert_eq!(boots[1].boot_id, "aaaa");
+    assert_eq!(boots[1].boot_id, a);
     assert_eq!(boots[1].event_count, 2);
     assert_eq!(boots[1].first_seen, at(1_000));
     assert_eq!(boots[1].last_seen, at(2_000));

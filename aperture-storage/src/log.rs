@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use jiff::Timestamp;
 use turso::{Connection, Row, Statement, Value, params_from_iter};
+use uuid::Uuid;
 
 use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
@@ -106,7 +107,7 @@ pub struct Event {
 /// One boot session observed in the log store.
 #[derive(Debug, Clone)]
 pub struct BootInfo {
-    pub boot_id: String,
+    pub boot_id: Uuid,
     pub first_seen: Timestamp,
     pub last_seen: Timestamp,
     pub event_count: i64,
@@ -451,12 +452,15 @@ pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
         .map_err(database)?;
     let mut boots = Vec::new();
     while let Some(row) = rows.next().await.map_err(database)? {
-        let boot_id = match row.get_value(0).map_err(database)? {
+        let text = match row.get_value(0).map_err(database)? {
             Value::Text(text) => text,
             _ => continue,
         };
+        let Some(parsed) = Uuid::parse_str(&text).ok() else {
+            continue;
+        };
         boots.push(BootInfo {
-            boot_id,
+            boot_id: parsed,
             first_seen: req_ts(&row, 1)?,
             last_seen: req_ts(&row, 2)?,
             event_count: req_int(&row, 3)?,

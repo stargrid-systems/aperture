@@ -62,7 +62,11 @@ async fn seeded_app() -> (Router, Artifacts) {
     .unwrap();
 
     let spectra = Spectra::new(Arc::new(artifacts.clone()), SpectraConfig::default());
-    let state = AppState::new("test", "test-boot-id".to_owned(), spectra);
+    let state = AppState::new(
+        "test",
+        uuid::Uuid::parse_str("00000000-0000-0000-0000-0000000000aa").unwrap(),
+        spectra,
+    );
     (app(state), artifacts)
 }
 

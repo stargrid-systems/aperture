@@ -20,6 +20,7 @@ use aperture_artifacts::LogWriter;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
+use uuid::Uuid;
 
 use self::layer::{DbLogLayer, WorkerHandle};
 
@@ -35,7 +36,7 @@ const DEFAULT_FILTER: &str =
 /// Returns a [`WorkerHandle`] for clean shutdown. Keep it alive for the
 /// lifetime of the application and call [`WorkerHandle::shutdown`] before
 /// exiting to flush pending records.
-pub fn init(writer: LogWriter, boot_id: String) -> WorkerHandle {
+pub fn init(writer: LogWriter, boot_id: Uuid) -> WorkerHandle {
     use tracing_subscriber::EnvFilter;
 
     let console_filter =

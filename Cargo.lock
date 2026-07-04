@@ -157,6 +157,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+ "uuid",
 ]
 
 [[package]]
@@ -169,6 +170,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "turso",
+ "uuid",
 ]
 
 [[package]]

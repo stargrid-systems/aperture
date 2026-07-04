@@ -28,6 +28,7 @@ tracing = { workspace = true }
 # `jiff_0_2` schema detection only compiles when another such feature is on.
 utoipa = { workspace = true, features = ["macros", "axum_extras", "jiff_0_2", "uuid"] }
 utoipa-axum = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 aperture-artifacts = { workspace = true }
@@ -35,3 +36,4 @@ jiff = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["full"] }
 tower = { workspace = true, features = ["util"] }
+uuid = { workspace = true }

@@ -13,6 +13,7 @@ use aperture_artifacts::{
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use uuid::Uuid;
 
 /// Version information returned by `GET /api/v1/version`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -20,15 +21,15 @@ pub struct VersionResponse {
     /// Version of the Aperture gateway.
     pub aperture: String,
     /// Unique id of this gateway boot session.
-    pub boot_id: String,
+    pub boot_id: Uuid,
 }
 
 impl VersionResponse {
     /// Builds a response reporting the given gateway version and boot id.
-    pub fn new(version: &str, boot_id: &str) -> Self {
+    pub fn new(version: &str, boot_id: Uuid) -> Self {
         Self {
             aperture: version.to_owned(),
-            boot_id: boot_id.to_owned(),
+            boot_id,
         }
     }
 }
@@ -599,7 +600,7 @@ pub(crate) fn span_page(page: StoragePage<Span>) -> Page<LogSpanResponse> {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BootResponse {
     /// Unique boot id (UUID).
-    pub boot_id: String,
+    pub boot_id: Uuid,
     /// Timestamp of the earliest event in this boot.
     pub first_seen: Timestamp,
     /// Timestamp of the latest event in this boot.
@@ -612,7 +613,7 @@ pub struct BootResponse {
 
 /// Maps a list of storage [`BootInfo`] into boot responses, marking the
 /// current boot id.
-pub(crate) fn boots_response(boots: Vec<BootInfo>, current_boot_id: &str) -> Vec<BootResponse> {
+pub(crate) fn boots_response(boots: Vec<BootInfo>, current_boot_id: Uuid) -> Vec<BootResponse> {
     boots
         .into_iter()
         .map(|b| BootResponse {
