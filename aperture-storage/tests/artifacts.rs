@@ -45,7 +45,12 @@ async fn record_latest_and_get_version() {
         .unwrap();
     assert_eq!(specific.digest, "sha256:aaa");
 
-    assert!(repo.get_version("spectra", "missing").await.unwrap().is_none());
+    assert!(
+        repo.get_version("spectra", "missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -61,7 +66,13 @@ async fn record_version_is_idempotent_per_digest() {
     repo.record_version(&again).await.unwrap();
 
     let versions = repo
-        .list_versions("spectra", VersionSort::DownloadedAt, None, None, &ListQuery::default())
+        .list_versions(
+            "spectra",
+            VersionSort::DownloadedAt,
+            None,
+            None,
+            &ListQuery::default(),
+        )
         .await
         .unwrap();
     assert_eq!(versions.items.len(), 1);
@@ -106,43 +117,63 @@ async fn list_keys_paginates_with_cursor() {
     }
 
     let first = repo
-        .list_keys(None, &ListQuery {
-            limit: Some(2),
-            ..Default::default()
-        })
+        .list_keys(
+            None,
+            &ListQuery {
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
-        first.items.iter().map(|k| k.latest.key.as_str()).collect::<Vec<_>>(),
+        first
+            .items
+            .iter()
+            .map(|k| k.latest.key.as_str())
+            .collect::<Vec<_>>(),
         ["a", "b"]
     );
     let cursor = first.next_cursor.expect("more pages");
 
     let second = repo
-        .list_keys(None, &ListQuery {
-            limit: Some(2),
-            cursor: Some(cursor),
-            ..Default::default()
-        })
+        .list_keys(
+            None,
+            &ListQuery {
+                limit: Some(2),
+                cursor: Some(cursor),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
-        second.items.iter().map(|k| k.latest.key.as_str()).collect::<Vec<_>>(),
+        second
+            .items
+            .iter()
+            .map(|k| k.latest.key.as_str())
+            .collect::<Vec<_>>(),
         ["c"]
     );
     assert!(second.next_cursor.is_none());
 
     // Page back from the second page using its prev cursor.
     let back = repo
-        .list_keys(None, &ListQuery {
-            limit: Some(2),
-            cursor: Some(second.prev_cursor.expect("a previous page")),
-            ..Default::default()
-        })
+        .list_keys(
+            None,
+            &ListQuery {
+                limit: Some(2),
+                cursor: Some(second.prev_cursor.expect("a previous page")),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
-        back.items.iter().map(|k| k.latest.key.as_str()).collect::<Vec<_>>(),
+        back.items
+            .iter()
+            .map(|k| k.latest.key.as_str())
+            .collect::<Vec<_>>(),
         ["a", "b"]
     );
     assert!(back.next_cursor.is_some());
@@ -162,9 +193,15 @@ async fn list_keys_q_treats_wildcards_literally() {
         .unwrap();
 
     // `_` must match literally, not as a single-char wildcard.
-    let hits = repo.list_keys(Some("a_b"), &ListQuery::default()).await.unwrap();
+    let hits = repo
+        .list_keys(Some("a_b"), &ListQuery::default())
+        .await
+        .unwrap();
     assert_eq!(
-        hits.items.iter().map(|k| k.latest.key.as_str()).collect::<Vec<_>>(),
+        hits.items
+            .iter()
+            .map(|k| k.latest.key.as_str())
+            .collect::<Vec<_>>(),
         ["a_b"]
     );
 }
@@ -174,7 +211,11 @@ async fn list_versions_sorts_and_paginates() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.artifacts();
 
-    for (digest, ts) in [("sha256:a", 1_000), ("sha256:b", 3_000), ("sha256:c", 2_000)] {
+    for (digest, ts) in [
+        ("sha256:a", 1_000),
+        ("sha256:b", 3_000),
+        ("sha256:c", 2_000),
+    ] {
         repo.record_version(&version("spectra", digest, ts))
             .await
             .unwrap();
@@ -195,7 +236,11 @@ async fn list_versions_sorts_and_paginates() {
         .await
         .unwrap();
     assert_eq!(
-        first.items.iter().map(|v| v.digest.as_str()).collect::<Vec<_>>(),
+        first
+            .items
+            .iter()
+            .map(|v| v.digest.as_str())
+            .collect::<Vec<_>>(),
         ["sha256:b", "sha256:c"]
     );
     let cursor = first.next_cursor.expect("more pages");
@@ -215,7 +260,11 @@ async fn list_versions_sorts_and_paginates() {
         .await
         .unwrap();
     assert_eq!(
-        second.items.iter().map(|v| v.digest.as_str()).collect::<Vec<_>>(),
+        second
+            .items
+            .iter()
+            .map(|v| v.digest.as_str())
+            .collect::<Vec<_>>(),
         ["sha256:a"]
     );
 }
@@ -235,7 +284,13 @@ async fn delete_version_removes_only_that_version() {
     repo.delete_version("spectra", "sha256:aaa").await.unwrap();
 
     let versions = repo
-        .list_versions("spectra", VersionSort::DownloadedAt, None, None, &ListQuery::default())
+        .list_versions(
+            "spectra",
+            VersionSort::DownloadedAt,
+            None,
+            None,
+            &ListQuery::default(),
+        )
         .await
         .unwrap();
     assert_eq!(versions.items.len(), 1);
@@ -264,7 +319,14 @@ async fn persists_and_migrations_are_idempotent() {
     {
         // Reopening re-runs migrations, which must be a no-op, and still sees data.
         let storage = Storage::open(path).await.unwrap();
-        assert!(storage.artifacts().latest("spectra").await.unwrap().is_some());
+        assert!(
+            storage
+                .artifacts()
+                .latest("spectra")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     cleanup();

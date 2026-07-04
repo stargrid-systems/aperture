@@ -1,9 +1,8 @@
+use aperture_tasks::ProgressHandle;
 use oci_client::manifest::{OciDescriptor, OciImageManifest};
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 use tokio::io::AsyncWrite;
-
-use aperture_tasks::ProgressHandle;
 
 use super::{FetchMeta, Resolved};
 use crate::digest::Digest;
@@ -61,7 +60,8 @@ impl OciFetcher {
         })
     }
 
-    /// Pulls the manifest and returns the layer descriptor matching `media_type`.
+    /// Pulls the manifest and returns the layer descriptor matching
+    /// `media_type`.
     async fn resolve_layer(
         &self,
         reference: &Reference,
@@ -72,9 +72,11 @@ impl OciFetcher {
             .pull_image_manifest(reference, &RegistryAuth::Anonymous)
             .await
             .map_err(|err| ArtifactError::Fetch(err.into()))?;
-        find_layer(&manifest, media_type.as_str()).cloned().ok_or_else(|| {
-            ArtifactError::Fetch(anyhow::format_err!("no layer with media type {media_type}"))
-        })
+        find_layer(&manifest, media_type.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                ArtifactError::Fetch(anyhow::format_err!("no layer with media type {media_type}"))
+            })
     }
 }
 

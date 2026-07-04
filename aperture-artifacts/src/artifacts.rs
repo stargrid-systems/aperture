@@ -186,7 +186,12 @@ impl Artifacts {
 
     /// Returns the `(key, digest)` version, if stored.
     pub async fn version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
-        Ok(self.inner.storage.artifacts().get_version(key, digest).await?)
+        Ok(self
+            .inner
+            .storage
+            .artifacts()
+            .get_version(key, digest)
+            .await?)
     }
 
     /// Removes the `(key, digest)` version, and its blob if no other version
@@ -207,9 +212,9 @@ impl Artifacts {
         self.inner.download(&request, &progress).await
     }
 
-    /// Reconciles the catalog with the blob store. Removes catalog entries whose
-    /// blob is missing, removes blobs that no entry references, and clears
-    /// leftover temporary files.
+    /// Reconciles the catalog with the blob store. Removes catalog entries
+    /// whose blob is missing, removes blobs that no entry references, and
+    /// clears leftover temporary files.
     pub async fn sync(&self) -> Result<SyncReport> {
         self.inner.sync().await
     }
@@ -255,20 +260,23 @@ impl Inner {
             .await?
             .iter()
             .any(|version| version.digest == artifact.digest);
-        if !still_referenced
-            && let Ok(parsed) = artifact.digest.parse::<Digest>()
-        {
+        if !still_referenced && let Ok(parsed) = artifact.digest.parse::<Digest>() {
             self.blobs.remove(&parsed).await?;
         }
         Ok(true)
     }
 
     /// Resolves the request to a content digest, reuses the blob if it is
-    /// already present, and otherwise fetches it. Reuse is keyed on the resolved
-    /// digest, so the recorded source is irrelevant: the same content is never
-    /// pulled twice, and a repointed tag is picked up because the reference is
-    /// re-resolved (subject to the resolution cache).
-    async fn download(&self, request: &FetchRequest, progress: &ProgressHandle) -> Result<Artifact> {
+    /// already present, and otherwise fetches it. Reuse is keyed on the
+    /// resolved digest, so the recorded source is irrelevant: the same
+    /// content is never pulled twice, and a repointed tag is picked up
+    /// because the reference is re-resolved (subject to the resolution
+    /// cache).
+    async fn download(
+        &self,
+        request: &FetchRequest,
+        progress: &ProgressHandle,
+    ) -> Result<Artifact> {
         let repository = self.storage.artifacts();
         let now = Timestamp::now();
         let resolved = self.resolve(request, now).await?;
@@ -318,18 +326,23 @@ impl Inner {
                 media_type,
             } => {
                 let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(anyhow::format_err!("invalid reference {reference:?}: {err}"))
+                    ArtifactError::Fetch(anyhow::format_err!(
+                        "invalid reference {reference:?}: {err}"
+                    ))
                 })?;
                 self.oci.resolve(&reference, media_type).await?
             }
         };
-        self.resolutions.lock().expect("resolutions poisoned").insert(
-            key,
-            CachedResolution {
-                resolved: resolved.clone(),
-                resolved_at: now,
-            },
-        );
+        self.resolutions
+            .lock()
+            .expect("resolutions poisoned")
+            .insert(
+                key,
+                CachedResolution {
+                    resolved: resolved.clone(),
+                    resolved_at: now,
+                },
+            );
         Ok(resolved)
     }
 
@@ -360,7 +373,9 @@ impl Inner {
                 media_type,
             } => {
                 let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(anyhow::format_err!("invalid reference {reference:?}: {err}"))
+                    ArtifactError::Fetch(anyhow::format_err!(
+                        "invalid reference {reference:?}: {err}"
+                    ))
                 })?;
                 self.fetch_oci(&reference, media_type, progress).await
             }
@@ -369,8 +384,8 @@ impl Inner {
 
     /// Stages an OCI fetch into the blob store: streams the layer into a
     /// temporary file, verifies the bytes against the advertised digest, then
-    /// places the blob under its digest. The fetcher only ever sees the sink, so
-    /// it cannot reach the store on its own.
+    /// places the blob under its digest. The fetcher only ever sees the sink,
+    /// so it cannot reach the store on its own.
     async fn fetch_oci(
         &self,
         reference: &Reference,
@@ -518,7 +533,10 @@ mod tests {
         let a = oci_request("ghcr.io/x/spectra:1", "application/foo");
         let b = oci_request("ghcr.io/x/spectra:1", "application/bar");
         let c = oci_request("ghcr.io/x/spectra:2", "application/foo");
-        assert_eq!(a.cache_key(), oci_request("ghcr.io/x/spectra:1", "application/foo").cache_key());
+        assert_eq!(
+            a.cache_key(),
+            oci_request("ghcr.io/x/spectra:1", "application/foo").cache_key()
+        );
         assert_ne!(a.cache_key(), b.cache_key());
         assert_ne!(a.cache_key(), c.cache_key());
     }

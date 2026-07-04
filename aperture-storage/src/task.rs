@@ -14,7 +14,9 @@ use turso::{Connection, Row, Value, params_from_iter};
 use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::row::{int_or_null, opt_int, opt_text, opt_ts, req_int, req_text, req_ts, text_ref_or_null};
+use crate::row::{
+    int_or_null, opt_int, opt_text, opt_ts, req_int, req_text, req_ts, text_ref_or_null,
+};
 
 /// Columns selected for a [`TaskInvocation`], in [`row_to_task`] order.
 const TASK_COLUMNS: &str =
@@ -67,7 +69,9 @@ impl TaskStatus {
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
             "interrupted" => Ok(Self::Interrupted),
-            other => Err(StorageError::Decode(format!("unknown task status {other:?}"))),
+            other => Err(StorageError::Decode(format!(
+                "unknown task status {other:?}"
+            ))),
         }
     }
 }
@@ -118,7 +122,8 @@ pub enum JsonField {
 }
 
 impl JsonField {
-    /// The column holding this payload. A fixed identifier, safe to interpolate.
+    /// The column holding this payload. A fixed identifier, safe to
+    /// interpolate.
     fn column(self) -> &'static str {
         match self {
             Self::Input => "input",
@@ -134,15 +139,15 @@ const MAX_JSON_PATH_LEN: usize = 128;
 ///
 /// Accepts object keys and array indexes joined by dots, for example `key`,
 /// `source.reference`, or `items[0].name`. A key is made of ASCII letters,
-/// digits, `_`, and `-`. An index is decimal digits in square brackets. Anything
-/// else is rejected at construction, so a path `json_extract` would reject never
-/// reaches the database.
+/// digits, `_`, and `-`. An index is decimal digits in square brackets.
+/// Anything else is rejected at construction, so a path `json_extract` would
+/// reject never reaches the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JsonPath<'a>(&'a str);
 
 impl<'a> JsonPath<'a> {
-    /// Validates `path` as a JSON path body. Returns [`InvalidJsonPath`] if it is
-    /// empty, too long, or not the accepted key-and-index grammar.
+    /// Validates `path` as a JSON path body. Returns [`InvalidJsonPath`] if it
+    /// is empty, too long, or not the accepted key-and-index grammar.
     pub fn new(path: &'a str) -> StdResult<Self, InvalidJsonPath> {
         if is_valid_json_path(path) {
             Ok(Self(path))
@@ -233,8 +238,8 @@ impl TaskRepository {
         Self { connection }
     }
 
-    /// Records a new invocation in the [`TaskStatus::Pending`] state and returns
-    /// its assigned id. `input` is the JSON-encoded task input.
+    /// Records a new invocation in the [`TaskStatus::Pending`] state and
+    /// returns its assigned id. `input` is the JSON-encoded task input.
     pub async fn create(
         &self,
         kind: &str,
@@ -262,9 +267,10 @@ impl TaskRepository {
         Ok(self.connection.last_insert_rowid())
     }
 
-    /// Records a new invocation already in the [`TaskStatus::Running`] state and
-    /// returns its assigned id. Used when a task starts running the moment it is
-    /// created, so no observable [`TaskStatus::Pending`] step exists.
+    /// Records a new invocation already in the [`TaskStatus::Running`] state
+    /// and returns its assigned id. Used when a task starts running the
+    /// moment it is created, so no observable [`TaskStatus::Pending`] step
+    /// exists.
     pub async fn create_running(
         &self,
         kind: &str,
@@ -309,12 +315,12 @@ impl TaskRepository {
         Ok(())
     }
 
-    /// Records the terminal outcome of the invocation with `id`. `output` is the
-    /// JSON-encoded result on success, `error` the detail on failure.
+    /// Records the terminal outcome of the invocation with `id`. `output` is
+    /// the JSON-encoded result on success, `error` the detail on failure.
     ///
     /// Only an unfinished row is updated. A row that already reached a terminal
-    /// state keeps it, so a late interrupt during shutdown cannot clobber a task
-    /// that just succeeded.
+    /// state keeps it, so a late interrupt during shutdown cannot clobber a
+    /// task that just succeeded.
     pub async fn finish(
         &self,
         id: i64,
@@ -345,7 +351,10 @@ impl TaskRepository {
 
     /// Returns the invocation with `id`, if it exists.
     pub async fn get(&self, id: i64) -> Result<Option<TaskInvocation>> {
-        let sql = format!(sql!(SELECT {cols} FROM tasks WHERE id = ?1), cols = TASK_COLUMNS);
+        let sql = format!(
+            sql!(SELECT {cols} FROM tasks WHERE id = ?1),
+            cols = TASK_COLUMNS
+        );
         let mut rows = self
             .connection
             .query(&sql, params_from_iter([Value::Integer(id)]))
@@ -357,9 +366,9 @@ impl TaskRepository {
         }
     }
 
-    /// Lists invocations, newest first, optionally filtered by `status`, `kind`,
-    /// `parent`, and any number of `json` field matches over the input/output
-    /// payloads. All filters combine with `AND`.
+    /// Lists invocations, newest first, optionally filtered by `status`,
+    /// `kind`, `parent`, and any number of `json` field matches over the
+    /// input/output payloads. All filters combine with `AND`.
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
@@ -429,8 +438,8 @@ impl TaskRepository {
         Ok(tasks)
     }
 
-    /// Lists invocations still in an active state. After a clean start these are
-    /// leftovers from a process that stopped mid-run.
+    /// Lists invocations still in an active state. After a clean start these
+    /// are leftovers from a process that stopped mid-run.
     pub async fn list_active(&self) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE status IN (?1, ?2) ORDER BY id),
@@ -480,14 +489,23 @@ mod tests {
 
     #[test]
     fn json_path_accepts_keys_and_indexes() {
-        for path in ["key", "source.reference", "a_b-c", "items[0]", "a[0][1]", "a[10].b"] {
+        for path in [
+            "key",
+            "source.reference",
+            "a_b-c",
+            "items[0]",
+            "a[0][1]",
+            "a[10].b",
+        ] {
             assert!(JsonPath::new(path).is_ok(), "{path:?} should be valid");
         }
     }
 
     #[test]
     fn json_path_rejects_malformed() {
-        for path in ["", "a..b", ".a", "a.", "a[]", "a[", "a[0", "[0]", "a[b]", "a b", "a;b"] {
+        for path in [
+            "", "a..b", ".a", "a.", "a[]", "a[", "a[0", "[0]", "a[b]", "a b", "a;b",
+        ] {
             assert!(JsonPath::new(path).is_err(), "{path:?} should be invalid");
         }
     }

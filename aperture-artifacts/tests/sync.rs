@@ -36,7 +36,13 @@ async fn sync_removes_versions_without_blobs() {
     assert_eq!(report.removed_entries, 1);
 
     let versions = repo
-        .list_versions("spectra", VersionSort::DownloadedAt, None, None, &ListQuery::default())
+        .list_versions(
+            "spectra",
+            VersionSort::DownloadedAt,
+            None,
+            None,
+            &ListQuery::default(),
+        )
         .await
         .unwrap();
     assert!(versions.items.is_empty());

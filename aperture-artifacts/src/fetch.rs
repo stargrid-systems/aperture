@@ -11,8 +11,8 @@ use crate::media_type::MediaType;
 mod oci;
 
 /// What a source resolves to without transferring the blob. The `digest`
-/// identifies the content, so a blob already on disk under it can be reused. The
-/// rest describes the version to record.
+/// identifies the content, so a blob already on disk under it can be reused.
+/// The rest describes the version to record.
 #[derive(Debug, Clone)]
 pub struct Resolved {
     /// Content digest the source advertises.

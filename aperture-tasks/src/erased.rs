@@ -2,8 +2,8 @@
 //!
 //! The registry stores definitions behind this trait so it can hold many kinds
 //! together. Erasure happens only here: JSON is decoded into the kind's typed
-//! input on the way in, and the typed output is encoded back out. The body never
-//! sees a [`Value`]. A blanket impl bridges every [`TaskDefinition`].
+//! input on the way in, and the typed output is encoded back out. The body
+//! never sees a [`Value`]. A blanket impl bridges every [`TaskDefinition`].
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -12,9 +12,8 @@ use futures_util::FutureExt;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::task::{AbortHandle, JoinSet};
-use utoipa::PartialSchema;
-use utoipa::ToSchema;
 use utoipa::openapi::{RefOr, Schema};
+use utoipa::{PartialSchema, ToSchema};
 
 use crate::context::TaskContext;
 use crate::definition::{Capabilities, TaskDefinition};
@@ -98,13 +97,18 @@ impl<T: TaskDefinition> ErasedDefinition for T {
             // record is finished and anyone awaiting it (or shutdown) is woken.
             // Without this a panic would leave the phase Running forever.
             let outcome = AssertUnwindSafe(async {
-                let input: T::Input = serde_json::from_value(input).map_err(TaskError::DecodeInput)?;
+                let input: T::Input =
+                    serde_json::from_value(input).map_err(TaskError::DecodeInput)?;
                 let output = TaskDefinition::run(&*self, input, run_ctx).await?;
                 serde_json::to_value(output).map_err(TaskError::EncodeOutput)
             })
             .catch_unwind()
             .await
-            .unwrap_or_else(|_| Err(TaskError::Run(RunError::Failed(anyhow::format_err!("task panicked")))));
+            .unwrap_or_else(|_| {
+                Err(TaskError::Run(RunError::Failed(anyhow::format_err!(
+                    "task panicked"
+                ))))
+            });
             ctx.complete(outcome).await;
         })
     }

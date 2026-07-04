@@ -5,9 +5,10 @@
 //! [`Tasks`] spawns tasks, records every invocation in storage, tracks the
 //! running ones, and hands back a typed [`TaskHandle`].
 //!
-//! Cancellation is cooperative: a body observes [`TaskContext::check_cancelled`]
-//! and unwinds. Capabilities on a definition declare whether a kind can be
-//! cancelled at all and whether it is safe to interrupt across a restart.
+//! Cancellation is cooperative: a body observes
+//! [`TaskContext::check_cancelled`] and unwinds. Capabilities on a definition
+//! declare whether a kind can be cancelled at all and whether it is safe to
+//! interrupt across a restart.
 
 pub use aperture_storage::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ListQuery, Order, Page, ParentFilter,

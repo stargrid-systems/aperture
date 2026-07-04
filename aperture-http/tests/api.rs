@@ -51,7 +51,11 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
     registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
     let tasks = Tasks::new(artifacts.storage().clone(), registry);
 
-    let spectra = Spectra::new(Arc::clone(&artifacts), tasks.clone(), SpectraConfig::default());
+    let spectra = Spectra::new(
+        Arc::clone(&artifacts),
+        tasks.clone(),
+        SpectraConfig::default(),
+    );
     let state = AppState::new("test", spectra, tasks);
     (app(state), artifacts)
 }
@@ -125,7 +129,11 @@ async fn paginates_artifacts_with_cursor() {
 
     // Page back to the first item using the prev cursor.
     let back_cursor = second["prev_cursor"].as_str().expect("a previous page");
-    let (_, back) = get_json(&app, &format!("/api/v1/artifacts?limit=1&cursor={back_cursor}")).await;
+    let (_, back) = get_json(
+        &app,
+        &format!("/api/v1/artifacts?limit=1&cursor={back_cursor}"),
+    )
+    .await;
     assert_eq!(back["items"][0]["key"], "firmware");
 }
 
@@ -207,9 +215,15 @@ async fn reads_recorded_tasks() {
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
         .await
         .unwrap();
-    repo.finish(id, TaskStatus::Succeeded, at(2_000), Some(r#"{"digest":"sha256:bbb"}"#), None)
-        .await
-        .unwrap();
+    repo.finish(
+        id,
+        TaskStatus::Succeeded,
+        at(2_000),
+        Some(r#"{"digest":"sha256:bbb"}"#),
+        None,
+    )
+    .await
+    .unwrap();
 
     let (status, list) = get_json(&app, "/api/v1/tasks").await;
     assert_eq!(status, StatusCode::OK);
@@ -231,9 +245,15 @@ async fn filters_tasks_by_json_field() {
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
         .await
         .unwrap();
-    repo.finish(spectra, TaskStatus::Succeeded, at(1_050), Some(r#"{"version":"1.0"}"#), None)
-        .await
-        .unwrap();
+    repo.finish(
+        spectra,
+        TaskStatus::Succeeded,
+        at(1_050),
+        Some(r#"{"version":"1.0"}"#),
+        None,
+    )
+    .await
+    .unwrap();
     let other = repo
         .create("download", None, r#"{"key":"other"}"#, at(1_100))
         .await
@@ -243,16 +263,18 @@ async fn filters_tasks_by_json_field() {
         .unwrap();
 
     // Download history for one artifact key.
-    let (status, list) =
-        get_json(&app, "/api/v1/tasks?kind=download&input_path=key&input_value=spectra").await;
+    let (status, list) = get_json(
+        &app,
+        "/api/v1/tasks?kind=download&input_path=key&input_value=spectra",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let items = list["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["input"]["key"], "spectra");
 
     // Filter by an output field.
-    let (status, list) =
-        get_json(&app, "/api/v1/tasks?output_path=version&output_value=1.0").await;
+    let (status, list) = get_json(&app, "/api/v1/tasks?output_path=version&output_value=1.0").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["items"].as_array().unwrap().len(), 1);
 
@@ -261,13 +283,11 @@ async fn filters_tasks_by_json_field() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // A malformed path is a bad request.
-    let (status, _) =
-        get_json(&app, "/api/v1/tasks?input_path=key;drop&input_value=x").await;
+    let (status, _) = get_json(&app, "/api/v1/tasks?input_path=key;drop&input_value=x").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // A structurally invalid path (empty segment) is a bad request, not a 500.
-    let (status, _) =
-        get_json(&app, "/api/v1/tasks?input_path=a..b&input_value=x").await;
+    let (status, _) = get_json(&app, "/api/v1/tasks?input_path=a..b&input_value=x").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -306,4 +326,3 @@ async fn filters_artifacts_and_versions() {
     let (_, miss) = get_json(&app, "/api/v1/artifacts/spectra/versions?version=9.9.9").await;
     assert!(miss["items"].as_array().unwrap().is_empty());
 }
-

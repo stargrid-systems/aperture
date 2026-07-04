@@ -1,7 +1,7 @@
 //! Shared helpers for binding values and decoding rows.
 //!
-//! Repositories convert between domain types and turso [`Value`]s through these,
-//! so the `NULL` handling and the decode error messages stay consistent.
+//! Repositories convert between domain types and turso [`Value`]s through
+//! these, so the `NULL` handling and the decode error messages stay consistent.
 
 use jiff::Timestamp;
 use turso::{Row, Value};

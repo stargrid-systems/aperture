@@ -1,16 +1,16 @@
 //! Error types for the task system.
 //!
 //! Two concerns are kept apart. [`RunError`] is what a task body returns from
-//! its `run` function: the body was cancelled or it failed. [`TaskError`] is the
-//! system error for operating the task system: resolving kinds, encoding and
-//! decoding payloads, and talking to storage.
+//! its `run` function: the body was cancelled or it failed. [`TaskError`] is
+//! the system error for operating the task system: resolving kinds, encoding
+//! and decoding payloads, and talking to storage.
 
 use aperture_storage::StorageError;
 
 /// The outcome of a task body that did not succeed.
 ///
-/// A task author returns this from `TaskDefinition::run`. Any error converts into
-/// [`RunError::Failed`] with `?`, and a cooperative stop is reported as
+/// A task author returns this from `TaskDefinition::run`. Any error converts
+/// into [`RunError::Failed`] with `?`, and a cooperative stop is reported as
 /// [`RunError::Cancelled`].
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -56,10 +56,10 @@ pub enum TaskError {
 }
 
 impl From<TaskError> for RunError {
-    /// Lets a task body use `?` on task-system calls (spawning a child, awaiting
-    /// its output). A nested body outcome is preserved, so a cancelled child
-    /// surfaces as [`RunError::Cancelled`]. Any other system error becomes a
-    /// [`RunError::Failed`].
+    /// Lets a task body use `?` on task-system calls (spawning a child,
+    /// awaiting its output). A nested body outcome is preserved, so a
+    /// cancelled child surfaces as [`RunError::Cancelled`]. Any other
+    /// system error becomes a [`RunError::Failed`].
     fn from(err: TaskError) -> Self {
         match err {
             TaskError::Run(run) => run,

@@ -26,7 +26,11 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let tasks = Tasks::new(artifacts.storage().clone(), registry);
     tasks.reconcile().await.into_diagnostic()?;
 
-    let spectra = Spectra::new(Arc::clone(&artifacts), tasks.clone(), SpectraConfig::default());
+    let spectra = Spectra::new(
+        Arc::clone(&artifacts),
+        tasks.clone(),
+        SpectraConfig::default(),
+    );
     // Open a cached frontend right away. A missing one is fetched lazily on the
     // first request.
     spectra

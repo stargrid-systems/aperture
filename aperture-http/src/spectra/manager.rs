@@ -86,7 +86,11 @@ impl Spectra {
                 media_type: self.config.media_type.as_str().to_owned(),
             },
         };
-        self.tasks.spawn::<DownloadDefinition>(input).await?.wait().await?;
+        self.tasks
+            .spawn::<DownloadDefinition>(input)
+            .await?
+            .wait()
+            .await?;
         if !self.activate_if_present().await? {
             anyhow::bail!(
                 "spectra artifact {:?} missing after download",

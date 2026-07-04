@@ -25,9 +25,15 @@ async fn create_then_finish_records_lifecycle() {
     assert!(task.started_at.is_none());
 
     repo.mark_running(id, at(1_100)).await.unwrap();
-    repo.finish(id, TaskStatus::Succeeded, at(2_000), Some(r#"{"size":42}"#), None)
-        .await
-        .unwrap();
+    repo.finish(
+        id,
+        TaskStatus::Succeeded,
+        at(2_000),
+        Some(r#"{"size":42}"#),
+        None,
+    )
+    .await
+    .unwrap();
 
     let task = repo.get(id).await.unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Succeeded);
@@ -61,15 +67,27 @@ async fn finish_does_not_overwrite_a_finished_row() {
         .create_running("download", None, "{}", at(1_000))
         .await
         .unwrap();
-    repo.finish(id, TaskStatus::Succeeded, at(1_100), Some(r#"{"ok":true}"#), None)
-        .await
-        .unwrap();
+    repo.finish(
+        id,
+        TaskStatus::Succeeded,
+        at(1_100),
+        Some(r#"{"ok":true}"#),
+        None,
+    )
+    .await
+    .unwrap();
 
     // A late interrupt (shutdown racing a task that just succeeded) must not
     // clobber the terminal row.
-    repo.finish(id, TaskStatus::Interrupted, at(1_200), None, Some("interrupted"))
-        .await
-        .unwrap();
+    repo.finish(
+        id,
+        TaskStatus::Interrupted,
+        at(1_200),
+        None,
+        Some("interrupted"),
+    )
+    .await
+    .unwrap();
 
     let task = repo.get(id).await.unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Succeeded);
@@ -97,14 +115,26 @@ async fn list_filters_by_status_kind_and_parent() {
         .unwrap();
 
     let active = repo
-        .list(Some(StatusFilter::Active), None, None, &[], &ListQuery::default())
+        .list(
+            Some(StatusFilter::Active),
+            None,
+            None,
+            &[],
+            &ListQuery::default(),
+        )
         .await
         .unwrap();
     let active_ids: Vec<i64> = active.items.iter().map(|task| task.id).collect();
     assert_eq!(active_ids, vec![download, parent]);
 
     let finished = repo
-        .list(Some(StatusFilter::Finished), None, None, &[], &ListQuery::default())
+        .list(
+            Some(StatusFilter::Finished),
+            None,
+            None,
+            &[],
+            &ListQuery::default(),
+        )
         .await
         .unwrap();
     assert_eq!(finished.items.len(), 1);
@@ -118,7 +148,13 @@ async fn list_filters_by_status_kind_and_parent() {
     assert_eq!(downloads.items[0].id, download);
 
     let roots = repo
-        .list(None, None, Some(ParentFilter::Root), &[], &ListQuery::default())
+        .list(
+            None,
+            None,
+            Some(ParentFilter::Root),
+            &[],
+            &ListQuery::default(),
+        )
         .await
         .unwrap();
     assert_eq!(roots.items.len(), 1);
@@ -143,16 +179,28 @@ async fn list_filters_by_json_input_and_output() {
         )
         .await
         .unwrap();
-    repo.finish(spectra, TaskStatus::Succeeded, at(1_050), Some(r#"{"version":"1.0"}"#), None)
-        .await
-        .unwrap();
+    repo.finish(
+        spectra,
+        TaskStatus::Succeeded,
+        at(1_050),
+        Some(r#"{"version":"1.0"}"#),
+        None,
+    )
+    .await
+    .unwrap();
     let other = repo
         .create_running("download", None, r#"{"key":"other"}"#, at(1_100))
         .await
         .unwrap();
-    repo.finish(other, TaskStatus::Succeeded, at(1_150), Some(r#"{"version":"2.0"}"#), None)
-        .await
-        .unwrap();
+    repo.finish(
+        other,
+        TaskStatus::Succeeded,
+        at(1_150),
+        Some(r#"{"version":"2.0"}"#),
+        None,
+    )
+    .await
+    .unwrap();
 
     // Filter by a top-level input field: the download history for one key.
     let by_key = repo
@@ -169,7 +217,10 @@ async fn list_filters_by_json_input_and_output() {
         )
         .await
         .unwrap();
-    assert_eq!(by_key.items.iter().map(|t| t.id).collect::<Vec<_>>(), vec![spectra]);
+    assert_eq!(
+        by_key.items.iter().map(|t| t.id).collect::<Vec<_>>(),
+        vec![spectra]
+    );
 
     // Filter by a nested input path.
     let by_reference = repo
@@ -230,10 +281,19 @@ async fn list_active_finds_unfinished_invocations() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.tasks();
 
-    let pending = repo.create("download", None, "{}", at(1_000)).await.unwrap();
-    let running = repo.create("download", None, "{}", at(1_100)).await.unwrap();
+    let pending = repo
+        .create("download", None, "{}", at(1_000))
+        .await
+        .unwrap();
+    let running = repo
+        .create("download", None, "{}", at(1_100))
+        .await
+        .unwrap();
     repo.mark_running(running, at(1_150)).await.unwrap();
-    let done = repo.create("download", None, "{}", at(1_200)).await.unwrap();
+    let done = repo
+        .create("download", None, "{}", at(1_200))
+        .await
+        .unwrap();
     repo.finish(done, TaskStatus::Succeeded, at(1_300), None, None)
         .await
         .unwrap();

@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use aperture_storage::{Storage, TaskStatus};
 use aperture_tasks::{
-    Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry, Tasks,
+    Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry,
+    Tasks,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -137,7 +138,9 @@ impl TaskDefinition for Fail {
 
     async fn run(&self, _input: Empty, _ctx: TaskContext) -> Result<Empty, RunError> {
         Err(RunError::Failed(
-            anyhow::anyhow!("root cause").context("middle").context("outer failure"),
+            anyhow::anyhow!("root cause")
+                .context("middle")
+                .context("outer failure"),
         ))
     }
 }
@@ -184,7 +187,10 @@ async fn live_progress_is_visible_while_running() {
     let progress = handle.progress().expect("running task has progress");
     assert_eq!(progress.total, Some(10));
     assert_eq!(progress.done, Some(4));
-    assert_eq!(progress.message.expect("running task has a message").key, "working");
+    assert_eq!(
+        progress.message.expect("running task has a message").key,
+        "working"
+    );
 
     gate.notify_one();
     handle.wait().await.unwrap();
@@ -251,7 +257,10 @@ async fn child_inherits_parent_cancellation() {
 
     // Cancelling the parent cancels the child through the shared token.
     assert!(tasks.cancel(parent_id).await.unwrap());
-    assert!(matches!(handle.wait().await, Err(TaskError::Run(RunError::Cancelled))));
+    assert!(matches!(
+        handle.wait().await,
+        Err(TaskError::Run(RunError::Cancelled))
+    ));
 
     let recorded = storage.tasks().get(child).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Cancelled);
@@ -269,7 +278,10 @@ async fn panicking_task_settles_as_failed() {
     let id = handle.id();
 
     // The body panics, but wait() must still return rather than hang forever.
-    assert!(matches!(handle.wait().await, Err(TaskError::Run(RunError::Failed(_)))));
+    assert!(matches!(
+        handle.wait().await,
+        Err(TaskError::Run(RunError::Failed(_)))
+    ));
 
     let recorded = storage.tasks().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Failed);
@@ -287,7 +299,10 @@ async fn failed_task_records_full_error_chain() {
 
     let handle = tasks.spawn::<Fail>(Empty {}).await.unwrap();
     let id = handle.id();
-    assert!(matches!(handle.wait().await, Err(TaskError::Run(RunError::Failed(_)))));
+    assert!(matches!(
+        handle.wait().await,
+        Err(TaskError::Run(RunError::Failed(_)))
+    ));
 
     let recorded = storage.tasks().get(id).await.unwrap().unwrap();
     let error = recorded.error.expect("failed task records an error");
@@ -303,13 +318,18 @@ async fn cancel_distinguishes_unknown_from_settled() {
     let tasks = Tasks::new(storage.clone(), registry);
 
     // An unknown id is not found.
-    assert!(matches!(tasks.cancel(999).await, Err(TaskError::NotFound(999))));
+    assert!(matches!(
+        tasks.cancel(999).await,
+        Err(TaskError::NotFound(999))
+    ));
 
     // A task that already finished is reported as settled, not unknown.
     let handle = tasks.spawn::<Double>(DoubleIn { n: 1 }).await.unwrap();
     let id = handle.id();
     handle.wait().await.unwrap();
-    assert!(matches!(tasks.cancel(id).await, Err(TaskError::AlreadySettled(settled)) if settled == id));
+    assert!(
+        matches!(tasks.cancel(id).await, Err(TaskError::AlreadySettled(settled)) if settled == id)
+    );
 }
 
 #[tokio::test]

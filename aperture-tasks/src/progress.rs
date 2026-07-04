@@ -5,8 +5,8 @@
 //! display. Finished tasks have no live progress.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// A localizable progress message: a translation key plus the arguments to
 /// interpolate into it. The frontend resolves the key for the active locale, so

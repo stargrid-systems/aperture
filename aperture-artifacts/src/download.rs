@@ -83,7 +83,11 @@ impl TaskDefinition for DownloadDefinition {
         }
     }
 
-    async fn run(&self, input: DownloadInput, ctx: TaskContext) -> Result<DownloadOutput, RunError> {
+    async fn run(
+        &self,
+        input: DownloadInput,
+        ctx: TaskContext,
+    ) -> Result<DownloadOutput, RunError> {
         let request = FetchRequest {
             key: input.key,
             source: input.source.into(),

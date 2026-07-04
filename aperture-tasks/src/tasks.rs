@@ -113,7 +113,9 @@ impl Tasks {
         input: T::Input,
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
-        self.inner.spawn_value::<T::Output>(T::KIND, value, None).await
+        self.inner
+            .spawn_value::<T::Output>(T::KIND, value, None)
+            .await
     }
 
     /// Spawns a top-level task by kind string, validating `input` against the
@@ -147,10 +149,11 @@ impl Tasks {
         Ok(self.inner.storage.tasks().get(id).await?)
     }
 
-    /// Requests cooperative cancellation of the running task `id`. Returns `true`
-    /// if cancellation was requested and `false` if the kind is not cancellable.
-    /// Returns [`TaskError::AlreadySettled`] if the task exists but has finished,
-    /// and [`TaskError::NotFound`] if no such task exists.
+    /// Requests cooperative cancellation of the running task `id`. Returns
+    /// `true` if cancellation was requested and `false` if the kind is not
+    /// cancellable. Returns [`TaskError::AlreadySettled`] if the task
+    /// exists but has finished, and [`TaskError::NotFound`] if no such task
+    /// exists.
     pub async fn cancel(&self, id: i64) -> Result<bool, TaskError> {
         {
             let running = self.inner.running.lock().expect("running poisoned");
@@ -201,7 +204,13 @@ impl Tasks {
             self.inner
                 .storage
                 .tasks()
-                .finish(task.id, TaskStatus::Interrupted, now, None, Some("interrupted"))
+                .finish(
+                    task.id,
+                    TaskStatus::Interrupted,
+                    now,
+                    None,
+                    Some("interrupted"),
+                )
                 .await?;
             count += 1;
         }
@@ -239,7 +248,11 @@ impl Tasks {
                     .finish(id, TaskStatus::Interrupted, now, None, Some("interrupted"))
                     .await
                 {
-                    tracing::error!(task = id, error = &err as &dyn Error, "failed to record interrupted task");
+                    tracing::error!(
+                        task = id,
+                        error = &err as &dyn Error,
+                        "failed to record interrupted task"
+                    );
                 }
                 self.inner.settle(id);
             } else {
@@ -259,9 +272,10 @@ impl Tasks {
 
 impl TasksInner {
     /// Creates the invocation already running and spawns the body. The live
-    /// entry, including its abort handle, is inserted before the body can settle,
-    /// so a fast completion always finds it and shutdown can always abort it.
-    /// Returns the created invocation and a receiver of its completion phase.
+    /// entry, including its abort handle, is inserted before the body can
+    /// settle, so a fast completion always finds it and shutdown can always
+    /// abort it. Returns the created invocation and a receiver of its
+    /// completion phase.
     pub(crate) async fn start(
         self: &Arc<Self>,
         kind: &str,
@@ -373,7 +387,11 @@ impl TasksInner {
             .finish(id, status, now, output.as_deref(), error.as_deref())
             .await
         {
-            tracing::error!(task = id, error = &err as &dyn Error, "failed to record task outcome");
+            tracing::error!(
+                task = id,
+                error = &err as &dyn Error,
+                "failed to record task outcome"
+            );
         }
         self.settle(id);
     }
@@ -439,12 +457,9 @@ impl<O: DeserializeOwned> TaskHandle<O> {
                 serde_json::from_str(&output).map_err(TaskError::DecodeOutput)
             }
             TaskStatus::Cancelled => Err(TaskError::Run(RunError::Cancelled)),
-            TaskStatus::Failed | TaskStatus::Interrupted => {
-                Err(TaskError::Run(RunError::Failed(anyhow::format_err!(
-                    "{}",
-                    task.error.unwrap_or_else(|| "task failed".to_owned())
-                ))))
-            }
+            TaskStatus::Failed | TaskStatus::Interrupted => Err(TaskError::Run(RunError::Failed(
+                anyhow::format_err!("{}", task.error.unwrap_or_else(|| "task failed".to_owned())),
+            ))),
             TaskStatus::Pending | TaskStatus::Running => Err(TaskError::Run(RunError::Failed(
                 anyhow::format_err!("task {} still active after settle", self.id),
             ))),

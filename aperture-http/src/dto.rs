@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use aperture_artifacts::{Artifact, ArtifactKey, ListQuery, Order, Page as StoragePage, VersionSort};
+use aperture_artifacts::{
+    Artifact, ArtifactKey, ListQuery, Order, Page as StoragePage, VersionSort,
+};
 use aperture_tasks::{
     JsonField, JsonFilter, JsonPath, ParentFilter, Progress, ProgressMessage, StatusFilter,
     TaskDescriptor, TaskInvocation, TaskStatus,
@@ -54,7 +56,8 @@ impl<T> Page<T> {
     }
 }
 
-/// A distinct artifact key with its newest version, for `GET /api/v1/artifacts`.
+/// A distinct artifact key with its newest version, for `GET
+/// /api/v1/artifacts`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ArtifactSummaryResponse {
     /// Logical artifact key.
@@ -218,7 +221,9 @@ impl VersionListParams {
     }
 
     pub(crate) fn sort(&self) -> VersionSort {
-        self.sort.map(Into::into).unwrap_or(VersionSort::DownloadedAt)
+        self.sort
+            .map(Into::into)
+            .unwrap_or(VersionSort::DownloadedAt)
     }
 }
 
@@ -334,7 +339,10 @@ impl TaskResponse {
             created_at: task.created_at,
             started_at: task.started_at,
             finished_at: task.finished_at,
-            progress: running.then_some(progress).flatten().map(ProgressResponse::from),
+            progress: running
+                .then_some(progress)
+                .flatten()
+                .map(ProgressResponse::from),
         }
     }
 }

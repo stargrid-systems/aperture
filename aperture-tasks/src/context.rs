@@ -66,8 +66,8 @@ impl TaskContext {
     }
 
     /// Spawns a sub-task of kind `T`, recorded as a child of this invocation.
-    /// The child's cancellation is tied to this task's, so cancelling the parent
-    /// cancels the child.
+    /// The child's cancellation is tied to this task's, so cancelling the
+    /// parent cancels the child.
     pub async fn spawn_child<T: TaskDefinition>(
         &self,
         input: T::Input,

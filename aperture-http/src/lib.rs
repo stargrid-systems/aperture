@@ -7,9 +7,9 @@ use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::routing::get;
 use axum::{Json, Router};
 use utoipa::OpenApi;
+pub use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::{Discriminator, ObjectBuilder, OneOfBuilder, Ref, Schema, Type};
-pub use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa_axum::router::OpenApiRouter;
 
 use self::api::router as api_routes;
@@ -30,8 +30,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Wraps the gateway version, the Spectra frontend, and the task manager for
-    /// use as request state. `version` is reported by `GET /api/v1/version`.
+    /// Wraps the gateway version, the Spectra frontend, and the task manager
+    /// for use as request state. `version` is reported by `GET
+    /// /api/v1/version`.
     pub fn new(version: &'static str, spectra: Spectra, tasks: Tasks) -> Self {
         Self {
             version,
@@ -115,15 +116,19 @@ fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
         let variant = ObjectBuilder::new()
             .property("kind", kind)
             .required("kind")
-            .property("input", Ref::from_schema_name(descriptor.input_name.clone()))
+            .property(
+                "input",
+                Ref::from_schema_name(descriptor.input_name.clone()),
+            )
             .required("input")
             .build();
         union = union.item(variant);
     }
 
-    components
-        .schemas
-        .insert("CreateTaskInput".to_owned(), Schema::OneOf(union.build()).into());
+    components.schemas.insert(
+        "CreateTaskInput".to_owned(),
+        Schema::OneOf(union.build()).into(),
+    );
     set_create_body(spec);
 }
 

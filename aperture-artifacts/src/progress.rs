@@ -20,7 +20,11 @@ impl<W> ProgressWriter<W> {
 }
 
 impl<W: AsyncWrite + Unpin> AsyncWrite for ProgressWriter<W> {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
         let written = ready!(Pin::new(&mut this.inner).poll_write(cx, buf))?;
         this.progress.add(written as u64);
