@@ -64,22 +64,20 @@ impl SpectraImage {
 
     fn pick(&self, base: &str, accept_br: bool, accept_gzip: bool) -> Option<Resolved> {
         let content_type = mime_guess::from_path(base).first_or_octet_stream();
-        if accept_br
-            && let Some(file) = self.files.get(&format!("{base}.br")) {
-                return Some(Resolved {
-                    file: file.clone(),
-                    encoding: Some("br"),
-                    content_type,
-                });
-            }
-        if accept_gzip
-            && let Some(file) = self.files.get(&format!("{base}.gz")) {
-                return Some(Resolved {
-                    file: file.clone(),
-                    encoding: Some("gzip"),
-                    content_type,
-                });
-            }
+        if accept_br && let Some(file) = self.files.get(&format!("{base}.br")) {
+            return Some(Resolved {
+                file: file.clone(),
+                encoding: Some("br"),
+                content_type,
+            });
+        }
+        if accept_gzip && let Some(file) = self.files.get(&format!("{base}.gz")) {
+            return Some(Resolved {
+                file: file.clone(),
+                encoding: Some("gzip"),
+                content_type,
+            });
+        }
         if let Some(file) = self.files.get(base) {
             return Some(Resolved {
                 file: file.clone(),

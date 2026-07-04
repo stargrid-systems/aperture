@@ -7,11 +7,15 @@
 use std::collections::HashMap;
 
 use aperture_artifacts::{
-    Artifact, ArtifactKey, Download, DownloadProgress, DownloadStatus, ListQuery, Order,
-    Page as StoragePage, VersionSort,
+    Artifact, ArtifactKey, ListQuery, Order, Page as StoragePage, VersionSort,
+};
+use aperture_tasks::{
+    JsonField, JsonFilter, JsonPath, ParentFilter, Progress, ProgressMessage, StatusFilter,
+    TaskDescriptor, TaskInvocation, TaskStatus,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 /// Version information returned by `GET /api/v1/version`.
@@ -52,7 +56,8 @@ impl<T> Page<T> {
     }
 }
 
-/// A distinct artifact key with its newest version, for `GET /api/v1/artifacts`.
+/// A distinct artifact key with its newest version, for `GET
+/// /api/v1/artifacts`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ArtifactSummaryResponse {
     /// Logical artifact key.
@@ -118,86 +123,6 @@ impl From<Artifact> for ArtifactVersionResponse {
             size_bytes: artifact.size_bytes,
             downloaded_at: artifact.downloaded_at,
             verified_at: artifact.verified_at,
-        }
-    }
-}
-
-/// Lifecycle state of a download attempt.
-#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum DownloadStatusResponse {
-    /// In progress.
-    Running,
-    /// Completed successfully.
-    Succeeded,
-    /// Failed.
-    Failed,
-    /// Still running when the process stopped.
-    Interrupted,
-}
-
-impl From<DownloadStatus> for DownloadStatusResponse {
-    fn from(status: DownloadStatus) -> Self {
-        match status {
-            DownloadStatus::Running => Self::Running,
-            DownloadStatus::Succeeded => Self::Succeeded,
-            DownloadStatus::Failed => Self::Failed,
-            DownloadStatus::Interrupted => Self::Interrupted,
-        }
-    }
-}
-
-/// Live byte progress of a running download.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DownloadProgressResponse {
-    /// Bytes transferred so far.
-    pub done_bytes: u64,
-    /// Expected total bytes, if known.
-    pub total_bytes: Option<u64>,
-}
-
-/// One download attempt, returned by `GET /api/v1/downloads`.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DownloadResponse {
-    /// Attempt id.
-    pub id: i64,
-    /// Logical artifact key.
-    pub key: String,
-    /// Where it was fetched from.
-    pub source: String,
-    /// Lifecycle state.
-    pub status: DownloadStatusResponse,
-    /// When the attempt started.
-    pub started_at: Timestamp,
-    /// When it finished, if it did.
-    pub finished_at: Option<Timestamp>,
-    /// Resolved content digest, if it got that far.
-    pub digest: Option<String>,
-    /// Bytes transferred, recorded on completion.
-    pub size_bytes: Option<i64>,
-    /// Failure detail, if any.
-    pub error: Option<String>,
-    /// Live byte progress, present only while running.
-    pub progress: Option<DownloadProgressResponse>,
-}
-
-impl DownloadResponse {
-    /// Builds a response, attaching live `progress` when the attempt is running.
-    pub(crate) fn new(download: Download, progress: Option<&DownloadProgress>) -> Self {
-        Self {
-            id: download.id,
-            key: download.artifact,
-            source: download.source,
-            status: download.status.into(),
-            started_at: download.started_at,
-            finished_at: download.finished_at,
-            digest: download.digest,
-            size_bytes: download.size_bytes,
-            error: download.error,
-            progress: progress.map(|p| DownloadProgressResponse {
-                done_bytes: p.done_bytes,
-                total_bytes: p.total_bytes,
-            }),
         }
     }
 }
@@ -296,40 +221,210 @@ impl VersionListParams {
     }
 
     pub(crate) fn sort(&self) -> VersionSort {
-        self.sort.map(Into::into).unwrap_or(VersionSort::DownloadedAt)
+        self.sort
+            .map(Into::into)
+            .unwrap_or(VersionSort::DownloadedAt)
     }
 }
 
-/// Filter for download status.
-#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+/// Lifecycle state of a task invocation.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum DownloadStatusParam {
-    /// In progress.
+pub enum TaskStatusResponse {
+    /// Recorded but not yet started.
+    Pending,
+    /// Currently executing.
     Running,
-    /// Completed successfully.
+    /// Finished successfully.
     Succeeded,
-    /// Failed.
+    /// Finished with an error.
     Failed,
-    /// Interrupted by a restart.
+    /// Stopped on request.
+    Cancelled,
+    /// Still running when the process stopped.
     Interrupted,
 }
 
-impl From<DownloadStatusParam> for DownloadStatus {
-    fn from(status: DownloadStatusParam) -> Self {
+impl From<TaskStatus> for TaskStatusResponse {
+    fn from(status: TaskStatus) -> Self {
         match status {
-            DownloadStatusParam::Running => Self::Running,
-            DownloadStatusParam::Succeeded => Self::Succeeded,
-            DownloadStatusParam::Failed => Self::Failed,
-            DownloadStatusParam::Interrupted => Self::Interrupted,
+            TaskStatus::Pending => Self::Pending,
+            TaskStatus::Running => Self::Running,
+            TaskStatus::Succeeded => Self::Succeeded,
+            TaskStatus::Failed => Self::Failed,
+            TaskStatus::Cancelled => Self::Cancelled,
+            TaskStatus::Interrupted => Self::Interrupted,
         }
     }
 }
 
-/// Query params for `GET /api/v1/downloads`.
+/// A localizable progress message: a translation key and its arguments.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProgressMessageResponse {
+    /// Translation key for the current step.
+    pub key: String,
+    /// Arguments to interpolate into the resolved message.
+    pub args: HashMap<String, String>,
+}
+
+impl From<ProgressMessage> for ProgressMessageResponse {
+    fn from(message: ProgressMessage) -> Self {
+        Self {
+            key: message.key,
+            args: message.args.into_iter().collect(),
+        }
+    }
+}
+
+/// Live progress of a running task.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProgressResponse {
+    /// A localizable description of the current step.
+    pub message: Option<ProgressMessageResponse>,
+    /// Units of work completed so far.
+    pub done: Option<u64>,
+    /// Total units of work expected, if known.
+    pub total: Option<u64>,
+}
+
+impl From<Progress> for ProgressResponse {
+    fn from(progress: Progress) -> Self {
+        Self {
+            message: progress.message.map(ProgressMessageResponse::from),
+            done: progress.done,
+            total: progress.total,
+        }
+    }
+}
+
+/// One task invocation, returned by the task endpoints.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TaskResponse {
+    /// Invocation id.
+    pub id: i64,
+    /// The kind of task.
+    pub kind: String,
+    /// The parent invocation, if this task was spawned by another.
+    pub parent_id: Option<i64>,
+    /// Lifecycle state.
+    pub status: TaskStatusResponse,
+    /// The input the task was created with.
+    pub input: Value,
+    /// The output, once the task succeeds.
+    pub output: Option<Value>,
+    /// Failure detail, if any.
+    pub error: Option<String>,
+    /// When the invocation was recorded.
+    pub created_at: Timestamp,
+    /// When it started running, if it did.
+    pub started_at: Option<Timestamp>,
+    /// When it finished, if it did.
+    pub finished_at: Option<Timestamp>,
+    /// Live progress, present only while running.
+    pub progress: Option<ProgressResponse>,
+}
+
+impl TaskResponse {
+    /// Builds a response, attaching live `progress` while the task is running.
+    pub(crate) fn new(task: TaskInvocation, progress: Option<Progress>) -> Self {
+        let running = matches!(task.status, TaskStatus::Pending | TaskStatus::Running);
+        Self {
+            id: task.id,
+            kind: task.kind,
+            parent_id: task.parent_id,
+            status: task.status.into(),
+            input: parse_json(&task.input),
+            output: task.output.as_deref().map(parse_json),
+            error: task.error,
+            created_at: task.created_at,
+            started_at: task.started_at,
+            finished_at: task.finished_at,
+            progress: running
+                .then_some(progress)
+                .flatten()
+                .map(ProgressResponse::from),
+        }
+    }
+}
+
+/// A registered task kind, with its capabilities and JSON Schemas.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TaskDefinitionResponse {
+    /// The kind string.
+    pub kind: String,
+    /// Whether the kind can be cancelled.
+    pub cancellable: bool,
+    /// Whether the kind is safe to interrupt across a restart.
+    pub resumable: bool,
+    /// JSON Schema of the kind's input.
+    pub input_schema: Value,
+    /// JSON Schema of the kind's output.
+    pub output_schema: Value,
+}
+
+impl From<TaskDescriptor> for TaskDefinitionResponse {
+    fn from(descriptor: TaskDescriptor) -> Self {
+        Self {
+            kind: descriptor.kind.to_owned(),
+            cancellable: descriptor.capabilities.cancellable,
+            resumable: descriptor.capabilities.resumable,
+            input_schema: serde_json::to_value(&descriptor.input_schema).unwrap_or(Value::Null),
+            output_schema: serde_json::to_value(&descriptor.output_schema).unwrap_or(Value::Null),
+        }
+    }
+}
+
+/// Body for `POST /api/v1/tasks`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateTaskRequest {
+    /// The kind of task to create.
+    pub kind: String,
+    /// The task input, matching the kind's input schema.
+    pub input: Value,
+}
+
+/// Filter for task status, including the `active` and `finished` groups.
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatusParam {
+    /// Not yet finished (pending or running).
+    Active,
+    /// Reached a terminal state.
+    Finished,
+    /// Recorded but not yet started.
+    Pending,
+    /// Currently executing.
+    Running,
+    /// Finished successfully.
+    Succeeded,
+    /// Finished with an error.
+    Failed,
+    /// Stopped on request.
+    Cancelled,
+    /// Still running when the process stopped.
+    Interrupted,
+}
+
+impl From<TaskStatusParam> for StatusFilter {
+    fn from(param: TaskStatusParam) -> Self {
+        match param {
+            TaskStatusParam::Active => Self::Active,
+            TaskStatusParam::Finished => Self::Finished,
+            TaskStatusParam::Pending => Self::Exact(TaskStatus::Pending),
+            TaskStatusParam::Running => Self::Exact(TaskStatus::Running),
+            TaskStatusParam::Succeeded => Self::Exact(TaskStatus::Succeeded),
+            TaskStatusParam::Failed => Self::Exact(TaskStatus::Failed),
+            TaskStatusParam::Cancelled => Self::Exact(TaskStatus::Cancelled),
+            TaskStatusParam::Interrupted => Self::Exact(TaskStatus::Interrupted),
+        }
+    }
+}
+
+/// Query params for `GET /api/v1/tasks`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[serde(default)]
 #[into_params(parameter_in = Query)]
-pub struct DownloadListParams {
+pub struct TaskListParams {
     /// Maximum rows to return. Defaults to 50.
     #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
@@ -337,13 +432,27 @@ pub struct DownloadListParams {
     pub cursor: Option<String>,
     /// Sort direction.
     pub order: Option<OrderParam>,
-    /// Only attempts in this state.
-    pub status: Option<DownloadStatusParam>,
-    /// Only attempts for this artifact key.
-    pub key: Option<String>,
+    /// Only tasks in this state, or the `active`/`finished` groups.
+    pub status: Option<TaskStatusParam>,
+    /// Only tasks of this kind.
+    pub kind: Option<String>,
+    /// Only children of this task.
+    pub parent: Option<i64>,
+    /// Only top-level tasks (no parent). Ignored when `parent` is set.
+    pub root: Option<bool>,
+    /// Only tasks whose input JSON has `input_value` at this path, for example
+    /// `key` or `source.reference`. Requires `input_value`.
+    pub input_path: Option<String>,
+    /// The value the field at `input_path` must equal.
+    pub input_value: Option<String>,
+    /// Only tasks whose output JSON has `output_value` at this path. Requires
+    /// `output_value`.
+    pub output_path: Option<String>,
+    /// The value the field at `output_path` must equal.
+    pub output_value: Option<String>,
 }
 
-impl DownloadListParams {
+impl TaskListParams {
     pub(crate) fn to_query(&self) -> ListQuery {
         ListQuery {
             limit: self.limit,
@@ -351,6 +460,42 @@ impl DownloadListParams {
             order: self.order.map(Into::into),
         }
     }
+
+    pub(crate) fn parent_filter(&self) -> Option<ParentFilter> {
+        match (self.parent, self.root) {
+            (Some(id), _) => Some(ParentFilter::Of(id)),
+            (None, Some(true)) => Some(ParentFilter::Root),
+            _ => None,
+        }
+    }
+
+    /// Builds the input/output JSON filters. Returns `Err` if a path is given
+    /// without its value (or the reverse) or a path is not a simple JSON path.
+    pub(crate) fn json_filters(&self) -> Result<Vec<JsonFilter<'_>>, InvalidFilter> {
+        let mut filters = Vec::new();
+        let pairs = [
+            (JsonField::Input, &self.input_path, &self.input_value),
+            (JsonField::Output, &self.output_path, &self.output_value),
+        ];
+        for (field, path, value) in pairs {
+            match (path.as_deref(), value.as_deref()) {
+                (Some(path), Some(value)) => {
+                    let path = JsonPath::new(path).map_err(|_| InvalidFilter)?;
+                    filters.push(JsonFilter { field, path, value });
+                }
+                (None, None) => {}
+                _ => return Err(InvalidFilter),
+            }
+        }
+        Ok(filters)
+    }
+}
+
+/// A task list request carried a malformed JSON filter.
+pub(crate) struct InvalidFilter;
+
+fn parse_json(raw: &str) -> Value {
+    serde_json::from_str(raw).unwrap_or(Value::Null)
 }
 
 /// Maps a storage page of keys into the response envelope.
@@ -363,16 +508,14 @@ pub(crate) fn version_page(page: StoragePage<Artifact>) -> Page<ArtifactVersionR
     Page::from_storage(page, ArtifactVersionResponse::from)
 }
 
-/// Maps a storage page of downloads into the response envelope, attaching live
-/// progress to running attempts from `live` (keyed by artifact key).
-pub(crate) fn download_page(
-    page: StoragePage<Download>,
-    live: &HashMap<String, DownloadProgress>,
-) -> Page<DownloadResponse> {
-    Page::from_storage(page, |download| {
-        let progress = matches!(download.status, DownloadStatus::Running)
-            .then(|| live.get(&download.artifact))
-            .flatten();
-        DownloadResponse::new(download, progress)
+/// Maps a storage page of tasks into the response envelope, attaching live
+/// progress to running tasks from `live` (keyed by task id).
+pub(crate) fn task_page(
+    page: StoragePage<TaskInvocation>,
+    live: &HashMap<i64, Progress>,
+) -> Page<TaskResponse> {
+    Page::from_storage(page, |task| {
+        let progress = live.get(&task.id).cloned();
+        TaskResponse::new(task, progress)
     })
 }

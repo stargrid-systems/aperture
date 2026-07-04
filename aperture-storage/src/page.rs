@@ -4,8 +4,8 @@
 //! The cursor carries the last (or first) row's sort value, its id, and the
 //! direction to travel. So a single `cursor` value pages either forward or
 //! backward, and the caller never needs a separate direction flag. This stays
-//! correct even when rows are inserted between page fetches, as long as the sort
-//! field and direction do not change.
+//! correct even when rows are inserted between page fetches, as long as the
+//! sort field and direction do not change.
 
 use std::fmt::Write;
 
@@ -158,7 +158,8 @@ pub(crate) struct Keyset {
 }
 
 impl Keyset {
-    /// Sorts by `column` (a real column unique per row) with no extra tiebreaker.
+    /// Sorts by `column` (a real column unique per row) with no extra
+    /// tiebreaker.
     pub(crate) fn unique(column: &'static str, order: Order) -> Self {
         Self {
             column,
@@ -187,7 +188,8 @@ impl Keyset {
     }
 
     /// The keyset `WHERE` condition that resumes from `cursor`, using bind
-    /// params starting at `first_param`. Empty (and no params) without a cursor.
+    /// params starting at `first_param`. Empty (and no params) without a
+    /// cursor.
     fn condition(&self, cursor: Option<&Cursor>, first_param: usize) -> (String, Vec<Value>) {
         let Some(cursor) = cursor else {
             return (String::new(), Vec::new());
@@ -253,6 +255,49 @@ impl Filters {
             self.separator();
             let _ = write!(self.sql, "{column} = ?{}", self.params.len());
         }
+    }
+
+    /// Adds `column = ?` bound to `value`, or nothing when `value` is `None`.
+    pub(crate) fn eq_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `column IN (?, ?, ...)` bound to `values`, or nothing when empty.
+    pub(crate) fn one_of(&mut self, column: &str, values: &[&str]) {
+        if values.is_empty() {
+            return;
+        }
+        self.separator();
+        let first = self.params.len() + 1;
+        for value in values {
+            self.params.push(Value::Text((*value).to_owned()));
+        }
+        let placeholders = (first..first + values.len())
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(self.sql, "{column} IN ({placeholders})");
+    }
+
+    /// Adds `CAST(json_extract(column, '$.<path>') AS TEXT) = ?`, matching a
+    /// field inside the JSON stored in `column`. `column` is a fixed identifier
+    /// from the caller. `path` and `value` are user input and are always bound,
+    /// never interpolated, so the path cannot inject SQL. The `CAST` lets a
+    /// numeric or boolean field match a text value too.
+    pub(crate) fn json_path_eq(&mut self, column: &str, path: &str, value: &str) {
+        self.separator();
+        self.params.push(Value::Text(format!("$.{path}")));
+        let path_ph = self.params.len();
+        self.params.push(Value::Text(value.to_owned()));
+        let value_ph = self.params.len();
+        let _ = write!(
+            self.sql,
+            "CAST(json_extract({column}, ?{path_ph}) AS TEXT) = ?{value_ph}"
+        );
     }
 
     /// Adds `column LIKE ?` matching `value` as a literal substring (wildcards
@@ -363,7 +408,11 @@ impl Paginator {
             // Forward: more ahead iff we fetched an extra; a previous page
             // exists iff we arrived here from a cursor.
             Step::After => (
-                if has_extra { cursor_at(last, Step::After) } else { None },
+                if has_extra {
+                    cursor_at(last, Step::After)
+                } else {
+                    None
+                },
                 if self.cursor.is_some() {
                     cursor_at(first, Step::Before)
                 } else {
@@ -391,7 +440,8 @@ impl Paginator {
 }
 
 /// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
-/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the SQL.
+/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the
+/// SQL.
 fn escape_like(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -407,7 +457,7 @@ fn to_hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
-        out.push(char::from_digit((byte & 0x0f) as u32, 16).expect("nibble"));
+        out.push(char::from_digit((byte & 0x0F) as u32, 16).expect("nibble"));
     }
     out
 }

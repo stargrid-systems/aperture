@@ -2,24 +2,21 @@
 //! history of fetch attempts.
 //!
 //! The catalog holds one row per stored version, identified by `(key, digest)`.
-//! A key can have several versions, kept around for rollback. Rows are only ever
-//! written once a version's blob is materialized, so every row is present and
-//! usable. In-flight and failed attempts live in `artifact_downloads`.
+//! A key can have several versions, kept around for rollback. Rows are only
+//! ever written once a version's blob is materialized, so every row is present
+//! and usable.
 
 use jiff::Timestamp;
 use turso::{Connection, Row, Value, params_from_iter};
 
-use crate::error::{Result, StorageError, database};
+use crate::error::{Result, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
+use crate::row::{opt_text, opt_ts, req_int, req_text, req_ts, text_or_null, ts_or_null};
 
 /// Columns selected for an [`Artifact`], in [`row_to_artifact`] order.
 const ARTIFACT_COLUMNS: &str =
     "id, key, source, digest, media_type, version, size_bytes, downloaded_at, verified_at";
-
-/// Columns selected for a [`Download`], in [`row_to_download`] order.
-const DOWNLOAD_COLUMNS: &str =
-    "id, artifact, started_at, finished_at, status, digest, size_bytes, source, error";
 
 /// A stored version of an artifact. Every row maps to a materialized blob.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,66 +59,7 @@ pub enum VersionSort {
     SizeBytes,
 }
 
-/// Lifecycle state of a single download attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DownloadStatus {
-    /// The attempt is in progress.
-    Running,
-    /// The attempt completed successfully.
-    Succeeded,
-    /// The attempt failed.
-    Failed,
-    /// The attempt was still running when the process stopped.
-    Interrupted,
-}
-
-impl DownloadStatus {
-    fn as_db(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Interrupted => "interrupted",
-        }
-    }
-
-    fn from_db(value: &str) -> Result<Self> {
-        match value {
-            "running" => Ok(Self::Running),
-            "succeeded" => Ok(Self::Succeeded),
-            "failed" => Ok(Self::Failed),
-            "interrupted" => Ok(Self::Interrupted),
-            other => Err(StorageError::Decode(format!(
-                "unknown download status {other:?}"
-            ))),
-        }
-    }
-}
-
-/// A recorded download attempt, including its assigned id.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Download {
-    /// Store-assigned id.
-    pub id: i64,
-    /// Key of the artifact this attempt is for.
-    pub artifact: String,
-    /// When the attempt started.
-    pub started_at: Timestamp,
-    /// When the attempt finished, if it did.
-    pub finished_at: Option<Timestamp>,
-    /// The lifecycle state.
-    pub status: DownloadStatus,
-    /// Resolved content digest, if the attempt got that far.
-    pub digest: Option<String>,
-    /// Number of bytes transferred.
-    pub size_bytes: Option<i64>,
-    /// Where the attempt fetched from.
-    pub source: String,
-    /// Failure detail, if any.
-    pub error: Option<String>,
-}
-
-/// Repository over the artifact catalog and its download history.
+/// Repository over the artifact catalog.
 pub struct ArtifactRepository {
     connection: Connection,
 }
@@ -229,7 +167,8 @@ impl ArtifactRepository {
     }
 
     /// Lists distinct keys, each with its newest version and version count.
-    /// Ordered by key, ascending by default. `q` matches a substring of the key.
+    /// Ordered by key, ascending by default. `q` matches a substring of the
+    /// key.
     pub async fn list_keys(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<ArtifactKey>> {
         let paginator = Paginator::new(query, Order::Asc)?;
         let keyset = Keyset::unique("a.key", paginator.query_order());
@@ -237,8 +176,8 @@ impl ArtifactRepository {
         let mut filters = Filters::new();
         // The latest-version predicate keeps one row per key.
         filters.raw(
-            "a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key \
-             ORDER BY b.downloaded_at DESC, b.id DESC LIMIT 1)",
+            "a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key ORDER BY b.downloaded_at \
+             DESC, b.id DESC LIMIT 1)",
         );
         filters.like("a.key", q);
         filters.keyset(&keyset, &paginator);
@@ -320,7 +259,10 @@ impl ArtifactRepository {
 
     /// Lists every stored version. For internal reconciliation, not paginated.
     pub async fn all_versions(&self) -> Result<Vec<Artifact>> {
-        let sql = format!(sql!(SELECT {cols} FROM artifacts ORDER BY id), cols = ARTIFACT_COLUMNS);
+        let sql = format!(
+            sql!(SELECT {cols} FROM artifacts ORDER BY id),
+            cols = ARTIFACT_COLUMNS
+        );
         let mut rows = self.connection.query(&sql, ()).await.map_err(database)?;
         let mut artifacts = Vec::new();
         while let Some(row) = rows.next().await.map_err(database)? {
@@ -340,225 +282,6 @@ impl ArtifactRepository {
             .map_err(database)?;
         Ok(())
     }
-
-    /// Records the start of a download attempt and returns its assigned id.
-    /// The row begins in the [`DownloadStatus::Running`] state.
-    pub async fn start_download(
-        &self,
-        artifact: &str,
-        source: &str,
-        started_at: Timestamp,
-    ) -> Result<i64> {
-        let params = params_from_iter([
-            Value::Text(artifact.to_owned()),
-            Value::Integer(started_at.as_millisecond()),
-            Value::Text(DownloadStatus::Running.as_db().to_owned()),
-            Value::Text(source.to_owned()),
-        ]);
-        self.connection
-            .execute(
-                sql!(
-                    INSERT INTO artifact_downloads (artifact, started_at, status, source)
-                    VALUES (?1, ?2, ?3, ?4)
-                ),
-                params,
-            )
-            .await
-            .map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
-    }
-
-    /// Records the outcome of the download attempt with `id`.
-    pub async fn finish_download(
-        &self,
-        id: i64,
-        status: DownloadStatus,
-        finished_at: Timestamp,
-        digest: Option<&str>,
-        size_bytes: Option<i64>,
-        error: Option<&str>,
-    ) -> Result<()> {
-        let params = params_from_iter([
-            Value::Text(status.as_db().to_owned()),
-            Value::Integer(finished_at.as_millisecond()),
-            text_ref_or_null(digest),
-            int_or_null(size_bytes),
-            text_ref_or_null(error),
-            Value::Integer(id),
-        ]);
-        self.connection
-            .execute(
-                sql!(
-                    UPDATE artifact_downloads
-                    SET status = ?1, finished_at = ?2, digest = ?3, size_bytes = ?4, error = ?5
-                    WHERE id = ?6
-                ),
-                params,
-            )
-            .await
-            .map_err(database)?;
-        Ok(())
-    }
-
-    /// Lists attempts still in the [`DownloadStatus::Running`] state. After a
-    /// clean start these are leftovers from a process that stopped mid-download.
-    pub async fn list_running(&self) -> Result<Vec<Download>> {
-        let sql = format!(
-            sql!(SELECT {cols} FROM artifact_downloads WHERE status = ?1 ORDER BY id),
-            cols = DOWNLOAD_COLUMNS,
-        );
-        let mut rows = self
-            .connection
-            .query(
-                &sql,
-                params_from_iter([Value::Text(DownloadStatus::Running.as_db().to_owned())]),
-            )
-            .await
-            .map_err(database)?;
-        let mut downloads = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
-            downloads.push(row_to_download(&row)?);
-        }
-        Ok(downloads)
-    }
-
-    /// Lists download attempts, newest first, optionally filtered by `status`
-    /// and artifact `key`.
-    pub async fn list_downloads(
-        &self,
-        status: Option<DownloadStatus>,
-        key: Option<&str>,
-        query: &ListQuery,
-    ) -> Result<Page<Download>> {
-        let paginator = Paginator::new(query, Order::Desc)?;
-        let keyset = Keyset::unique("id", paginator.query_order());
-
-        let mut filters = Filters::new();
-        filters.eq_text("status", status.map(DownloadStatus::as_db));
-        filters.eq_text("artifact", key);
-        filters.keyset(&keyset, &paginator);
-
-        let sql = format!(
-            sql!(SELECT {cols} FROM artifact_downloads {where_clause} ORDER BY {order} LIMIT {limit}),
-            cols = DOWNLOAD_COLUMNS,
-            where_clause = filters.where_clause(),
-            order = keyset.order_by(),
-            limit = paginator.fetch_limit(),
-        );
-
-        let mut rows = self
-            .connection
-            .query(&sql, params_from_iter(filters.into_params()))
-            .await
-            .map_err(database)?;
-        let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
-            items.push(row_to_download(&row)?);
-        }
-        Ok(paginator.finish(items, |download| {
-            (CursorValue::Int(download.id), download.id)
-        }))
-    }
-
-    /// Lists the download history for `artifact`, newest first.
-    pub async fn downloads_for(&self, artifact: &str) -> Result<Vec<Download>> {
-        let sql = format!(
-            sql!(SELECT {cols} FROM artifact_downloads WHERE artifact = ?1 ORDER BY id DESC),
-            cols = DOWNLOAD_COLUMNS,
-        );
-        let mut rows = self
-            .connection
-            .query(&sql, params_from_iter([Value::Text(artifact.to_owned())]))
-            .await
-            .map_err(database)?;
-        let mut downloads = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
-            downloads.push(row_to_download(&row)?);
-        }
-        Ok(downloads)
-    }
-}
-
-fn text_or_null(value: &Option<String>) -> Value {
-    match value {
-        Some(text) => Value::Text(text.clone()),
-        None => Value::Null,
-    }
-}
-
-fn text_ref_or_null(value: Option<&str>) -> Value {
-    match value {
-        Some(text) => Value::Text(text.to_owned()),
-        None => Value::Null,
-    }
-}
-
-fn int_or_null(value: Option<i64>) -> Value {
-    match value {
-        Some(int) => Value::Integer(int),
-        None => Value::Null,
-    }
-}
-
-fn ts_or_null(value: Option<Timestamp>) -> Value {
-    match value {
-        Some(timestamp) => Value::Integer(timestamp.as_millisecond()),
-        None => Value::Null,
-    }
-}
-
-fn req_text(row: &Row, idx: usize) -> Result<String> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Text(text) => Ok(text),
-        other => Err(StorageError::Decode(format!(
-            "expected text at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn opt_text(row: &Row, idx: usize) -> Result<Option<String>> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Null => Ok(None),
-        Value::Text(text) => Ok(Some(text)),
-        other => Err(StorageError::Decode(format!(
-            "expected text or null at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn req_int(row: &Row, idx: usize) -> Result<i64> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Integer(int) => Ok(int),
-        other => Err(StorageError::Decode(format!(
-            "expected integer at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn opt_int(row: &Row, idx: usize) -> Result<Option<i64>> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Null => Ok(None),
-        Value::Integer(int) => Ok(Some(int)),
-        other => Err(StorageError::Decode(format!(
-            "expected integer or null at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn req_ts(row: &Row, idx: usize) -> Result<Timestamp> {
-    ts_from_millis(req_int(row, idx)?)
-}
-
-fn opt_ts(row: &Row, idx: usize) -> Result<Option<Timestamp>> {
-    match opt_int(row, idx)? {
-        Some(millis) => Ok(Some(ts_from_millis(millis)?)),
-        None => Ok(None),
-    }
-}
-
-fn ts_from_millis(millis: i64) -> Result<Timestamp> {
-    Timestamp::from_millisecond(millis)
-        .map_err(|err| StorageError::Decode(format!("invalid timestamp {millis}: {err}")))
 }
 
 fn row_to_artifact(row: &Row) -> Result<Artifact> {
@@ -579,19 +302,5 @@ fn row_to_artifact_key(row: &Row) -> Result<ArtifactKey> {
     Ok(ArtifactKey {
         latest: row_to_artifact(row)?,
         version_count: req_int(row, 9)?,
-    })
-}
-
-fn row_to_download(row: &Row) -> Result<Download> {
-    Ok(Download {
-        id: req_int(row, 0)?,
-        artifact: req_text(row, 1)?,
-        started_at: req_ts(row, 2)?,
-        finished_at: opt_ts(row, 3)?,
-        status: DownloadStatus::from_db(&req_text(row, 4)?)?,
-        digest: opt_text(row, 5)?,
-        size_bytes: opt_int(row, 6)?,
-        source: req_text(row, 7)?,
-        error: opt_text(row, 8)?,
     })
 }

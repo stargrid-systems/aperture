@@ -7,19 +7,23 @@
 
 use turso::{Builder, Connection};
 
-pub use self::artifact::{
-    Artifact, ArtifactKey, ArtifactRepository, Download, DownloadStatus, VersionSort,
-};
+pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
 use self::error::database;
 pub use self::error::{Result, StorageError};
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
+pub use self::task::{
+    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
+    TaskRepository, TaskStatus,
+};
 
 mod artifact;
 mod error;
 mod macros;
 mod migration;
 mod page;
+mod row;
+mod task;
 
 /// Handle to the gateway's persistent storage.
 #[derive(Clone)]
@@ -42,5 +46,10 @@ impl Storage {
     /// Returns the repository over the artifact catalog.
     pub fn artifacts(&self) -> ArtifactRepository {
         ArtifactRepository::new(self.connection.clone())
+    }
+
+    /// Returns the repository over the task catalog.
+    pub fn tasks(&self) -> TaskRepository {
+        TaskRepository::new(self.connection.clone())
     }
 }
