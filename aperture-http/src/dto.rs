@@ -538,7 +538,7 @@ pub struct LogListParams {
     pub min_level: Option<LevelResponse>,
     /// Only events whose target starts with this prefix.
     pub target: Option<String>,
-    /// Full-text search on the message field.
+    /// Substring search across message, target, and structured fields.
     pub q: Option<String>,
     /// Only events belonging to this span.
     pub span_id: Option<i64>,
