@@ -5,23 +5,28 @@
 //! system (see [`crate::DownloadDefinition`]) drives it, tracks progress, and
 //! records each invocation. This layer just does the work.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use aperture_storage::{Artifact, ArtifactKey, ListQuery, Page, Storage, VersionSort};
 use aperture_tasks::ProgressHandle;
 use jiff::Timestamp;
 use oci_client::Reference;
 use tokio::fs;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::blob::BlobStore;
 use crate::digest::Digest;
 use crate::error::{ArtifactError, Result};
-use crate::fetch::{FetchMeta, Fetched, OciFetcher};
+use crate::fetch::{FetchMeta, Fetched, OciFetcher, Resolved};
 use crate::hash_writer::HashWriter;
 use crate::media_type::MediaType;
 use crate::progress::ProgressWriter;
+
+/// How long a resolved reference stays cached before it is re-checked against
+/// the registry.
+const RESOLUTION_TTL_MS: i64 = 5 * 60 * 1000;
 
 /// What a [`Artifacts::sync`] run removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +62,17 @@ impl FetchRequest {
             FetchSource::Oci { reference, .. } => reference,
         }
     }
+
+    /// The key a resolution is cached under. Two requests that resolve the same
+    /// layer share it, so it covers everything that picks the layer.
+    fn cache_key(&self) -> String {
+        match &self.source {
+            FetchSource::Oci {
+                reference,
+                media_type,
+            } => format!("oci\0{reference}\0{}", media_type.as_str()),
+        }
+    }
 }
 
 /// Where an artifact is fetched from. Extensible to more sources later.
@@ -80,10 +96,22 @@ pub struct Artifacts {
     inner: Arc<Inner>,
 }
 
+/// A resolution held in the cache, with when it was made.
+struct CachedResolution {
+    resolved: Resolved,
+    resolved_at: Timestamp,
+}
+
 struct Inner {
     storage: Storage,
     blobs: BlobStore,
     oci: OciFetcher,
+    /// Recent reference resolutions, so repeated downloads skip the manifest
+    /// lookup for up to [`RESOLUTION_TTL_MS`].
+    resolutions: Mutex<HashMap<String, CachedResolution>>,
+    /// One lock per content digest, so concurrent downloads of the same content
+    /// collapse onto a single transfer instead of each pulling it.
+    pull_locks: Mutex<HashMap<Digest, Weak<AsyncMutex<()>>>>,
 }
 
 impl Artifacts {
@@ -94,6 +122,8 @@ impl Artifacts {
                 storage,
                 blobs: BlobStore::new(store_root),
                 oci: OciFetcher::new(),
+                resolutions: Mutex::new(HashMap::new()),
+                pull_locks: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -233,25 +263,93 @@ impl Inner {
         Ok(true)
     }
 
-    /// Returns the newest present version of `key`, or fetches it. The cached
-    /// version is reused only when it came from the same source; a repointed
-    /// source is always fetched. On a fetch it stages the bytes, verifies the
-    /// digest, and records the new version.
+    /// Resolves the request to a content digest, reuses the blob if it is
+    /// already present, and otherwise fetches it. Reuse is keyed on the resolved
+    /// digest, so the recorded source is irrelevant: the same content is never
+    /// pulled twice, and a repointed tag is picked up because the reference is
+    /// re-resolved (subject to the resolution cache).
     async fn download(&self, request: &FetchRequest, progress: &ProgressHandle) -> Result<Artifact> {
         let repository = self.storage.artifacts();
-        if let Some(latest) = repository.latest(&request.key).await?
-            && latest.source == request.source_str()
-            && let Ok(digest) = latest.digest.parse::<Digest>()
-            && self.blobs.contains(&digest).await
+        let now = Timestamp::now();
+        let resolved = self.resolve(request, now).await?;
+        let digest_str = resolved.digest.to_string();
+
+        // Fast path: this version is already recorded and its blob is present.
+        // Pure reads, so no lock is needed.
+        if let Some(existing) = repository.get_version(&request.key, &digest_str).await?
+            && self.blobs.contains(&resolved.digest).await
         {
-            return Ok(latest);
+            return Ok(existing);
+        }
+
+        // Anything that writes runs under the per-digest lock, so concurrent
+        // callers for the same content serialize instead of racing.
+        let lock = self.pull_lock(&resolved.digest);
+        let _guard = lock.lock().await;
+
+        // Re-check under the lock: another caller may have finished meanwhile.
+        if let Some(existing) = repository.get_version(&request.key, &digest_str).await? {
+            return Ok(existing);
+        }
+        // The blob is present (shared from another key), so record without
+        // pulling.
+        if self.blobs.contains(&resolved.digest).await {
+            let artifact = reuse_artifact(request, &resolved, now);
+            repository.record_version(&artifact).await?;
+            return Ok(artifact);
         }
 
         let fetched = self.execute(request, progress).await?;
-        let finished = Timestamp::now();
-        let artifact = version_artifact(request, &fetched, finished);
+        let artifact = version_artifact(request, &fetched, Timestamp::now());
         repository.record_version(&artifact).await?;
         Ok(artifact)
+    }
+
+    /// Resolves `request` to its content, using the cache when a recent entry
+    /// exists and refreshing it otherwise.
+    async fn resolve(&self, request: &FetchRequest, now: Timestamp) -> Result<Resolved> {
+        let key = request.cache_key();
+        if let Some(resolved) = self.cached_resolution(&key, now) {
+            return Ok(resolved);
+        }
+        let resolved = match &request.source {
+            FetchSource::Oci {
+                reference,
+                media_type,
+            } => {
+                let reference: Reference = reference.parse().map_err(|err| {
+                    ArtifactError::Fetch(anyhow::format_err!("invalid reference {reference:?}: {err}"))
+                })?;
+                self.oci.resolve(&reference, media_type).await?
+            }
+        };
+        self.resolutions.lock().expect("resolutions poisoned").insert(
+            key,
+            CachedResolution {
+                resolved: resolved.clone(),
+                resolved_at: now,
+            },
+        );
+        Ok(resolved)
+    }
+
+    /// A cached resolution for `key`, if one exists and has not expired.
+    fn cached_resolution(&self, key: &str, now: Timestamp) -> Option<Resolved> {
+        let cache = self.resolutions.lock().expect("resolutions poisoned");
+        let entry = cache.get(key)?;
+        is_fresh(entry.resolved_at, now).then(|| entry.resolved.clone())
+    }
+
+    /// The lock guarding downloads of `digest`, shared across callers. A dead
+    /// entry is replaced, so the map only holds locks that are still in use.
+    fn pull_lock(&self, digest: &Digest) -> Arc<AsyncMutex<()>> {
+        let mut locks = self.pull_locks.lock().expect("pull_locks poisoned");
+        if let Some(lock) = locks.get(digest).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(AsyncMutex::new(()));
+        locks.insert(digest.clone(), Arc::downgrade(&lock));
+        lock
     }
 
     /// Dispatches a fetch to the right fetcher for its source.
@@ -354,6 +452,11 @@ impl Inner {
     }
 }
 
+/// Whether a resolution made at `resolved_at` is still fresh at `now`.
+fn is_fresh(resolved_at: Timestamp, now: Timestamp) -> bool {
+    now.as_millisecond() - resolved_at.as_millisecond() < RESOLUTION_TTL_MS
+}
+
 fn version_artifact(request: &FetchRequest, fetched: &Fetched, finished: Timestamp) -> Artifact {
     Artifact {
         id: 0,
@@ -365,5 +468,58 @@ fn version_artifact(request: &FetchRequest, fetched: &Fetched, finished: Timesta
         size_bytes: fetched.size as i64,
         downloaded_at: finished,
         verified_at: Some(finished),
+    }
+}
+
+/// Builds a version record for a blob already present on disk. The content is
+/// digest-addressed, so its presence is proof enough to mark it verified.
+fn reuse_artifact(request: &FetchRequest, resolved: &Resolved, now: Timestamp) -> Artifact {
+    Artifact {
+        id: 0,
+        key: request.key.clone(),
+        source: request.source_str().to_owned(),
+        digest: resolved.digest.to_string(),
+        media_type: Some(resolved.media_type.to_string()),
+        version: resolved.version.clone(),
+        size_bytes: resolved.size as i64,
+        downloaded_at: now,
+        verified_at: Some(now),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(millis: i64) -> Timestamp {
+        Timestamp::from_millisecond(millis).unwrap()
+    }
+
+    fn oci_request(reference: &str, media_type: &str) -> FetchRequest {
+        FetchRequest {
+            key: "spectra".to_owned(),
+            source: FetchSource::Oci {
+                reference: reference.to_owned(),
+                media_type: MediaType::from(media_type),
+            },
+        }
+    }
+
+    #[test]
+    fn resolution_is_fresh_within_the_ttl() {
+        let base = at(1_000_000);
+        assert!(is_fresh(base, base));
+        assert!(is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS - 1)));
+        assert!(!is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS)));
+    }
+
+    #[test]
+    fn cache_key_separates_reference_and_media_type() {
+        let a = oci_request("ghcr.io/x/spectra:1", "application/foo");
+        let b = oci_request("ghcr.io/x/spectra:1", "application/bar");
+        let c = oci_request("ghcr.io/x/spectra:2", "application/foo");
+        assert_eq!(a.cache_key(), oci_request("ghcr.io/x/spectra:1", "application/foo").cache_key());
+        assert_ne!(a.cache_key(), b.cache_key());
+        assert_ne!(a.cache_key(), c.cache_key());
     }
 }

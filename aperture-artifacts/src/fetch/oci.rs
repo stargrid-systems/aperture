@@ -5,7 +5,7 @@ use tokio::io::AsyncWrite;
 
 use aperture_tasks::ProgressHandle;
 
-use super::FetchMeta;
+use super::{FetchMeta, Resolved};
 use crate::digest::Digest;
 use crate::error::{ArtifactError, Result};
 use crate::media_type::MediaType;
@@ -23,6 +23,18 @@ impl OciFetcher {
         }
     }
 
+    /// Resolves the layer matching `media_type` in `reference` against the
+    /// registry, without transferring it. This is a manifest lookup only.
+    pub async fn resolve(&self, reference: &Reference, media_type: &MediaType) -> Result<Resolved> {
+        let layer = self.resolve_layer(reference, media_type).await?;
+        Ok(Resolved {
+            digest: layer.digest.parse()?,
+            media_type: MediaType::from(layer.media_type.as_str()),
+            size: layer.size.max(0) as u64,
+            version: reference.tag().map(str::to_owned),
+        })
+    }
+
     /// Streams the single layer matching `media_type` from `reference` into
     /// `sink`, reporting transferred bytes into `progress`. Returns the digest
     /// the registry advertises so the caller can verify the stored bytes.
@@ -33,26 +45,35 @@ impl OciFetcher {
         sink: &mut (dyn AsyncWrite + Unpin + Send),
         progress: &ProgressHandle,
     ) -> Result<FetchMeta> {
-        let (manifest, _digest) = self
-            .client
-            .pull_image_manifest(reference, &RegistryAuth::Anonymous)
-            .await
-            .map_err(|err| ArtifactError::Fetch(err.into()))?;
-        let layer = find_layer(&manifest, media_type.as_str()).ok_or_else(|| {
-            ArtifactError::Fetch(anyhow::format_err!("no layer with media type {media_type}"))
-        })?;
+        let layer = self.resolve_layer(reference, media_type).await?;
         let expected: Digest = layer.digest.parse()?;
         let media_type = MediaType::from(layer.media_type.as_str());
         progress.set_total(layer.size.max(0) as u64);
 
         self.client
-            .pull_blob(reference, layer, &mut *sink)
+            .pull_blob(reference, &layer, &mut *sink)
             .await
             .map_err(|err| ArtifactError::Fetch(err.into()))?;
 
         Ok(FetchMeta {
             expected_digest: expected,
             media_type,
+        })
+    }
+
+    /// Pulls the manifest and returns the layer descriptor matching `media_type`.
+    async fn resolve_layer(
+        &self,
+        reference: &Reference,
+        media_type: &MediaType,
+    ) -> Result<OciDescriptor> {
+        let (manifest, _digest) = self
+            .client
+            .pull_image_manifest(reference, &RegistryAuth::Anonymous)
+            .await
+            .map_err(|err| ArtifactError::Fetch(err.into()))?;
+        find_layer(&manifest, media_type.as_str()).cloned().ok_or_else(|| {
+            ArtifactError::Fetch(anyhow::format_err!("no layer with media type {media_type}"))
         })
     }
 }
