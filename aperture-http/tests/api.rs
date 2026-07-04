@@ -264,6 +264,11 @@ async fn filters_tasks_by_json_field() {
     let (status, _) =
         get_json(&app, "/api/v1/tasks?input_path=key;drop&input_value=x").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A structurally invalid path (empty segment) is a bad request, not a 500.
+    let (status, _) =
+        get_json(&app, "/api/v1/tasks?input_path=a..b&input_value=x").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

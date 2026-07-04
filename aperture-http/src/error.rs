@@ -38,7 +38,8 @@ impl From<TaskError> for ApiError {
         let status = match &err {
             TaskError::NotRegistered(_) | TaskError::DecodeInput(_) => StatusCode::BAD_REQUEST,
             TaskError::Storage(StorageError::Decode(_)) => StatusCode::BAD_REQUEST,
-            TaskError::NotFound(_) | TaskError::NotRunning(_) => StatusCode::NOT_FOUND,
+            TaskError::NotFound(_) => StatusCode::NOT_FOUND,
+            TaskError::AlreadySettled(_) => StatusCode::GONE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {

@@ -107,15 +107,16 @@ async fn get_task(
     params(("id" = i64, Path, description = "Task id")),
     responses(
         (status = 202, description = "Cancellation requested"),
-        (status = 404, description = "Task is not running"),
+        (status = 404, description = "Unknown task"),
         (status = 409, description = "Task kind cannot be cancelled"),
+        (status = 410, description = "Task has already finished"),
     ),
 )]
 async fn cancel_task(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    if state.tasks().cancel(id)? {
+    if state.tasks().cancel(id).await? {
         Ok(StatusCode::ACCEPTED)
     } else {
         Err(ApiError::CONFLICT)

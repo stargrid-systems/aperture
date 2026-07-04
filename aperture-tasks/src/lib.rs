@@ -10,8 +10,8 @@
 //! cancelled at all and whether it is safe to interrupt across a restart.
 
 pub use aperture_storage::{
-    JsonField, JsonFilter, ListQuery, Order, Page, ParentFilter, StatusFilter, TaskInvocation,
-    TaskStatus,
+    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ListQuery, Order, Page, ParentFilter,
+    StatusFilter, TaskInvocation, TaskStatus,
 };
 
 pub use self::context::TaskContext;

@@ -95,10 +95,18 @@ fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
     let mut union = OneOfBuilder::new().discriminator(Some(Discriminator::new("kind")));
     for descriptor in descriptors {
         for (name, schema) in &descriptor.schemas {
-            components
-                .schemas
-                .entry(name.clone())
-                .or_insert_with(|| schema.clone());
+            match components.schemas.get(name) {
+                // Two kinds sharing a component name with the same shape (a
+                // common type) is fine. A different shape under the same name
+                // would silently corrupt the generated client, so fail loudly.
+                Some(existing) => assert!(
+                    schemas_equal(existing, schema),
+                    "task kinds define conflicting OpenAPI schemas for component {name:?}"
+                ),
+                None => {
+                    components.schemas.insert(name.clone(), schema.clone());
+                }
+            }
         }
         let kind = ObjectBuilder::new()
             .schema_type(Type::String)
@@ -117,6 +125,11 @@ fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
         .schemas
         .insert("CreateTaskInput".to_owned(), Schema::OneOf(union.build()).into());
     set_create_body(spec);
+}
+
+/// Compares two component schemas by their serialized form.
+fn schemas_equal(a: &RefOr<Schema>, b: &RefOr<Schema>) -> bool {
+    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
 }
 
 /// Points the `POST /tasks` request body at the `CreateTaskInput` union.

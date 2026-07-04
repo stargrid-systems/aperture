@@ -148,16 +148,25 @@ impl Tasks {
     }
 
     /// Requests cooperative cancellation of the running task `id`. Returns `true`
-    /// if cancellation was requested, `false` if the kind is not cancellable, and
-    /// an error if the task is not currently running.
-    pub fn cancel(&self, id: i64) -> Result<bool, TaskError> {
-        let running = self.inner.running.lock().expect("running poisoned");
-        let task = running.get(&id).ok_or(TaskError::NotRunning(id))?;
-        if !task.capabilities.cancellable {
-            return Ok(false);
+    /// if cancellation was requested and `false` if the kind is not cancellable.
+    /// Returns [`TaskError::AlreadySettled`] if the task exists but has finished,
+    /// and [`TaskError::NotFound`] if no such task exists.
+    pub async fn cancel(&self, id: i64) -> Result<bool, TaskError> {
+        {
+            let running = self.inner.running.lock().expect("running poisoned");
+            if let Some(task) = running.get(&id) {
+                if !task.capabilities.cancellable {
+                    return Ok(false);
+                }
+                task.shared.cancel.cancel();
+                return Ok(true);
+            }
         }
-        task.shared.cancel.cancel();
-        Ok(true)
+        // Not running: tell an unknown id apart from one that already finished.
+        match self.inner.storage.tasks().get(id).await? {
+            Some(_) => Err(TaskError::AlreadySettled(id)),
+            None => Err(TaskError::NotFound(id)),
+        }
     }
 
     /// A snapshot of every task running right now.
@@ -355,7 +364,8 @@ impl TasksInner {
         let (status, output, error) = match outcome {
             Ok(value) => (TaskStatus::Succeeded, Some(value.to_string()), None),
             Err(TaskError::Run(RunError::Cancelled)) => (TaskStatus::Cancelled, None, None),
-            Err(err) => (TaskStatus::Failed, None, Some(err.to_string())),
+            // `{:#}` keeps the full source chain, not just the outermost message.
+            Err(err) => (TaskStatus::Failed, None, Some(format!("{err:#}"))),
         };
         if let Err(err) = self
             .storage

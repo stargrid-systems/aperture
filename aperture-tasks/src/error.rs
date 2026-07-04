@@ -44,9 +44,9 @@ pub enum TaskError {
     /// A storage operation failed.
     #[error(transparent)]
     Storage(#[from] StorageError),
-    /// The referenced task is not currently running.
-    #[error("task {0} is not running")]
-    NotRunning(i64),
+    /// The referenced task exists but has already finished.
+    #[error("task {0} has already finished")]
+    AlreadySettled(i64),
     /// The referenced task does not exist.
     #[error("task {0} not found")]
     NotFound(i64),

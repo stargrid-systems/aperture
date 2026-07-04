@@ -1,5 +1,5 @@
 use aperture_storage::{
-    JsonField, JsonFilter, ListQuery, ParentFilter, StatusFilter, Storage, TaskStatus,
+    JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage, TaskStatus,
 };
 use jiff::Timestamp;
 
@@ -160,7 +160,11 @@ async fn list_filters_by_json_input_and_output() {
             None,
             Some("download"),
             None,
-            &[JsonFilter { field: JsonField::Input, path: "key", value: "spectra" }],
+            &[JsonFilter {
+                field: JsonField::Input,
+                path: JsonPath::new("key").unwrap(),
+                value: "spectra",
+            }],
             &ListQuery::default(),
         )
         .await
@@ -175,7 +179,7 @@ async fn list_filters_by_json_input_and_output() {
             None,
             &[JsonFilter {
                 field: JsonField::Input,
-                path: "source.reference",
+                path: JsonPath::new("source.reference").unwrap(),
                 value: "ghcr.io/x/spectra:1",
             }],
             &ListQuery::default(),
@@ -191,7 +195,11 @@ async fn list_filters_by_json_input_and_output() {
             None,
             None,
             None,
-            &[JsonFilter { field: JsonField::Output, path: "version", value: "2.0" }],
+            &[JsonFilter {
+                field: JsonField::Output,
+                path: JsonPath::new("version").unwrap(),
+                value: "2.0",
+            }],
             &ListQuery::default(),
         )
         .await
@@ -205,7 +213,11 @@ async fn list_filters_by_json_input_and_output() {
             None,
             None,
             None,
-            &[JsonFilter { field: JsonField::Input, path: "key", value: "missing" }],
+            &[JsonFilter {
+                field: JsonField::Input,
+                path: JsonPath::new("key").unwrap(),
+                value: "missing",
+            }],
             &ListQuery::default(),
         )
         .await

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use aperture_artifacts::{Artifact, ArtifactKey, ListQuery, Order, Page as StoragePage, VersionSort};
 use aperture_tasks::{
-    JsonField, JsonFilter, ParentFilter, Progress, ProgressMessage, StatusFilter, TaskDescriptor,
-    TaskInvocation, TaskStatus,
+    JsonField, JsonFilter, JsonPath, ParentFilter, Progress, ProgressMessage, StatusFilter,
+    TaskDescriptor, TaskInvocation, TaskStatus,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -471,7 +471,8 @@ impl TaskListParams {
         ];
         for (field, path, value) in pairs {
             match (path.as_deref(), value.as_deref()) {
-                (Some(path), Some(value)) if is_json_path(path) => {
+                (Some(path), Some(value)) => {
+                    let path = JsonPath::new(path).map_err(|_| InvalidFilter)?;
                     filters.push(JsonFilter { field, path, value });
                 }
                 (None, None) => {}
@@ -484,17 +485,6 @@ impl TaskListParams {
 
 /// A task list request carried a malformed JSON filter.
 pub(crate) struct InvalidFilter;
-
-/// Accepts a simple JSON path body: object keys and array indexes, joined by
-/// dots. Rejects anything else so a malformed path fails fast instead of
-/// erroring inside the database.
-fn is_json_path(path: &str) -> bool {
-    !path.is_empty()
-        && path.len() <= 128
-        && path
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'[' | b']'))
-}
 
 fn parse_json(raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or(Value::Null)

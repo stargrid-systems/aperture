@@ -13,7 +13,8 @@ pub use self::error::{Result, StorageError};
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
 pub use self::task::{
-    JsonField, JsonFilter, ParentFilter, StatusFilter, TaskInvocation, TaskRepository, TaskStatus,
+    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
+    TaskRepository, TaskStatus,
 };
 
 mod artifact;

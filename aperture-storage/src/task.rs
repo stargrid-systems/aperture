@@ -6,6 +6,8 @@
 //! are opaque here. The task layer owns their shapes and (de)serialization, so
 //! storage stays a plain record of what ran.
 
+use std::result::Result as StdResult;
+
 use jiff::Timestamp;
 use turso::{Connection, Row, Value, params_from_iter};
 
@@ -125,16 +127,89 @@ impl JsonField {
     }
 }
 
-/// Matches a task whose `field` JSON equals `value` at `path`. `path` is a JSON
-/// path body without the leading `$.`, for example `key` or `source.reference`.
-/// The match is textual, so numeric and boolean fields compare by their text
-/// form.
+/// The maximum length of a [`JsonPath`] body.
+const MAX_JSON_PATH_LEN: usize = 128;
+
+/// A validated JSON path body, without the leading `$.`.
+///
+/// Accepts object keys and array indexes joined by dots, for example `key`,
+/// `source.reference`, or `items[0].name`. A key is made of ASCII letters,
+/// digits, `_`, and `-`. An index is decimal digits in square brackets. Anything
+/// else is rejected at construction, so a path `json_extract` would reject never
+/// reaches the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JsonPath<'a>(&'a str);
+
+impl<'a> JsonPath<'a> {
+    /// Validates `path` as a JSON path body. Returns [`InvalidJsonPath`] if it is
+    /// empty, too long, or not the accepted key-and-index grammar.
+    pub fn new(path: &'a str) -> StdResult<Self, InvalidJsonPath> {
+        if is_valid_json_path(path) {
+            Ok(Self(path))
+        } else {
+            Err(InvalidJsonPath)
+        }
+    }
+
+    /// The validated path body.
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
+/// A string was not a valid [`JsonPath`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("invalid JSON path")]
+pub struct InvalidJsonPath;
+
+fn is_key_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')
+}
+
+/// Checks the `key ('.' key | '[' digits ']')*` grammar.
+fn is_valid_json_path(path: &str) -> bool {
+    if path.is_empty() || path.len() > MAX_JSON_PATH_LEN {
+        return false;
+    }
+    let bytes = path.as_bytes();
+    let mut i = 0;
+    loop {
+        let key_start = i;
+        while i < bytes.len() && is_key_byte(bytes[i]) {
+            i += 1;
+        }
+        if i == key_start {
+            return false; // empty key: leading, doubled, or trailing dot
+        }
+        while i < bytes.len() && bytes[i] == b'[' {
+            i += 1;
+            let digits_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i == digits_start || i >= bytes.len() || bytes[i] != b']' {
+                return false; // empty or unterminated index
+            }
+            i += 1;
+        }
+        if i == bytes.len() {
+            return true;
+        }
+        if bytes[i] != b'.' {
+            return false;
+        }
+        i += 1;
+    }
+}
+
+/// Matches a task whose `field` JSON equals `value` at `path`. The match is
+/// textual, so numeric and boolean fields compare by their text form.
 #[derive(Debug, Clone, Copy)]
 pub struct JsonFilter<'a> {
     /// Which payload to look in.
     pub field: JsonField,
     /// The JSON path body, without the leading `$.`.
-    pub path: &'a str,
+    pub path: JsonPath<'a>,
     /// The value the field must equal.
     pub value: &'a str,
 }
@@ -312,7 +387,7 @@ impl TaskRepository {
             None => {}
         }
         for filter in json {
-            filters.json_path_eq(filter.field.column(), filter.path, filter.value);
+            filters.json_path_eq(filter.field.column(), filter.path.as_str(), filter.value);
         }
         filters.keyset(&keyset, &paginator);
 
@@ -397,4 +472,29 @@ fn row_to_task(row: &Row) -> Result<TaskInvocation> {
         started_at: opt_ts(row, 8)?,
         finished_at: opt_ts(row, 9)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_path_accepts_keys_and_indexes() {
+        for path in ["key", "source.reference", "a_b-c", "items[0]", "a[0][1]", "a[10].b"] {
+            assert!(JsonPath::new(path).is_ok(), "{path:?} should be valid");
+        }
+    }
+
+    #[test]
+    fn json_path_rejects_malformed() {
+        for path in ["", "a..b", ".a", "a.", "a[]", "a[", "a[0", "[0]", "a[b]", "a b", "a;b"] {
+            assert!(JsonPath::new(path).is_err(), "{path:?} should be invalid");
+        }
+    }
+
+    #[test]
+    fn json_path_rejects_overlong() {
+        let long = "a".repeat(MAX_JSON_PATH_LEN + 1);
+        assert!(JsonPath::new(&long).is_err());
+    }
 }

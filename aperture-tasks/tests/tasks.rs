@@ -123,6 +123,25 @@ impl TaskDefinition for Boom {
     }
 }
 
+/// A task that fails with a layered error, to check the source chain is kept.
+struct Fail;
+
+impl TaskDefinition for Fail {
+    const KIND: &'static str = "fail";
+    type Input = Empty;
+    type Output = Empty;
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    async fn run(&self, _input: Empty, _ctx: TaskContext) -> Result<Empty, RunError> {
+        Err(RunError::Failed(
+            anyhow::anyhow!("root cause").context("middle").context("outer failure"),
+        ))
+    }
+}
+
 fn probe(cancellable: bool) -> (Probe, Arc<Notify>, Arc<Notify>) {
     let ready = Arc::new(Notify::new());
     let gate = Arc::new(Notify::new());
@@ -183,7 +202,7 @@ async fn cancellable_task_records_cancelled() {
     let id = handle.id();
     ready.notified().await;
 
-    assert!(tasks.cancel(id).unwrap());
+    assert!(tasks.cancel(id).await.unwrap());
     let result = handle.wait().await;
     assert!(matches!(result, Err(TaskError::Run(RunError::Cancelled))));
 
@@ -203,7 +222,7 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     let id = handle.id();
     ready.notified().await;
 
-    assert!(!tasks.cancel(id).unwrap());
+    assert!(!tasks.cancel(id).await.unwrap());
 
     gate.notify_one();
     handle.wait().await.unwrap();
@@ -231,7 +250,7 @@ async fn child_inherits_parent_cancellation() {
     let child = child_id.lock().unwrap().expect("child id published");
 
     // Cancelling the parent cancels the child through the shared token.
-    assert!(tasks.cancel(parent_id).unwrap());
+    assert!(tasks.cancel(parent_id).await.unwrap());
     assert!(matches!(handle.wait().await, Err(TaskError::Run(RunError::Cancelled))));
 
     let recorded = storage.tasks().get(child).await.unwrap().unwrap();
@@ -257,6 +276,40 @@ async fn panicking_task_settles_as_failed() {
 
     // A panicked task settles, so shutdown finds nothing to wait on.
     tasks.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_task_records_full_error_chain() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let mut registry = TaskRegistry::new();
+    registry.register(Fail);
+    let tasks = Tasks::new(storage.clone(), registry);
+
+    let handle = tasks.spawn::<Fail>(Empty {}).await.unwrap();
+    let id = handle.id();
+    assert!(matches!(handle.wait().await, Err(TaskError::Run(RunError::Failed(_)))));
+
+    let recorded = storage.tasks().get(id).await.unwrap().unwrap();
+    let error = recorded.error.expect("failed task records an error");
+    assert!(error.contains("outer failure"), "{error:?}");
+    assert!(error.contains("root cause"), "{error:?}");
+}
+
+#[tokio::test]
+async fn cancel_distinguishes_unknown_from_settled() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let mut registry = TaskRegistry::new();
+    registry.register(Double);
+    let tasks = Tasks::new(storage.clone(), registry);
+
+    // An unknown id is not found.
+    assert!(matches!(tasks.cancel(999).await, Err(TaskError::NotFound(999))));
+
+    // A task that already finished is reported as settled, not unknown.
+    let handle = tasks.spawn::<Double>(DoubleIn { n: 1 }).await.unwrap();
+    let id = handle.id();
+    handle.wait().await.unwrap();
+    assert!(matches!(tasks.cancel(id).await, Err(TaskError::AlreadySettled(settled)) if settled == id));
 }
 
 #[tokio::test]
