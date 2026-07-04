@@ -11,7 +11,7 @@ use std::error::Error;
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use aperture_storage::{
     ListQuery, Page, ParentFilter, StatusFilter, Storage, TaskInvocation, TaskStatus,
@@ -42,7 +42,6 @@ struct TaskShared {
     cancel: CancellationToken,
     progress: Arc<ProgressState>,
     phase: watch::Sender<Phase>,
-    abort: OnceLock<AbortHandle>,
 }
 
 /// A task currently being tracked in the live registry.
@@ -52,6 +51,7 @@ struct RunningTask {
     parent_id: Option<i64>,
     capabilities: Capabilities,
     started_at: Timestamp,
+    abort: AbortHandle,
 }
 
 /// A snapshot of one running task, for display.
@@ -117,11 +117,11 @@ impl Tasks {
     }
 
     /// Spawns a top-level task by kind string, validating `input` against the
-    /// kind's input type, and returns the new invocation id. Used by the API,
+    /// kind's input type, and returns the created invocation. Used by the API,
     /// which does not await a typed output.
-    pub async fn create(&self, kind: &str, input: Value) -> Result<i64, TaskError> {
-        let (id, _phase) = self.inner.start(kind, input, None).await?;
-        Ok(id)
+    pub async fn create(&self, kind: &str, input: Value) -> Result<TaskInvocation, TaskError> {
+        let (invocation, _phase) = self.inner.start(kind, input, None).await?;
+        Ok(invocation)
     }
 
     /// Lists recorded invocations, optionally filtered by status, kind, and
@@ -202,20 +202,25 @@ impl Tasks {
     /// shutdown: resumable tasks are aborted and recorded as interrupted, while
     /// unresumable tasks are awaited so they finish cleanly.
     pub async fn shutdown(&self) {
-        let entries: Vec<(i64, bool, Arc<TaskShared>)> = {
+        let entries: Vec<(i64, bool, AbortHandle, Arc<TaskShared>)> = {
             let running = self.inner.running.lock().expect("running poisoned");
             running
                 .iter()
-                .map(|(id, task)| (*id, task.capabilities.resumable, Arc::clone(&task.shared)))
+                .map(|(id, task)| {
+                    (
+                        *id,
+                        task.capabilities.resumable,
+                        task.abort.clone(),
+                        Arc::clone(&task.shared),
+                    )
+                })
                 .collect()
         };
 
         let mut awaiting = Vec::new();
-        for (id, resumable, shared) in entries {
+        for (id, resumable, abort, shared) in entries {
             if resumable {
-                if let Some(abort) = shared.abort.get() {
-                    abort.abort();
-                }
+                abort.abort();
                 let now = Timestamp::now();
                 if let Err(err) = self
                     .inner
@@ -243,15 +248,16 @@ impl Tasks {
 }
 
 impl TasksInner {
-    /// Creates the invocation, marks it running, and spawns the body. The live
-    /// entry is inserted before the body is spawned, so a fast completion always
-    /// finds it. Returns the new id and a receiver of its completion phase.
+    /// Creates the invocation already running and spawns the body. The live
+    /// entry, including its abort handle, is inserted before the body can settle,
+    /// so a fast completion always finds it and shutdown can always abort it.
+    /// Returns the created invocation and a receiver of its completion phase.
     pub(crate) async fn start(
         self: &Arc<Self>,
         kind: &str,
         input: Value,
         parent_id: Option<i64>,
-    ) -> Result<(i64, watch::Receiver<Phase>), TaskError> {
+    ) -> Result<(TaskInvocation, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
             self.registry
                 .get(kind)
@@ -261,9 +267,11 @@ impl TasksInner {
 
         let now = Timestamp::now();
         let input_json = input.to_string();
-        let tasks = self.storage.tasks();
-        let id = tasks.create(kind, parent_id, &input_json, now).await?;
-        tasks.mark_running(id, now).await?;
+        let id = self
+            .storage
+            .tasks()
+            .create_running(kind, parent_id, &input_json, now)
+            .await?;
 
         let cancel = match parent_id.and_then(|parent| self.parent_token(parent)) {
             Some(parent) => parent.child_token(),
@@ -274,28 +282,46 @@ impl TasksInner {
             cancel: cancel.clone(),
             progress: Arc::new(ProgressState::default()),
             phase: phase_tx,
-            abort: OnceLock::new(),
         });
 
-        self.running.lock().expect("running poisoned").insert(
-            id,
-            RunningTask {
-                shared: Arc::clone(&shared),
-                kind: kind.to_owned(),
-                parent_id,
-                capabilities: definition.capabilities(),
-                started_at: now,
-            },
-        );
-
         let ctx = TaskContext::new(id, Arc::clone(self), cancel, Arc::clone(&shared.progress));
-        let abort = {
-            let mut set = self.joinset.lock().expect("joinset poisoned");
-            definition.spawn_on(input, ctx, &mut set)
-        };
-        let _ = shared.abort.set(abort);
+        let capabilities = definition.capabilities();
 
-        Ok((id, phase_rx))
+        // Hold the registry lock across spawn and insert so the body cannot
+        // settle (and try to remove the entry) before it exists, and so the
+        // abort handle is stored before anyone can observe the task.
+        {
+            let mut running = self.running.lock().expect("running poisoned");
+            let abort = {
+                let mut set = self.joinset.lock().expect("joinset poisoned");
+                definition.spawn_on(input, ctx, &mut set)
+            };
+            running.insert(
+                id,
+                RunningTask {
+                    shared: Arc::clone(&shared),
+                    kind: kind.to_owned(),
+                    parent_id,
+                    capabilities,
+                    started_at: now,
+                    abort,
+                },
+            );
+        }
+
+        let invocation = TaskInvocation {
+            id,
+            kind: kind.to_owned(),
+            parent_id,
+            status: TaskStatus::Running,
+            input: input_json,
+            output: None,
+            error: None,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: None,
+        };
+        Ok((invocation, phase_rx))
     }
 
     /// Spawns a task and returns a typed handle to its output.
@@ -305,9 +331,9 @@ impl TasksInner {
         input: Value,
         parent_id: Option<i64>,
     ) -> Result<TaskHandle<O>, TaskError> {
-        let (id, phase) = self.start(kind, input, parent_id).await?;
+        let (invocation, phase) = self.start(kind, input, parent_id).await?;
         Ok(TaskHandle {
-            id,
+            id: invocation.id,
             inner: Arc::clone(self),
             phase,
             _output: PhantomData,

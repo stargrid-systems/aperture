@@ -69,8 +69,7 @@ async fn create_task(
     State(state): State<AppState>,
     Json(request): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
-    let id = state.tasks().create(&request.kind, request.input).await?;
-    let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
+    let task = state.tasks().create(&request.kind, request.input).await?;
     Ok((StatusCode::ACCEPTED, Json(TaskResponse::new(task, None))))
 }
 

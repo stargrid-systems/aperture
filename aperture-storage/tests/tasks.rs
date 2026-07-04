@@ -35,6 +35,48 @@ async fn create_then_finish_records_lifecycle() {
 }
 
 #[tokio::test]
+async fn create_running_starts_in_running_state() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.tasks();
+
+    let id = repo
+        .create_running("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .await
+        .unwrap();
+
+    let task = repo.get(id).await.unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Running);
+    assert_eq!(task.started_at, Some(at(1_000)));
+    assert_eq!(task.finished_at, None);
+}
+
+#[tokio::test]
+async fn finish_does_not_overwrite_a_finished_row() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.tasks();
+
+    let id = repo
+        .create_running("download", None, "{}", at(1_000))
+        .await
+        .unwrap();
+    repo.finish(id, TaskStatus::Succeeded, at(1_100), Some(r#"{"ok":true}"#), None)
+        .await
+        .unwrap();
+
+    // A late interrupt (shutdown racing a task that just succeeded) must not
+    // clobber the terminal row.
+    repo.finish(id, TaskStatus::Interrupted, at(1_200), None, Some("interrupted"))
+        .await
+        .unwrap();
+
+    let task = repo.get(id).await.unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Succeeded);
+    assert_eq!(task.output.as_deref(), Some(r#"{"ok":true}"#));
+    assert_eq!(task.finished_at, Some(at(1_100)));
+    assert!(task.error.is_none());
+}
+
+#[tokio::test]
 async fn list_filters_by_status_kind_and_parent() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.tasks();

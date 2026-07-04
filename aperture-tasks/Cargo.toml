@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 aperture-storage = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
+futures-util = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }

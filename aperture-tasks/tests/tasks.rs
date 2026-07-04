@@ -106,6 +106,23 @@ impl TaskDefinition for Parent {
     }
 }
 
+/// A task whose body panics. Used to check a panic still settles the task.
+struct Boom;
+
+impl TaskDefinition for Boom {
+    const KIND: &'static str = "boom";
+    type Input = Empty;
+    type Output = Empty;
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    async fn run(&self, _input: Empty, _ctx: TaskContext) -> Result<Empty, RunError> {
+        panic!("boom");
+    }
+}
+
 fn probe(cancellable: bool) -> (Probe, Arc<Notify>, Arc<Notify>) {
     let ready = Arc::new(Notify::new());
     let gate = Arc::new(Notify::new());
@@ -220,6 +237,26 @@ async fn child_inherits_parent_cancellation() {
     let recorded = storage.tasks().get(child).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Cancelled);
     assert_eq!(recorded.parent_id, Some(parent_id));
+}
+
+#[tokio::test]
+async fn panicking_task_settles_as_failed() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let mut registry = TaskRegistry::new();
+    registry.register(Boom);
+    let tasks = Tasks::new(storage.clone(), registry);
+
+    let handle = tasks.spawn::<Boom>(Empty {}).await.unwrap();
+    let id = handle.id();
+
+    // The body panics, but wait() must still return rather than hang forever.
+    assert!(matches!(handle.wait().await, Err(TaskError::Run(RunError::Failed(_)))));
+
+    let recorded = storage.tasks().get(id).await.unwrap().unwrap();
+    assert_eq!(recorded.status, TaskStatus::Failed);
+
+    // A panicked task settles, so shutdown finds nothing to wait on.
+    tasks.shutdown().await;
 }
 
 #[tokio::test]

@@ -5,8 +5,10 @@
 //! input on the way in, and the typed output is encoded back out. The body never
 //! sees a [`Value`]. A blanket impl bridges every [`TaskDefinition`].
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
+use futures_util::FutureExt;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::task::{AbortHandle, JoinSet};
@@ -16,7 +18,7 @@ use utoipa::openapi::{RefOr, Schema};
 
 use crate::context::TaskContext;
 use crate::definition::{Capabilities, TaskDefinition};
-use crate::error::TaskError;
+use crate::error::{RunError, TaskError};
 
 pub(crate) trait ErasedDefinition: Send + Sync + 'static {
     fn kind(&self) -> &'static str;
@@ -92,12 +94,17 @@ impl<T: TaskDefinition> ErasedDefinition for T {
     ) -> AbortHandle {
         set.spawn(async move {
             let run_ctx = ctx.clone();
-            let outcome = async {
+            // Catch a panic in the body so the task still settles: its durable
+            // record is finished and anyone awaiting it (or shutdown) is woken.
+            // Without this a panic would leave the phase Running forever.
+            let outcome = AssertUnwindSafe(async {
                 let input: T::Input = serde_json::from_value(input).map_err(TaskError::DecodeInput)?;
                 let output = TaskDefinition::run(&*self, input, run_ctx).await?;
                 serde_json::to_value(output).map_err(TaskError::EncodeOutput)
-            }
-            .await;
+            })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| Err(TaskError::Run(RunError::Failed(anyhow::format_err!("task panicked")))));
             ctx.complete(outcome).await;
         })
     }

@@ -154,6 +154,37 @@ impl TaskRepository {
         Ok(self.connection.last_insert_rowid())
     }
 
+    /// Records a new invocation already in the [`TaskStatus::Running`] state and
+    /// returns its assigned id. Used when a task starts running the moment it is
+    /// created, so no observable [`TaskStatus::Pending`] step exists.
+    pub async fn create_running(
+        &self,
+        kind: &str,
+        parent_id: Option<i64>,
+        input: &str,
+        started_at: Timestamp,
+    ) -> Result<i64> {
+        let params = params_from_iter([
+            Value::Text(kind.to_owned()),
+            int_or_null(parent_id),
+            Value::Text(TaskStatus::Running.as_db().to_owned()),
+            Value::Text(input.to_owned()),
+            Value::Integer(started_at.as_millisecond()),
+            Value::Integer(started_at.as_millisecond()),
+        ]);
+        self.connection
+            .execute(
+                sql!(
+                    INSERT INTO tasks (kind, parent_id, status, input, created_at, started_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ),
+                params,
+            )
+            .await
+            .map_err(database)?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
     /// Marks the invocation with `id` as running.
     pub async fn mark_running(&self, id: i64, started_at: Timestamp) -> Result<()> {
         self.connection
@@ -172,6 +203,10 @@ impl TaskRepository {
 
     /// Records the terminal outcome of the invocation with `id`. `output` is the
     /// JSON-encoded result on success, `error` the detail on failure.
+    ///
+    /// Only an unfinished row is updated. A row that already reached a terminal
+    /// state keeps it, so a late interrupt during shutdown cannot clobber a task
+    /// that just succeeded.
     pub async fn finish(
         &self,
         id: i64,
@@ -185,7 +220,7 @@ impl TaskRepository {
                 sql!(
                     UPDATE tasks
                     SET status = ?1, finished_at = ?2, output = ?3, error = ?4
-                    WHERE id = ?5
+                    WHERE id = ?5 AND finished_at IS NULL
                 ),
                 params_from_iter([
                     Value::Text(status.as_db().to_owned()),

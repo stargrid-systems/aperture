@@ -88,11 +88,15 @@ impl TaskDefinition for DownloadDefinition {
             key: input.key,
             source: input.source.into(),
         };
-        let artifact = self
-            .artifacts
-            .download(request, ctx.progress())
-            .await
-            .map_err(|err| RunError::Failed(err.into()))?;
+        // Stop the fetch as soon as cancellation is requested. The partial blob
+        // is staged in a temp file and never placed, so a later sync reclaims it.
+        let artifact = tokio::select! {
+            biased;
+            () = ctx.cancellation_token().cancelled() => return Err(RunError::Cancelled),
+            result = self.artifacts.download(request, ctx.progress()) => {
+                result.map_err(|err| RunError::Failed(err.into()))?
+            }
+        };
         Ok(DownloadOutput {
             digest: artifact.digest,
             size_bytes: artifact.size_bytes.try_into().unwrap_or(0),

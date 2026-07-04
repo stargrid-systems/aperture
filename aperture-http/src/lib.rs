@@ -6,9 +6,9 @@
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde_json::json;
 use utoipa::OpenApi;
-use utoipa::openapi::{RefOr, Schema};
+use utoipa::openapi::RefOr;
+use utoipa::openapi::schema::{Discriminator, ObjectBuilder, OneOfBuilder, Ref, Schema, Type};
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa_axum::router::OpenApiRouter;
 
@@ -92,7 +92,7 @@ fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
     }
 
     let components = spec.components.get_or_insert_with(Default::default);
-    let mut variants = Vec::new();
+    let mut union = OneOfBuilder::new().discriminator(Some(Discriminator::new("kind")));
     for descriptor in descriptors {
         for (name, schema) in &descriptor.schemas {
             components
@@ -100,33 +100,28 @@ fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
                 .entry(name.clone())
                 .or_insert_with(|| schema.clone());
         }
-        variants.push(json!({
-            "type": "object",
-            "required": ["kind", "input"],
-            "properties": {
-                "kind": { "type": "string", "enum": [descriptor.kind] },
-                "input": { "$ref": format!("#/components/schemas/{}", descriptor.input_name) },
-            },
-        }));
+        let kind = ObjectBuilder::new()
+            .schema_type(Type::String)
+            .enum_values(Some([descriptor.kind]))
+            .build();
+        let variant = ObjectBuilder::new()
+            .property("kind", kind)
+            .required("kind")
+            .property("input", Ref::from_schema_name(descriptor.input_name.clone()))
+            .required("input")
+            .build();
+        union = union.item(variant);
     }
 
-    let union = json!({
-        "oneOf": variants,
-        "discriminator": { "propertyName": "kind" },
-    });
-    if let Ok(schema) = serde_json::from_value::<RefOr<Schema>>(union) {
-        components.schemas.insert("CreateTaskInput".to_owned(), schema);
-        set_create_body(spec);
-    }
+    components
+        .schemas
+        .insert("CreateTaskInput".to_owned(), Schema::OneOf(union.build()).into());
+    set_create_body(spec);
 }
 
 /// Points the `POST /tasks` request body at the `CreateTaskInput` union.
 fn set_create_body(spec: &mut OpenApiSpec) {
-    let Ok(schema) = serde_json::from_value::<RefOr<Schema>>(json!({
-        "$ref": "#/components/schemas/CreateTaskInput",
-    })) else {
-        return;
-    };
+    let schema = RefOr::Ref(Ref::from_schema_name("CreateTaskInput"));
     if let Some(item) = spec.paths.paths.get_mut("/api/v1/tasks")
         && let Some(operation) = item.post.as_mut()
         && let Some(body) = operation.request_body.as_mut()

@@ -233,11 +233,14 @@ impl Inner {
         Ok(true)
     }
 
-    /// Returns the newest present version of `key`, or fetches it. On a fetch it
-    /// stages the bytes, verifies the digest, and records the new version.
+    /// Returns the newest present version of `key`, or fetches it. The cached
+    /// version is reused only when it came from the same source; a repointed
+    /// source is always fetched. On a fetch it stages the bytes, verifies the
+    /// digest, and records the new version.
     async fn download(&self, request: &FetchRequest, progress: &ProgressHandle) -> Result<Artifact> {
         let repository = self.storage.artifacts();
         if let Some(latest) = repository.latest(&request.key).await?
+            && latest.source == request.source_str()
             && let Ok(digest) = latest.digest.parse::<Digest>()
             && self.blobs.contains(&digest).await
         {
