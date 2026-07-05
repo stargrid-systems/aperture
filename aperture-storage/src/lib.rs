@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use turso::{Builder, Connection};
+use turso::{Builder, Connection, Database};
 
 pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
 use self::error::database;
@@ -23,11 +23,6 @@ pub use self::task::{
     TaskRepository, TaskStatus,
 };
 
-/// Busy timeout for write contention. turso uses WAL mode by default, but two
-/// writers still need to take turns. Without a timeout the second writer
-/// immediately receives "database is locked".
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-
 mod artifact;
 mod error;
 mod log;
@@ -37,10 +32,22 @@ mod page;
 mod row;
 mod task;
 
+/// Busy timeout for write contention. turso uses WAL mode by default, but two
+/// writers still need to take turns. Without a timeout the second writer
+/// immediately receives "database is locked".
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Handle to the gateway's persistent storage.
+///
+/// Cloning is cheap: [`Database`] is a single [`Arc`] handle internally. Each
+/// repository gets its own independent [`Connection`] via
+/// [`Database::connect`], so concurrent queries do not serialize through a
+/// shared connection's locks.
+///
+/// [`Arc`]: std::sync::Arc
 #[derive(Clone)]
 pub struct Storage {
-    connection: Connection,
+    db: Database,
 }
 
 impl Storage {
@@ -54,29 +61,42 @@ impl Storage {
             .build()
             .await
             .map_err(database)?;
-        let connection = db.connect().map_err(database)?;
-        connection.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
-        run(&connection).await?;
-        Ok(Self { connection })
+        let conn = db.connect().map_err(database)?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
+        run(&conn).await?;
+        Ok(Self { db })
+    }
+
+    /// Creates a fresh independent connection with the busy timeout applied.
+    /// For a local database that was already opened successfully, `connect`
+    /// does not fail under normal circumstances.
+    fn connect(&self) -> Connection {
+        let conn = self
+            .db
+            .connect()
+            .expect("connection to an open local database should not fail");
+        conn.busy_timeout(BUSY_TIMEOUT)
+            .expect("busy_timeout should not fail on a fresh connection");
+        conn
     }
 
     /// Returns the repository over the artifact catalog.
     pub fn artifacts(&self) -> ArtifactRepository {
-        ArtifactRepository::new(self.connection.clone())
+        ArtifactRepository::new(self.connect())
     }
 
     /// Returns the repository over the task catalog.
     pub fn tasks(&self) -> TaskRepository {
-        TaskRepository::new(self.connection.clone())
+        TaskRepository::new(self.connect())
     }
 
     /// Returns the repository over the structured log tables.
     pub fn logs(&self) -> LogRepository {
-        LogRepository::new(self.connection.clone())
+        LogRepository::new(self.connect())
     }
 
     /// Returns a [`LogWriter`] for batch inserts from a background task.
     pub async fn log_writer(&self) -> Result<LogWriter> {
-        LogWriter::new(self.connection.clone()).await
+        LogWriter::new(self.connect()).await
     }
 }

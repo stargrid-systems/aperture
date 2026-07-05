@@ -7,6 +7,7 @@ use aperture_storage::LogRepository;
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::routing::get;
 use axum::{Json, Router};
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa::openapi::RefOr;
@@ -90,6 +91,8 @@ pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
 ///
 /// The JSON API lives under `/api`. Everything else falls back to the Spectra
 /// frontend, which the state's [`Spectra`] serves and fetches on demand.
+/// A [`TraceLayer`] creates a span for each request so per-request tracing
+/// shows up in the log viewer.
 pub fn app(state: AppState) -> Router {
     let (api, mut doc) = self::api_router().split_for_parts();
     project_tasks(&mut doc, &state.tasks().registry().descriptors());
@@ -97,6 +100,7 @@ pub fn app(state: AppState) -> Router {
         .merge(api)
         .route("/api/openapi.json", get(move || openapi_doc(doc.clone())))
         .fallback(spectra_fallback)
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 

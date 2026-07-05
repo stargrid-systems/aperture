@@ -33,11 +33,11 @@ pub(super) const SQL: &str = sql!(
     CREATE INDEX idx_tasks_status ON tasks (status);
     CREATE INDEX idx_tasks_parent ON tasks (parent_id);
 
-    CREATE TABLE spans (
+    CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,
-        parent_id INTEGER REFERENCES spans (id),
+        parent_id INTEGER REFERENCES log_spans (id),
         name TEXT NOT NULL,
-        level TEXT NOT NULL,
+        level INTEGER NOT NULL,
         target TEXT NOT NULL,
         file TEXT,
         line INTEGER,
@@ -45,14 +45,14 @@ pub(super) const SQL: &str = sql!(
         ended_at INTEGER,
         fields TEXT
     ) STRICT;
-    CREATE INDEX idx_spans_parent ON spans (parent_id);
-    CREATE INDEX idx_spans_started ON spans (started_at);
-    CREATE INDEX idx_spans_target ON spans (target);
+    CREATE INDEX idx_log_spans_parent ON log_spans (parent_id);
+    CREATE INDEX idx_log_spans_started ON log_spans (started_at);
+    CREATE INDEX idx_log_spans_target ON log_spans (target);
 
-    CREATE TABLE events (
+    CREATE TABLE log_events (
         id INTEGER PRIMARY KEY,
-        span_id INTEGER REFERENCES spans (id),
-        level TEXT NOT NULL,
+        span_id INTEGER REFERENCES log_spans (id),
+        level INTEGER NOT NULL,
         target TEXT NOT NULL,
         message TEXT,
         timestamp INTEGER NOT NULL,
@@ -60,8 +60,8 @@ pub(super) const SQL: &str = sql!(
         line INTEGER,
         fields TEXT
     ) STRICT;
-    CREATE INDEX idx_events_timestamp ON events (timestamp);
-    CREATE INDEX idx_events_level ON events (level);
-    CREATE INDEX idx_events_target ON events (target);
-    CREATE INDEX idx_events_span_id ON events (span_id);
+    CREATE INDEX idx_log_events_timestamp ON log_events (timestamp);
+    CREATE INDEX idx_log_events_level ON log_events (level);
+    CREATE INDEX idx_log_events_target ON log_events (target);
+    CREATE INDEX idx_log_events_span_id ON log_events (span_id);
 );

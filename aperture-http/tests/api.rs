@@ -11,6 +11,7 @@ use axum::response::Response;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 fn at(millis: i64) -> Timestamp {
     Timestamp::from_millisecond(millis).unwrap()
@@ -56,7 +57,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
         tasks.clone(),
         SpectraConfig::default(),
     );
-    let state = AppState::new("test", uuid::Uuid::nil(), spectra, tasks);
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks);
     (app(state), artifacts)
 }
 

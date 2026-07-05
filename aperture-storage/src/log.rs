@@ -13,23 +13,38 @@ use crate::row::{
     int_or_null, opt_int, opt_text, opt_ts, req_int, req_text, req_ts, text_ref_or_null,
 };
 
+/// Columns selected for an [`Event`], in [`row_to_event`] order.
+const EVENT_COLUMNS: &str = "id, span_id, level, target, message, timestamp, file, line, fields";
+
+/// Columns selected for a [`Span`], in [`row_to_span`] order.
+const SPAN_COLUMNS: &str =
+    "id, parent_id, name, level, target, file, line, started_at, ended_at, fields";
+
+/// SQL shared between [`LogRepository`] and [`LogWriter`] for span inserts.
+/// File-level because the parameter layout is a shared assumption.
 const SQL_INSERT_SPAN: &str = sql!(
-    INSERT INTO spans
+    INSERT INTO log_spans
     (parent_id, name, level, target, file, line, started_at, fields)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 );
 
+/// SQL shared between [`LogRepository`] and [`LogWriter`] for event inserts.
+/// File-level because the parameter layout is a shared assumption.
 const SQL_INSERT_EVENT: &str = sql!(
-    INSERT INTO events
+    INSERT INTO log_events
     (span_id, level, target, message, timestamp, file, line, fields)
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 );
 
-const SQL_CLOSE_SPAN: &str = sql!(UPDATE spans SET ended_at = ?1 WHERE id = ?2);
-
-const SQL_CLOSE_OPEN_SPANS: &str = sql!(UPDATE spans SET ended_at = ?1 WHERE ended_at IS NULL);
+/// SQL shared between [`LogRepository`] and [`LogWriter`] for span closes.
+/// File-level because the parameter layout is a shared assumption.
+const SQL_CLOSE_SPAN: &str = sql!(UPDATE log_spans SET ended_at = ?1 WHERE id = ?2);
 
 /// Severity level of a tracing event or span.
+///
+/// Stored as [`i64`] in the database (see [`Level::as_db`]). Higher values are
+/// more severe, so `level >= N` filters by minimum severity without a CASE
+/// expression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
     Trace,
@@ -40,31 +55,8 @@ pub enum Level {
 }
 
 impl Level {
-    pub(crate) fn as_db(self) -> &'static str {
-        match self {
-            Self::Trace => "trace",
-            Self::Debug => "debug",
-            Self::Info => "info",
-            Self::Warn => "warn",
-            Self::Error => "error",
-        }
-    }
-
-    pub(crate) fn from_db(value: &str) -> Result<Self> {
-        match value {
-            "trace" => Ok(Self::Trace),
-            "debug" => Ok(Self::Debug),
-            "info" => Ok(Self::Info),
-            "warn" => Ok(Self::Warn),
-            "error" => Ok(Self::Error),
-            other => Err(StorageError::Decode(format!("unknown log level {other:?}"))),
-        }
-    }
-
-    /// Numeric severity rank. Higher is more severe. Used for `min_level`
-    /// filtering via a CASE expression since SQLite has no native enum
-    /// ordering.
-    pub(crate) fn rank(self) -> i64 {
+    /// Numeric severity rank stored in the database. Higher is more severe.
+    pub(crate) fn as_db(self) -> i64 {
         match self {
             Self::Trace => 0,
             Self::Debug => 1,
@@ -73,12 +65,18 @@ impl Level {
             Self::Error => 4,
         }
     }
-}
 
-/// SQL CASE expression that maps the `level` text column to its numeric rank.
-/// Used inside `Filters::raw` for `min_level` filtering.
-const LEVEL_RANK_SQL: &str = "(CASE level WHEN 'trace' THEN 0 WHEN 'debug' THEN 1 WHEN 'info' \
-                              THEN 2 WHEN 'warn' THEN 3 WHEN 'error' THEN 4 ELSE -1 END)";
+    pub(crate) fn from_db(value: i64) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Trace),
+            1 => Ok(Self::Debug),
+            2 => Ok(Self::Info),
+            3 => Ok(Self::Warn),
+            4 => Ok(Self::Error),
+            other => Err(StorageError::Decode(format!("unknown log level {other}"))),
+        }
+    }
+}
 
 /// A persisted tracing span.
 #[derive(Debug, Clone)]
@@ -177,13 +175,6 @@ pub struct EventRecord<'a> {
     pub fields: Option<&'a str>,
 }
 
-/// Columns selected for an [`Event`], in [`row_to_event`] order.
-const EVENT_COLUMNS: &str = "id, span_id, level, target, message, timestamp, file, line, fields";
-
-/// Columns selected for a [`Span`], in [`row_to_span`] order.
-const SPAN_COLUMNS: &str =
-    "id, parent_id, name, level, target, file, line, started_at, ended_at, fields";
-
 /// Repository over the structured log tables for query operations.
 pub struct LogRepository {
     connection: Connection,
@@ -267,7 +258,7 @@ impl LogRepository {
         let mut filters = Filters::new();
 
         if let Some(min_level) = filter.min_level {
-            filters.raw(&format!("{LEVEL_RANK_SQL} >= {}", min_level.rank()));
+            filters.gte_int("level", Some(min_level.as_db()));
         }
 
         let targets: Vec<&str> = filter.target.iter().map(String::as_str).collect();
@@ -285,7 +276,7 @@ impl LogRepository {
         filters.keyset(&keyset, &paginator);
 
         let sql = format!(
-            sql!(SELECT {cols} FROM events {where_clause} ORDER BY {order} LIMIT {limit}),
+            sql!(SELECT {cols} FROM log_events {where_clause} ORDER BY {order} LIMIT {limit}),
             cols = EVENT_COLUMNS,
             where_clause = filters.where_clause(),
             order = keyset.order_by(),
@@ -309,12 +300,16 @@ impl LogRepository {
     /// Lists distinct event targets, optionally filtered by prefix.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_targets(&self, q: Option<&str>) -> Result<Vec<String>> {
+        // Raw string because sql!() cannot handle SQL single-quoted literals.
         let sql = match q {
             Some(_) => {
-                "SELECT DISTINCT target FROM events WHERE target LIKE ?1 ESCAPE '\\' ORDER BY \
-                 target"
+                r#"
+                SELECT DISTINCT target FROM log_events
+                WHERE target LIKE ?1 ESCAPE '\'
+                ORDER BY target
+            "#
             }
-            None => "SELECT DISTINCT target FROM events ORDER BY target",
+            None => sql!(SELECT DISTINCT target FROM log_events ORDER BY target),
         };
         let params: Vec<Value> = match q {
             Some(prefix) => vec![Value::Text(format!("{}%", escape_like(prefix)))],
@@ -342,7 +337,7 @@ impl LogRepository {
         let mut filters = Filters::new();
 
         if let Some(min_level) = filter.min_level {
-            filters.raw(&format!("{LEVEL_RANK_SQL} >= {}", min_level.rank()));
+            filters.gte_int("level", Some(min_level.as_db()));
         }
 
         match filter.parent {
@@ -361,7 +356,7 @@ impl LogRepository {
         filters.keyset(&keyset, &paginator);
 
         let sql = format!(
-            sql!(SELECT {cols} FROM spans {where_clause} ORDER BY {order} LIMIT {limit}),
+            sql!(SELECT {cols} FROM log_spans {where_clause} ORDER BY {order} LIMIT {limit}),
             cols = SPAN_COLUMNS,
             where_clause = filters.where_clause(),
             order = keyset.order_by(),
@@ -386,7 +381,7 @@ impl LogRepository {
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get_span(&self, id: i64) -> Result<Option<Span>> {
         let sql = format!(
-            sql!(SELECT {cols} FROM spans WHERE id = ?1),
+            sql!(SELECT {cols} FROM log_spans WHERE id = ?1),
             cols = SPAN_COLUMNS,
         );
         let mut rows = self
@@ -404,7 +399,7 @@ impl LogRepository {
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn events_for_span(&self, span_id: i64) -> Result<Vec<Event>> {
         let sql = format!(
-            sql!(SELECT {cols} FROM events WHERE span_id = ?1 ORDER BY timestamp),
+            sql!(SELECT {cols} FROM log_events WHERE span_id = ?1 ORDER BY timestamp),
             cols = EVENT_COLUMNS,
         );
         let mut rows = self
@@ -424,7 +419,7 @@ impl LogRepository {
     pub async fn close_open_spans(&self, ended_at: Timestamp) -> Result<u64> {
         self.connection
             .execute(
-                SQL_CLOSE_OPEN_SPANS,
+                sql!(UPDATE log_spans SET ended_at = ?1 WHERE ended_at IS NULL),
                 params_from_iter([Value::Integer(ended_at.as_millisecond())]),
             )
             .await
@@ -438,14 +433,14 @@ impl LogRepository {
         let event_count = self
             .connection
             .execute(
-                sql!(DELETE FROM events WHERE timestamp < ?1),
+                sql!(DELETE FROM log_events WHERE timestamp < ?1),
                 params_from_iter([Value::Integer(millis)]),
             )
             .await
             .map_err(database)?;
         self.connection
             .execute(
-                sql!(DELETE FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?1),
+                sql!(DELETE FROM log_spans WHERE ended_at IS NOT NULL AND ended_at < ?1),
                 params_from_iter([Value::Integer(millis)]),
             )
             .await
@@ -462,7 +457,7 @@ impl LogRepository {
                    MIN(timestamp) AS first_seen,
                    MAX(timestamp) AS last_seen,
                    COUNT(*) AS event_count
-            FROM events
+            FROM log_events
             WHERE fields IS NOT NULL
               AND json_extract(fields, '$.boot_id') IS NOT NULL
             GROUP BY boot_id
@@ -547,7 +542,7 @@ impl<'a> SpanInsertBuilder<'a> {
         let params = params_from_iter([
             int_or_null(self.parent_id),
             Value::Text(self.name.to_owned()),
-            Value::Text(self.level.as_db().to_owned()),
+            Value::Integer(self.level.as_db()),
             Value::Text(self.target.to_owned()),
             text_ref_or_null(self.file),
             int_or_null(self.line),
@@ -605,7 +600,7 @@ impl<'a> EventInsertBuilder<'a> {
     pub async fn execute(self) -> Result<i64> {
         let params = params_from_iter([
             int_or_null(self.span_id),
-            Value::Text(self.level.as_db().to_owned()),
+            Value::Integer(self.level.as_db()),
             Value::Text(self.target.to_owned()),
             text_ref_or_null(self.message),
             Value::Integer(self.timestamp.as_millisecond()),
@@ -622,8 +617,8 @@ impl<'a> EventInsertBuilder<'a> {
     }
 }
 
-/// Batch writer for structured logs. Holds a [`Connection`] clone for batch
-/// inserts from a background task.
+/// Batch writer for structured logs. Holds a [`Connection`] for batch inserts
+/// from a background task.
 ///
 /// Prepared statements are reused across inserts for efficiency. Obtain one
 /// with [`Storage::log_writer`].
@@ -654,7 +649,7 @@ impl LogWriter {
         let params = params_from_iter([
             int_or_null(record.parent_id),
             Value::Text(record.name.to_owned()),
-            Value::Text(record.level.as_db().to_owned()),
+            Value::Integer(record.level.as_db()),
             Value::Text(record.target.to_owned()),
             text_ref_or_null(record.file),
             int_or_null(record.line),
@@ -669,7 +664,7 @@ impl LogWriter {
     pub async fn insert_event(&mut self, record: EventRecord<'_>) -> Result<i64> {
         let params = params_from_iter([
             int_or_null(record.span_id),
-            Value::Text(record.level.as_db().to_owned()),
+            Value::Integer(record.level.as_db()),
             Value::Text(record.target.to_owned()),
             text_ref_or_null(record.message),
             Value::Integer(record.timestamp.as_millisecond()),
@@ -718,7 +713,7 @@ fn row_to_event(row: &turso::Row) -> Result<Event> {
     Ok(Event {
         id: req_int(row, 0)?,
         span_id: opt_int(row, 1)?,
-        level: Level::from_db(&req_text(row, 2)?)?,
+        level: Level::from_db(req_int(row, 2)?)?,
         target: req_text(row, 3)?,
         message: opt_text(row, 4)?,
         timestamp: req_ts(row, 5)?,
@@ -733,7 +728,7 @@ fn row_to_span(row: &turso::Row) -> Result<Span> {
         id: req_int(row, 0)?,
         parent_id: opt_int(row, 1)?,
         name: req_text(row, 2)?,
-        level: Level::from_db(&req_text(row, 3)?)?,
+        level: Level::from_db(req_int(row, 3)?)?,
         target: req_text(row, 4)?,
         file: opt_text(row, 5)?,
         line: opt_int(row, 6)?,

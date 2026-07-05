@@ -11,6 +11,8 @@ use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
+use tokio::signal::ctrl_c;
+use uuid::Uuid;
 
 mod logging;
 
@@ -20,7 +22,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;
-    let boot_id = uuid::Uuid::new_v4();
+    let boot_id = Uuid::new_v4();
     let log_writer = artifacts
         .storage()
         .log_writer()
@@ -83,8 +85,6 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
 
 /// Resolves when the process is asked to stop, via Ctrl+C or SIGTERM.
 async fn shutdown_signal() {
-    use tokio::signal::ctrl_c;
-
     let interrupt = async {
         ctrl_c().await.expect("failed to install Ctrl+C handler");
     };

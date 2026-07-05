@@ -19,8 +19,7 @@ serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 turso = { workspace = true, features = ["fts"] }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-uuid = { workspace = true }

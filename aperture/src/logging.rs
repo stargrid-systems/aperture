@@ -13,13 +13,11 @@
 //! [`DbLogLayer`] rather than using the static `"log"` target.
 //!
 //! [`DbLogLayer`]: layer::DbLogLayer
-//!
-//! [`LogTracer`]: tracing_log::LogTracer
 
 use aperture_storage::LogWriter;
 use tracing_subscriber::filter::{LevelFilter, Targets};
-use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, fmt};
 use uuid::Uuid;
 
 use self::layer::{DbLogLayer, WorkerHandle};
@@ -27,8 +25,7 @@ use self::layer::{DbLogLayer, WorkerHandle};
 mod layer;
 
 /// Default console filter: aperture crates at INFO, everything else at WARN.
-const DEFAULT_FILTER: &str =
-    "aperture=info,aperture_storage=info,aperture_http=info,aperture_artifacts=info,warn";
+const DEFAULT_FILTER: &str = "aperture=info,warn";
 
 /// Sets up the tracing subscriber with a fmt layer (stdout) and a database
 /// layer.
@@ -37,26 +34,16 @@ const DEFAULT_FILTER: &str =
 /// lifetime of the application and call [`WorkerHandle::shutdown`] before
 /// exiting to flush pending records.
 pub fn init(writer: LogWriter, boot_id: Uuid) -> WorkerHandle {
-    use tracing_subscriber::EnvFilter;
-
     let console_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
     let fmt_layer = fmt::layer().with_filter(console_filter);
 
-    // The DB layer captures everything at TRACE except crates whose
-    // diagnostics are caused by the database engine itself. Without this,
-    // turso emits trace events for each insert, the layer captures them,
-    // and a feedback loop fills the channel.
-    //
-    // Log-bridged events carry metadata target "log", so the Targets filter
-    // cannot exclude them by their real target. The DbLogLayer drops those
-    // in `on_event` after extracting the real target from the `log.target`
-    // field.
-    let db_filter = Targets::new()
-        .with_target("turso", LevelFilter::WARN)
-        .with_target("tantivy", LevelFilter::WARN)
-        .with_target("backhand", LevelFilter::WARN)
-        .with_default(LevelFilter::TRACE);
+    // The DB layer captures everything at TRACE. The feedback loop (events
+    // emitted by the DB engine during a flush) is prevented by the
+    // FLUSH_SPAN_NAME span check in DbLogLayer::on_event, not by excluding
+    // crates here. Log-bridged events carry metadata target "log", so the
+    // real target is extracted from the `log.target` field in on_event.
+    let db_filter = Targets::new().with_default(LevelFilter::TRACE);
 
     let (db_layer, handle) = DbLogLayer::spawn(writer, boot_id);
     let db_layer = db_layer.with_filter(db_filter);

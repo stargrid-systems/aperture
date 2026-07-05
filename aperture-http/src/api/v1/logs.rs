@@ -1,4 +1,4 @@
-use aperture_storage::{EventFilter, ListQuery, SpanFilter, SpanParentFilter};
+use aperture_storage::{EventFilter, SpanFilter, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -156,24 +156,4 @@ fn parse_field_filter(json: Option<&str>) -> Result<Vec<(String, String)>, ApiEr
         }
     }
     Ok(pairs)
-}
-
-impl LogListParams {
-    fn to_query(&self) -> ListQuery {
-        ListQuery {
-            limit: self.limit,
-            cursor: self.cursor.clone(),
-            order: self.order.map(Into::into),
-        }
-    }
-}
-
-impl LogSpanListParams {
-    fn to_query(&self) -> ListQuery {
-        ListQuery {
-            limit: self.limit,
-            cursor: self.cursor.clone(),
-            order: self.order.map(Into::into),
-        }
-    }
 }
