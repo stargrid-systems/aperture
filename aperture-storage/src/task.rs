@@ -240,6 +240,7 @@ impl TaskRepository {
 
     /// Records a new invocation in the [`TaskStatus::Pending`] state and
     /// returns its assigned id. `input` is the JSON-encoded task input.
+    #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create(
         &self,
         kind: &str,
@@ -271,6 +272,7 @@ impl TaskRepository {
     /// and returns its assigned id. Used when a task starts running the
     /// moment it is created, so no observable [`TaskStatus::Pending`] step
     /// exists.
+    #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create_running(
         &self,
         kind: &str,
@@ -300,6 +302,7 @@ impl TaskRepository {
     }
 
     /// Marks the invocation with `id` as running.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn mark_running(&self, id: i64, started_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
@@ -321,6 +324,7 @@ impl TaskRepository {
     /// Only an unfinished row is updated. A row that already reached a terminal
     /// state keeps it, so a late interrupt during shutdown cannot clobber a
     /// task that just succeeded.
+    #[tracing::instrument(level = "info", skip(self, output, error))]
     pub async fn finish(
         &self,
         id: i64,
@@ -350,6 +354,7 @@ impl TaskRepository {
     }
 
     /// Returns the invocation with `id`, if it exists.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn get(&self, id: i64) -> Result<Option<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE id = ?1),
@@ -369,6 +374,7 @@ impl TaskRepository {
     /// Lists invocations, newest first, optionally filtered by `status`,
     /// `kind`, `parent`, and any number of `json` field matches over the
     /// input/output payloads. All filters combine with `AND`.
+    #[tracing::instrument(level = "info", skip(self, json, query))]
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
@@ -421,6 +427,7 @@ impl TaskRepository {
     }
 
     /// Lists the children of `parent_id`, oldest first.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn children(&self, parent_id: i64) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE parent_id = ?1 ORDER BY id),
@@ -440,6 +447,7 @@ impl TaskRepository {
 
     /// Lists invocations still in an active state. After a clean start these
     /// are leftovers from a process that stopped mid-run.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_active(&self) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE status IN (?1, ?2) ORDER BY id),

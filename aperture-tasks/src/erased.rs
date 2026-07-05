@@ -12,6 +12,7 @@ use futures_util::FutureExt;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::task::{AbortHandle, JoinSet};
+use tracing::Instrument;
 use utoipa::openapi::{RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
 
@@ -91,25 +92,30 @@ impl<T: TaskDefinition> ErasedDefinition for T {
         ctx: TaskContext,
         set: &mut JoinSet<()>,
     ) -> AbortHandle {
-        set.spawn(async move {
-            let run_ctx = ctx.clone();
-            // Catch a panic in the body so the task still settles: its durable
-            // record is finished and anyone awaiting it (or shutdown) is woken.
-            // Without this a panic would leave the phase Running forever.
-            let outcome = AssertUnwindSafe(async {
-                let input: T::Input =
-                    serde_json::from_value(input).map_err(TaskError::DecodeInput)?;
-                let output = TaskDefinition::run(&*self, input, run_ctx).await?;
-                serde_json::to_value(output).map_err(TaskError::EncodeOutput)
-            })
-            .catch_unwind()
-            .await
-            .unwrap_or_else(|_| {
-                Err(TaskError::Run(RunError::Failed(anyhow::format_err!(
-                    "task panicked"
-                ))))
-            });
-            ctx.complete(outcome).await;
-        })
+        let kind = T::KIND;
+        let id = ctx.id();
+        set.spawn(
+            async move {
+                let run_ctx = ctx.clone();
+                // Catch a panic in the body so the task still settles: its durable
+                // record is finished and anyone awaiting it (or shutdown) is woken.
+                // Without this a panic would leave the phase Running forever.
+                let outcome = AssertUnwindSafe(async {
+                    let input: T::Input =
+                        serde_json::from_value(input).map_err(TaskError::DecodeInput)?;
+                    let output = TaskDefinition::run(&*self, input, run_ctx).await?;
+                    serde_json::to_value(output).map_err(TaskError::EncodeOutput)
+                })
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    Err(TaskError::Run(RunError::Failed(anyhow::format_err!(
+                        "task panicked"
+                    ))))
+                });
+                ctx.complete(outcome).await;
+            }
+            .instrument(tracing::info_span!("task", kind, id)),
+        )
     }
 }

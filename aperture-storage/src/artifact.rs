@@ -71,6 +71,7 @@ impl ArtifactRepository {
 
     /// Records a stored version. If `(key, digest)` already exists its metadata
     /// is refreshed. The `id` field of `artifact` is ignored.
+    #[tracing::instrument(level = "info", skip(self, artifact))]
     pub async fn record_version(&self, artifact: &Artifact) -> Result<()> {
         let params = params_from_iter([
             Value::Text(artifact.key.clone()),
@@ -104,6 +105,7 @@ impl ArtifactRepository {
     }
 
     /// Returns the newest stored version of `key`, if any.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn latest(&self, key: &str) -> Result<Option<Artifact>> {
         let sql = format!(
             sql!(
@@ -124,6 +126,7 @@ impl ArtifactRepository {
     }
 
     /// Returns the `(key, digest)` version, if stored.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn get_version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
         let sql = format!(
             sql!(SELECT {cols} FROM artifacts WHERE key = ?1 AND digest = ?2),
@@ -144,6 +147,7 @@ impl ArtifactRepository {
     }
 
     /// Returns `key` with its newest version and version count, if it exists.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn get_key(&self, key: &str) -> Result<Option<ArtifactKey>> {
         let sql = format!(
             sql!(
@@ -169,6 +173,7 @@ impl ArtifactRepository {
     /// Lists distinct keys, each with its newest version and version count.
     /// Ordered by key, ascending by default. `q` matches a substring of the
     /// key.
+    #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_keys(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<ArtifactKey>> {
         let paginator = Paginator::new(query, Order::Asc)?;
         let keyset = Keyset::unique("a.key", paginator.query_order());
@@ -210,6 +215,7 @@ impl ArtifactRepository {
 
     /// Lists the stored versions of `key`. Ordered by `sort`, descending by
     /// default. Optionally filtered by exact `media_type` and `version`.
+    #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_versions(
         &self,
         key: &str,
@@ -258,6 +264,7 @@ impl ArtifactRepository {
     }
 
     /// Lists every stored version. For internal reconciliation, not paginated.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn all_versions(&self) -> Result<Vec<Artifact>> {
         let sql = format!(
             sql!(SELECT {cols} FROM artifacts ORDER BY id),
@@ -272,6 +279,7 @@ impl ArtifactRepository {
     }
 
     /// Removes the `(key, digest)` version. Does nothing if it is absent.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete_version(&self, key: &str, digest: &str) -> Result<()> {
         self.connection
             .execute(

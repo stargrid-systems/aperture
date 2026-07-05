@@ -22,7 +22,7 @@ serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-util = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["std"] }
 utoipa = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
