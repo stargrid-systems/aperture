@@ -15,7 +15,7 @@ use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{MissedTickBehavior, interval, timeout};
-use tracing::span::{Attributes as SpanAttributes, Id as SpanId};
+use tracing::span::{Attributes as SpanAttributes, Id as SpanId, Record as TracingRecord};
 use tracing::{Event, Level as TracingLevel, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
@@ -45,6 +45,7 @@ const FLUSH_SPAN_NAME: &str = "log_flush";
 enum Record {
     SpanStart(SpanStart),
     SpanEnd(SpanEnd),
+    SpanFields(SpanFields),
     Event(EventMsg),
 }
 
@@ -63,6 +64,11 @@ struct SpanStart {
 struct SpanEnd {
     tracing_id: u64,
     ended_at: Timestamp,
+}
+
+struct SpanFields {
+    tracing_id: u64,
+    fields: String,
 }
 
 struct EventMsg {
@@ -181,7 +187,10 @@ where
         attrs.record(&mut visitor);
 
         let tracing_id = id.into_u64();
-        let parent_tracing_id = attrs.parent().map(|p| p.into_u64());
+        let parent_tracing_id = attrs
+            .parent()
+            .map(|p| p.into_u64())
+            .or_else(|| ctx.lookup_current().map(|s| s.id().into_u64()));
 
         self.try_send(Record::SpanStart(SpanStart {
             tracing_id,
@@ -247,6 +256,24 @@ where
             ended_at: Timestamp::now(),
         }));
     }
+
+    fn on_record(&self, id: &SpanId, values: &TracingRecord<'_>, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id)
+            && span
+                .scope()
+                .any(|ancestor| ancestor.name() == FLUSH_SPAN_NAME)
+        {
+            return;
+        }
+        let mut visitor = FieldCollector::additional();
+        values.record(&mut visitor);
+        if let Some(fields) = visitor.into_json() {
+            self.try_send(Record::SpanFields(SpanFields {
+                tracing_id: id.into_u64(),
+                fields,
+            }));
+        }
+    }
 }
 
 /// Background writer task: drains the channel and batch-inserts records.
@@ -257,6 +284,7 @@ async fn writer_task(
     mut shutdown: oneshot::Receiver<()>,
 ) {
     let mut span_ids: HashMap<u64, i64> = HashMap::new();
+    let mut span_fields: HashMap<u64, String> = HashMap::new();
     let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
     let mut interval = interval(FLUSH_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -268,7 +296,7 @@ async fn writer_task(
                 while let Ok(record) = rx.try_recv() {
                     batch.push(record);
                 }
-                flush(&mut writer, &mut batch, &mut span_ids).await;
+                flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
                 flush_dropped(&mut writer, &dropped).await;
                 break;
             }
@@ -276,19 +304,19 @@ async fn writer_task(
                 match maybe_record {
                     Some(record) => batch.push(record),
                     None => {
-                        flush(&mut writer, &mut batch, &mut span_ids).await;
+                        flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
                         flush_dropped(&mut writer, &dropped).await;
                         break;
                     }
                 }
                 if batch.len() >= FLUSH_BATCH {
-                    flush(&mut writer, &mut batch, &mut span_ids).await;
+                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
                     flush_dropped(&mut writer, &dropped).await;
                 }
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    flush(&mut writer, &mut batch, &mut span_ids).await;
+                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
                     flush_dropped(&mut writer, &dropped).await;
                 }
             }
@@ -332,7 +360,12 @@ where
 /// Instrumented with [`FLUSH_SPAN_NAME`] so events emitted by the DB engine
 /// during the flush are filtered by [`DbLogLayer::on_event`].
 #[tracing::instrument(name = FLUSH_SPAN_NAME, level = "trace", skip_all)]
-async fn flush(writer: &mut LogWriter, batch: &mut Vec<Record>, span_ids: &mut HashMap<u64, i64>) {
+async fn flush(
+    writer: &mut LogWriter,
+    batch: &mut Vec<Record>,
+    span_ids: &mut HashMap<u64, i64>,
+    span_fields: &mut HashMap<u64, String>,
+) {
     for record in batch.drain(..) {
         match record {
             Record::SpanStart(s) => {
@@ -353,9 +386,21 @@ async fn flush(writer: &mut LogWriter, batch: &mut Vec<Record>, span_ids: &mut H
                     .await;
                 if let Ok(db_id) = result {
                     span_ids.insert(s.tracing_id, db_id);
+                    if let Some(fields) = s.fields {
+                        span_fields.insert(s.tracing_id, fields);
+                    }
+                }
+            }
+            Record::SpanFields(f) => {
+                if let Some(&db_id) = span_ids.get(&f.tracing_id) {
+                    let current = span_fields.get(&f.tracing_id).cloned();
+                    let merged = merge_json_fields(current.as_deref(), &f.fields);
+                    span_fields.insert(f.tracing_id, merged.clone());
+                    let _ = writer.update_span_fields(db_id, &merged).await;
                 }
             }
             Record::SpanEnd(s) => {
+                span_fields.remove(&s.tracing_id);
                 if let Some(&db_id) = span_ids.get(&s.tracing_id) {
                     let _ = writer.close_span(db_id, s.ended_at).await;
                     span_ids.remove(&s.tracing_id);
@@ -402,6 +447,23 @@ fn tracing_to_db_level(level: &TracingLevel) -> Level {
     }
 }
 
+/// Merges `additions` (a JSON object string) into `existing` (a JSON object
+/// string or `None`). Returns the merged JSON string.
+fn merge_json_fields(existing: Option<&str>, additions: &str) -> String {
+    let mut base: serde_json::Value = existing
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    if let (Some(base_map), Ok(serde_json::Value::Object(add))) = (
+        base.as_object_mut(),
+        serde_json::from_str::<serde_json::Value>(additions),
+    ) {
+        for (k, v) in add {
+            base_map.insert(k, v);
+        }
+    }
+    base.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use tracing::Dispatch;
@@ -446,6 +508,7 @@ mod tests {
                 Record::Event(e) => events.push(e),
                 Record::SpanStart(_) => span_starts += 1,
                 Record::SpanEnd(_) => span_ends += 1,
+                Record::SpanFields(_) => {}
             }
         }
 
@@ -481,7 +544,143 @@ mod tests {
         while rx.try_recv().is_ok() {
             count += 1;
         }
-        // 2 events. No spans created, so no SpanStart/SpanEnd.
         assert_eq!(count, 2);
+    }
+
+    /// A span created within another span must record the parent's tracing id.
+    #[test]
+    fn parent_child_span_relationship() {
+        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = Dispatch::new(subscriber).set_default();
+
+        let parent = tracing::info_span!("parent");
+        let _parent_guard = parent.enter();
+
+        let child = tracing::info_span!("child");
+        let _child_guard = child.enter();
+
+        drop(_child_guard);
+        drop(_parent_guard);
+
+        let mut span_starts = Vec::new();
+        while let Ok(record) = rx.try_recv() {
+            if let Record::SpanStart(s) = record {
+                span_starts.push(s);
+            }
+        }
+
+        assert_eq!(span_starts.len(), 2);
+        // Records arrive in creation order: parent first, child second.
+        let parent = &span_starts[0];
+        let child = &span_starts[1];
+        assert_eq!(parent.name, "parent");
+        assert_eq!(child.name, "child");
+        assert_eq!(
+            child.parent_tracing_id,
+            Some(parent.tracing_id),
+            "child must reference parent's tracing id"
+        );
+    }
+
+    /// A root span (no parent entered) must have `parent_tracing_id = None`.
+    #[test]
+    fn root_span_has_no_parent() {
+        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = Dispatch::new(subscriber).set_default();
+
+        let span = tracing::info_span!("root");
+        let _guard = span.enter();
+        drop(_guard);
+
+        while let Ok(record) = rx.try_recv() {
+            if let Record::SpanStart(s) = record {
+                assert_eq!(s.name, "root");
+                assert!(s.parent_tracing_id.is_none(), "root span has no parent");
+                return;
+            }
+        }
+        panic!("no SpanStart record received");
+    }
+
+    /// Fields recorded after span creation via `span.record(...)` must produce
+    /// a `SpanFields` record that the writer merges into the span's fields.
+    #[test]
+    fn late_span_fields_are_captured() {
+        use tracing::field;
+
+        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = Dispatch::new(subscriber).set_default();
+
+        // `late_field` is declared as Empty so it can be recorded later.
+        let span = tracing::info_span!("my_span", initial = 42, late_field = field::Empty);
+        let _guard = span.enter();
+        span.record("late_field", "hello");
+        drop(_guard);
+
+        let mut found_start = false;
+        let mut found_fields = false;
+        while let Ok(record) = rx.try_recv() {
+            match record {
+                Record::SpanStart(s) => {
+                    assert_eq!(s.name, "my_span");
+                    assert!(
+                        s.fields.as_ref().is_some_and(|f| f.contains("initial")),
+                        "initial field should be in span start: {:?}",
+                        s.fields
+                    );
+                    found_start = true;
+                }
+                Record::SpanFields(f) => {
+                    assert!(
+                        f.fields.contains("late_field"),
+                        "late_field should be in span fields: {}",
+                        f.fields
+                    );
+                    assert!(
+                        f.fields.contains("hello"),
+                        "hello value should be in span fields: {}",
+                        f.fields
+                    );
+                    found_fields = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(found_start, "SpanStart record must be present");
+        assert!(found_fields, "SpanFields record must be present");
+    }
+
+    /// `merge_json_fields` correctly merges new keys into existing JSON.
+    #[test]
+    fn merge_json_fields_merges_objects() {
+        let existing = r#"{"boot_id":"abc","count":1}"#;
+        let additions = r#"{"status":"ok"}"#;
+        let merged = merge_json_fields(Some(existing), additions);
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(v["boot_id"], "abc");
+        assert_eq!(v["count"], 1);
+        assert_eq!(v["status"], "ok");
+    }
+
+    /// `merge_json_fields` works with no existing fields.
+    #[test]
+    fn merge_json_fields_from_empty() {
+        let additions = r#"{"key":"value"}"#;
+        let merged = merge_json_fields(None, additions);
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(v["key"], "value");
+    }
+
+    /// `merge_json_fields` overwrites existing keys with new values.
+    #[test]
+    fn merge_json_fields_overwrites() {
+        let existing = r#"{"status":"pending"}"#;
+        let additions = r#"{"status":"done"}"#;
+        let merged = merge_json_fields(Some(existing), additions);
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(v["status"], "done");
     }
 }

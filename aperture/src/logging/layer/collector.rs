@@ -45,6 +45,19 @@ impl FieldCollector {
         }
     }
 
+    /// Creates a collector for additional fields recorded after span creation
+    /// (via `Span::record`). Does not include `boot_id`.
+    pub fn additional() -> Self {
+        Self {
+            json: Vec::new(),
+            first: true,
+            message: None,
+            log_target: None,
+            log_file: None,
+            log_line: None,
+        }
+    }
+
     pub fn take_message(&mut self) -> Option<String> {
         self.message.take()
     }

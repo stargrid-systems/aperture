@@ -39,13 +39,11 @@ pub fn init(writer: LogWriter, boot_id: Uuid) -> WorkerHandle {
     let fmt_layer = fmt::layer().with_filter(console_filter);
 
     let db_filter = Targets::new()
-        .with_default(LevelFilter::INFO)
-        .with_target("aperture", LevelFilter::TRACE)
-        .with_target("aperture_storage", LevelFilter::TRACE)
-        .with_target("aperture_http", LevelFilter::TRACE)
-        .with_target("aperture_tasks", LevelFilter::TRACE)
-        .with_target("aperture_artifacts", LevelFilter::TRACE)
-        .with_target("turso", LevelFilter::WARN);
+        .with_default(LevelFilter::TRACE)
+        // backhand doesn't really output anything useful at TRACE level.
+        .with_target("backhand", LevelFilter::DEBUG)
+        // HACK: At DEBUG level we get a feedback loop :(
+        .with_target("turso", LevelFilter::INFO);
 
     let (db_layer, handle) = DbLogLayer::spawn(writer, boot_id);
     let db_layer = db_layer.with_filter(db_filter);

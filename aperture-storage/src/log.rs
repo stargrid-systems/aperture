@@ -40,6 +40,9 @@ const SQL_INSERT_EVENT: &str = sql!(
 /// File-level because the parameter layout is a shared assumption.
 const SQL_CLOSE_SPAN: &str = sql!(UPDATE log_spans SET ended_at = ?1 WHERE id = ?2);
 
+/// SQL for updating span fields after late-recorded values arrive.
+const SQL_UPDATE_SPAN_FIELDS: &str = sql!(UPDATE log_spans SET fields = ?1 WHERE id = ?2);
+
 /// Severity level of a tracing event or span.
 ///
 /// Stored as [`i64`] in the database (see [`Level::as_db`]). Higher values are
@@ -629,6 +632,7 @@ pub struct LogWriter {
     insert_span: Statement,
     insert_event: Statement,
     close_span: Statement,
+    update_span_fields: Statement,
 }
 
 impl LogWriter {
@@ -636,11 +640,16 @@ impl LogWriter {
         let insert_span = conn.prepare(SQL_INSERT_SPAN).await.map_err(database)?;
         let insert_event = conn.prepare(SQL_INSERT_EVENT).await.map_err(database)?;
         let close_span = conn.prepare(SQL_CLOSE_SPAN).await.map_err(database)?;
+        let update_span_fields = conn
+            .prepare(SQL_UPDATE_SPAN_FIELDS)
+            .await
+            .map_err(database)?;
         Ok(Self {
             conn,
             insert_span,
             insert_event,
             close_span,
+            update_span_fields,
         })
     }
 
@@ -681,6 +690,19 @@ impl LogWriter {
         self.close_span
             .execute(params_from_iter([
                 Value::Integer(ended_at.as_millisecond()),
+                Value::Integer(id),
+            ]))
+            .await
+            .map_err(database)?;
+        Ok(())
+    }
+
+    /// Updates the fields JSON of a span. Used when fields are recorded after
+    /// the span was created via `Span::record`.
+    pub async fn update_span_fields(&mut self, id: i64, fields: &str) -> Result<()> {
+        self.update_span_fields
+            .execute(params_from_iter([
+                Value::Text(fields.to_owned()),
                 Value::Integer(id),
             ]))
             .await
