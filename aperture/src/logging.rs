@@ -38,12 +38,14 @@ pub fn init(writer: LogWriter, boot_id: Uuid) -> WorkerHandle {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
     let fmt_layer = fmt::layer().with_filter(console_filter);
 
-    // The DB layer captures everything at TRACE. The feedback loop (events
-    // emitted by the DB engine during a flush) is prevented by the
-    // FLUSH_SPAN_NAME span check in DbLogLayer::on_event, not by excluding
-    // crates here. Log-bridged events carry metadata target "log", so the
-    // real target is extracted from the `log.target` field in on_event.
-    let db_filter = Targets::new().with_default(LevelFilter::TRACE);
+    let db_filter = Targets::new()
+        .with_default(LevelFilter::INFO)
+        .with_target("aperture", LevelFilter::TRACE)
+        .with_target("aperture_storage", LevelFilter::TRACE)
+        .with_target("aperture_http", LevelFilter::TRACE)
+        .with_target("aperture_tasks", LevelFilter::TRACE)
+        .with_target("aperture_artifacts", LevelFilter::TRACE)
+        .with_target("turso", LevelFilter::WARN);
 
     let (db_layer, handle) = DbLogLayer::spawn(writer, boot_id);
     let db_layer = db_layer.with_filter(db_filter);

@@ -14,7 +14,7 @@ use aperture_storage::{EventRecord, Level, LogWriter, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::time::{MissedTickBehavior, interval, timeout};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId};
 use tracing::{Event, Level as TracingLevel, Subscriber};
 use tracing_subscriber::Layer;
@@ -99,13 +99,15 @@ pub struct WorkerHandle {
 
 impl WorkerHandle {
     /// Signals the writer to drain remaining records, flush to the database,
-    /// and exit. Waits for the writer to finish.
+    /// and exit. Waits up to 5 seconds for a clean exit, then aborts.
     pub async fn shutdown(mut self) {
         if let Some(tx) = self.shutdown.take() {
             let _ = tx.send(());
         }
-        if let Some(join) = self.join.take() {
-            let _ = join.await;
+        if let Some(join) = self.join.take()
+            && timeout(Duration::from_secs(5), join).await.is_err()
+        {
+            tracing::warn!("log writer did not shut down within 5s");
         }
     }
 }
@@ -119,16 +121,30 @@ impl Drop for WorkerHandle {
 }
 
 impl DbLogLayer {
+    /// Creates the layer and a channel receiver for testing. The receiver
+    /// gets all records the layer produces.
+    fn channel(boot_id: Uuid) -> (Self, mpsc::Receiver<Record>) {
+        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        (
+            Self {
+                tx,
+                dropped,
+                boot_id: Arc::new(boot_id),
+            },
+            rx,
+        )
+    }
+
     /// Creates the layer and spawns the background writer task.
     ///
     /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
     /// should be kept alive for the lifetime of the application. Call
     /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
     pub fn spawn(writer: LogWriter, boot_id: Uuid) -> (Self, WorkerHandle) {
-        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (layer, rx) = Self::channel(boot_id);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let dropped = Arc::new(AtomicU64::new(0));
-        let dropped_clone = dropped.clone();
+        let dropped_clone = Arc::clone(&layer.dropped);
 
         let join = tokio::spawn(writer_task(writer, rx, dropped_clone, shutdown_rx));
 
@@ -137,14 +153,7 @@ impl DbLogLayer {
             shutdown: Some(shutdown_tx),
         };
 
-        (
-            Self {
-                tx,
-                dropped,
-                boot_id: Arc::new(boot_id),
-            },
-            handle,
-        )
+        (layer, handle)
     }
 
     fn try_send(&self, record: Record) {
@@ -158,12 +167,13 @@ impl<S> Layer<S> for DbLogLayer
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    fn on_new_span(&self, attrs: &SpanAttributes<'_>, id: &SpanId, _ctx: Context<'_, S>) {
+    fn on_new_span(&self, attrs: &SpanAttributes<'_>, id: &SpanId, ctx: Context<'_, S>) {
         let meta = attrs.metadata();
 
-        // Don't record the flush marker span. It exists only so on_event can
-        // filter events emitted during the flush (feedback loop prevention).
-        if meta.name() == FLUSH_SPAN_NAME {
+        // Don't record the flush marker span or any span created within it.
+        // The flush span exists only so on_event/on_new_span can filter events
+        // and spans emitted during the flush (feedback loop prevention).
+        if meta.name() == FLUSH_SPAN_NAME || is_span_within_flush(&ctx, attrs) {
             return;
         }
 
@@ -224,7 +234,14 @@ where
         }));
     }
 
-    fn on_close(&self, id: SpanId, _ctx: Context<'_, S>) {
+    fn on_close(&self, id: SpanId, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(&id)
+            && span
+                .scope()
+                .any(|ancestor| ancestor.name() == FLUSH_SPAN_NAME)
+        {
+            return;
+        }
         self.try_send(Record::SpanEnd(SpanEnd {
             tracing_id: id.into_u64(),
             ended_at: Timestamp::now(),
@@ -291,6 +308,24 @@ where
     };
     span.scope()
         .any(|ancestor| ancestor.name() == FLUSH_SPAN_NAME)
+}
+
+/// Checks whether a new span is being created within the flush span. Used to
+/// skip spans generated during a flush (e.g. instrumented storage methods).
+fn is_span_within_flush<S>(ctx: &Context<'_, S>, attrs: &SpanAttributes<'_>) -> bool
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    if let Some(parent) = attrs.parent().and_then(|id| ctx.span(id)) {
+        return parent
+            .scope()
+            .any(|ancestor| ancestor.name() == FLUSH_SPAN_NAME);
+    }
+    ctx.lookup_current().is_some_and(|current| {
+        current
+            .scope()
+            .any(|ancestor| ancestor.name() == FLUSH_SPAN_NAME)
+    })
 }
 
 /// Flushes a batch of records to the database using prepared statements.
@@ -364,5 +399,89 @@ fn tracing_to_db_level(level: &TracingLevel) -> Level {
         TracingLevel::INFO => Level::Info,
         TracingLevel::WARN => Level::Warn,
         TracingLevel::ERROR => Level::Error,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tracing::Dispatch;
+    use tracing_subscriber::prelude::*;
+
+    use super::*;
+
+    /// Events and spans emitted within a `"log_flush"` span must be filtered
+    /// out. This is the feedback loop prevention: the flush writes to the DB,
+    /// the DB engine emits events, those events would fill the channel.
+    #[test]
+    fn flush_span_filters_events_and_child_spans() {
+        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let dispatcher = Dispatch::new(subscriber);
+
+        let _guard = dispatcher.clone().set_default();
+
+        // Event outside the flush span -> captured.
+        tracing::info!("outside");
+
+        // Enter the flush span (same name as FLUSH_SPAN_NAME).
+        let flush = tracing::info_span!("log_flush");
+        let _flush_guard = flush.enter();
+
+        // Child span within flush -> filtered.
+        let child = tracing::info_span!("storage_method");
+        let _child_guard = child.enter();
+
+        // Event within flush and child span -> filtered.
+        tracing::warn!("inside flush");
+
+        drop(_child_guard);
+        drop(_flush_guard);
+
+        // Collect all records.
+        let mut events = Vec::new();
+        let mut span_starts = 0;
+        let mut span_ends = 0;
+        while let Ok(record) = rx.try_recv() {
+            match record {
+                Record::Event(e) => events.push(e),
+                Record::SpanStart(_) => span_starts += 1,
+                Record::SpanEnd(_) => span_ends += 1,
+            }
+        }
+
+        assert_eq!(events.len(), 1, "only the outside event should be captured");
+        assert_eq!(
+            events[0].message.as_deref(),
+            Some("outside"),
+            "captured event should be 'outside'"
+        );
+        assert_eq!(
+            span_starts, 0,
+            "no spans should be recorded from within flush"
+        );
+        assert_eq!(
+            span_ends, 0,
+            "no span ends should be recorded from within flush"
+        );
+    }
+
+    /// Events emitted outside any flush span are captured normally.
+    #[test]
+    fn normal_events_are_captured() {
+        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let dispatcher = Dispatch::new(subscriber);
+
+        let _guard = dispatcher.clone().set_default();
+
+        tracing::info!("first");
+        tracing::warn!("second");
+
+        let mut count = 0;
+        while rx.try_recv().is_ok() {
+            count += 1;
+        }
+        // 2 events. No spans created, so no SpanStart/SpanEnd.
+        assert_eq!(count, 2);
     }
 }
