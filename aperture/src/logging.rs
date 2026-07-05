@@ -16,7 +16,7 @@
 //!
 //! [`LogTracer`]: tracing_log::LogTracer
 
-use aperture_artifacts::LogWriter;
+use aperture_storage::LogWriter;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;

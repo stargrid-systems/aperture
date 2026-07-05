@@ -41,14 +41,16 @@ fn main() -> miette::Result<()> {
             println!("aperture {}", aperture::VERSION);
             Ok(())
         }
-        Command::Openapi => {
-            let doc = aperture::openapi();
-            let json = serde_json::to_string_pretty(&doc).into_diagnostic()?;
-            println!("{json}");
-            Ok(())
-        }
+        Command::Openapi => block_on(emit_openapi()),
         Command::Run(args) => block_on(aperture::serve(args.addr, args.data_dir)),
     }
+}
+
+async fn emit_openapi() -> miette::Result<()> {
+    let doc = aperture::openapi().await?;
+    let json = serde_json::to_string_pretty(&doc).into_diagnostic()?;
+    println!("{json}");
+    Ok(())
 }
 
 fn block_on<F: Future<Output = miette::Result<()>>>(future: F) -> miette::Result<()> {

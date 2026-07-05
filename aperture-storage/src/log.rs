@@ -3,12 +3,15 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use turso::{Connection, Row, Statement, Value, params_from_iter};
+use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
 
 use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
-use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
+use crate::row::{
+    int_or_null, opt_int, opt_text, opt_ts, req_int, req_text, req_ts, text_ref_or_null,
+};
 
 const SQL_INSERT_SPAN: &str = sql!(
     INSERT INTO spans
@@ -128,7 +131,7 @@ pub struct EventFilter {
 
 /// Filter for the `parent_id` column of a span query.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ParentFilter {
+pub enum SpanParentFilter {
     /// No parent filtering.
     #[default]
     Any,
@@ -145,7 +148,7 @@ pub struct SpanFilter {
     pub target: Vec<String>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
-    pub parent: ParentFilter,
+    pub parent: SpanParentFilter,
     pub fields: Vec<(String, String)>,
 }
 
@@ -182,12 +185,6 @@ const SPAN_COLUMNS: &str =
     "id, parent_id, name, level, target, file, line, started_at, ended_at, fields";
 
 /// Repository over the structured log tables for query operations.
-///
-/// Clones share a single underlying connection. Use [`Storage::log_writer`] to
-/// obtain a [`LogWriter`] with an isolated connection for batch insertion from
-/// a background task.
-///
-/// [`Storage::log_writer`]: crate::Storage::log_writer
 pub struct LogRepository {
     connection: Connection,
 }
@@ -273,13 +270,14 @@ impl LogRepository {
             filters.raw(&format!("{LEVEL_RANK_SQL} >= {}", min_level.rank()));
         }
 
-        filters.prefix_any("target", &filter.target);
+        let targets: Vec<&str> = filter.target.iter().map(String::as_str).collect();
+        filters.one_of("target", &targets);
         filters.eq_int("span_id", filter.span_id);
         filters.gte_int("timestamp", filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int("timestamp", filter.until.map(|ts| ts.as_millisecond()));
 
         for (key, value) in &filter.fields {
-            filters.json_eq(key, Some(value));
+            filters.json_path_eq("fields", key, value);
         }
 
         filters.like_any(&["message", "target", "fields"], filter.query.as_deref());
@@ -348,16 +346,17 @@ impl LogRepository {
         }
 
         match filter.parent {
-            ParentFilter::Any => {}
-            ParentFilter::RootOnly => filters.raw("parent_id IS NULL"),
-            ParentFilter::ChildrenOf(id) => filters.eq_int("parent_id", Some(id)),
+            SpanParentFilter::Any => {}
+            SpanParentFilter::RootOnly => filters.raw("parent_id IS NULL"),
+            SpanParentFilter::ChildrenOf(id) => filters.eq_int("parent_id", Some(id)),
         }
 
-        filters.prefix_any("target", &filter.target);
+        let targets: Vec<&str> = filter.target.iter().map(String::as_str).collect();
+        filters.one_of("target", &targets);
         filters.gte_int("started_at", filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int("started_at", filter.until.map(|ts| ts.as_millisecond()));
         for (key, value) in &filter.fields {
-            filters.json_eq(key, Some(value));
+            filters.json_path_eq("fields", key, value);
         }
         filters.keyset(&keyset, &paginator);
 
@@ -433,7 +432,7 @@ impl LogRepository {
     }
 
     /// Deletes events and finished spans older than `before`. Returns the
-    /// number of deleted events. FTS entries are cleaned up by triggers.
+    /// number of deleted events.
     pub async fn prune_before(&self, before: Timestamp) -> Result<u64> {
         let millis = before.as_millisecond();
         let event_count = self
@@ -454,44 +453,44 @@ impl LogRepository {
         Ok(event_count)
     }
 
-/// Lists all distinct boot sessions, derived from the `boot_id` structured
-/// field of stored events. Ordered newest first.
-#[tracing::instrument(level = "info", skip(self))]
-pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
-    const SQL_LIST_BOOTS: &str = r#"
-        SELECT json_extract(fields, '$.boot_id') AS boot_id,
-               MIN(timestamp) AS first_seen,
-               MAX(timestamp) AS last_seen,
-               COUNT(*) AS event_count
-        FROM events
-        WHERE fields IS NOT NULL
-          AND json_extract(fields, '$.boot_id') IS NOT NULL
-        GROUP BY boot_id
-        ORDER BY first_seen DESC
-    "#;
-    let mut rows = self
-        .connection
-        .query(SQL_LIST_BOOTS, params_from_iter(Vec::<Value>::new()))
-        .await
-        .map_err(database)?;
-    let mut boots = Vec::new();
-    while let Some(row) = rows.next().await.map_err(database)? {
-        let text = match row.get_value(0).map_err(database)? {
-            Value::Text(text) => text,
-            _ => continue,
-        };
-        let Some(parsed) = Uuid::parse_str(&text).ok() else {
-            continue;
-        };
-        boots.push(BootInfo {
-            boot_id: parsed,
-            first_seen: req_ts(&row, 1)?,
-            last_seen: req_ts(&row, 2)?,
-            event_count: req_int(&row, 3)?,
-        });
+    /// Lists all distinct boot sessions, derived from the `boot_id` structured
+    /// field of stored events. Ordered newest first.
+    #[tracing::instrument(level = "info", skip(self))]
+    pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
+        const SQL_LIST_BOOTS: &str = r#"
+            SELECT json_extract(fields, '$.boot_id') AS boot_id,
+                   MIN(timestamp) AS first_seen,
+                   MAX(timestamp) AS last_seen,
+                   COUNT(*) AS event_count
+            FROM events
+            WHERE fields IS NOT NULL
+              AND json_extract(fields, '$.boot_id') IS NOT NULL
+            GROUP BY boot_id
+            ORDER BY first_seen DESC
+        "#;
+        let mut rows = self
+            .connection
+            .query(SQL_LIST_BOOTS, params_from_iter(Vec::<Value>::new()))
+            .await
+            .map_err(database)?;
+        let mut boots = Vec::new();
+        while let Some(row) = rows.next().await.map_err(database)? {
+            let text = match row.get_value(0).map_err(database)? {
+                Value::Text(text) => text,
+                _ => continue,
+            };
+            let Some(parsed) = Uuid::parse_str(&text).ok() else {
+                continue;
+            };
+            boots.push(BootInfo {
+                boot_id: parsed,
+                first_seen: req_ts(&row, 1)?,
+                last_seen: req_ts(&row, 2)?,
+                event_count: req_int(&row, 3)?,
+            });
+        }
+        Ok(boots)
     }
-    Ok(boots)
-}
 
     /// Inserts a synthetic event recording that log records were dropped.
     pub async fn record_dropped(&self, count: u64, timestamp: Timestamp) -> Result<()> {
@@ -623,9 +622,8 @@ impl<'a> EventInsertBuilder<'a> {
     }
 }
 
-/// Batch writer for structured logs. Owns a dedicated connection (independent
-/// of the query connection) so it can be used from a background task without
-/// conflicting with concurrent reads.
+/// Batch writer for structured logs. Holds a [`Connection`] clone for batch
+/// inserts from a background task.
 ///
 /// Prepared statements are reused across inserts for efficiency. Obtain one
 /// with [`Storage::log_writer`].
@@ -716,75 +714,7 @@ impl LogWriter {
     }
 }
 
-fn text_ref_or_null(value: Option<&str>) -> Value {
-    match value {
-        Some(text) => Value::Text(text.to_owned()),
-        None => Value::Null,
-    }
-}
-
-fn int_or_null(value: Option<i64>) -> Value {
-    match value {
-        Some(int) => Value::Integer(int),
-        None => Value::Null,
-    }
-}
-
-fn req_text(row: &Row, idx: usize) -> Result<String> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Text(text) => Ok(text),
-        other => Err(StorageError::Decode(format!(
-            "expected text at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn opt_text(row: &Row, idx: usize) -> Result<Option<String>> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Null => Ok(None),
-        Value::Text(text) => Ok(Some(text)),
-        other => Err(StorageError::Decode(format!(
-            "expected text or null at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn req_int(row: &Row, idx: usize) -> Result<i64> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Integer(int) => Ok(int),
-        other => Err(StorageError::Decode(format!(
-            "expected integer at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn opt_int(row: &Row, idx: usize) -> Result<Option<i64>> {
-    match row.get_value(idx).map_err(database)? {
-        Value::Null => Ok(None),
-        Value::Integer(int) => Ok(Some(int)),
-        other => Err(StorageError::Decode(format!(
-            "expected integer or null at column {idx}, found {other:?}"
-        ))),
-    }
-}
-
-fn req_ts(row: &Row, idx: usize) -> Result<Timestamp> {
-    ts_from_millis(req_int(row, idx)?)
-}
-
-fn opt_ts(row: &Row, idx: usize) -> Result<Option<Timestamp>> {
-    match opt_int(row, idx)? {
-        Some(millis) => Ok(Some(ts_from_millis(millis)?)),
-        None => Ok(None),
-    }
-}
-
-fn ts_from_millis(millis: i64) -> Result<Timestamp> {
-    Timestamp::from_millisecond(millis)
-        .map_err(|err| StorageError::Decode(format!("invalid timestamp {millis}: {err}")))
-}
-
-fn row_to_event(row: &Row) -> Result<Event> {
+fn row_to_event(row: &turso::Row) -> Result<Event> {
     Ok(Event {
         id: req_int(row, 0)?,
         span_id: opt_int(row, 1)?,
@@ -798,7 +728,7 @@ fn row_to_event(row: &Row) -> Result<Event> {
     })
 }
 
-fn row_to_span(row: &Row) -> Result<Span> {
+fn row_to_span(row: &turso::Row) -> Result<Span> {
     Ok(Span {
         id: req_int(row, 0)?,
         parent_id: opt_int(row, 1)?,
@@ -811,17 +741,4 @@ fn row_to_span(row: &Row) -> Result<Span> {
         ended_at: opt_ts(row, 8)?,
         fields: opt_text(row, 9)?,
     })
-}
-
-/// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
-/// user-supplied prefix matches literally. Pair with `ESCAPE '\'` in the SQL.
-fn escape_like(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if matches!(ch, '\\' | '%' | '_') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }

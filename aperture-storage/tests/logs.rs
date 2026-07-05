@@ -1,4 +1,4 @@
-use aperture_storage::{EventFilter, Level, ListQuery, ParentFilter, SpanFilter, Storage};
+use aperture_storage::{EventFilter, Level, ListQuery, SpanFilter, SpanParentFilter, Storage};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -7,7 +7,7 @@ fn at(millis: i64) -> Timestamp {
 
 async fn seeded_storage() -> Storage {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let span_id = logs
         .insert_span(
@@ -59,7 +59,7 @@ async fn seeded_storage() -> Storage {
 #[tokio::test]
 async fn list_events_newest_first() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
@@ -93,7 +93,7 @@ async fn list_events_newest_first() {
 #[tokio::test]
 async fn filter_by_min_level() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
@@ -117,15 +117,15 @@ async fn filter_by_min_level() {
 }
 
 #[tokio::test]
-async fn filter_by_target_prefix() {
+async fn filter_by_target() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
             &EventFilter {
                 min_level: None,
-                target: vec!["aperture_artifacts".to_owned()],
+                target: vec!["aperture_artifacts::fetch".to_owned()],
                 query: None,
                 span_id: None,
                 since: None,
@@ -148,7 +148,7 @@ async fn filter_by_target_prefix() {
 #[tokio::test]
 async fn filter_by_span_id() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     // First get all events to find the span_id
     let all = logs
@@ -191,7 +191,7 @@ async fn filter_by_span_id() {
 #[tokio::test]
 async fn filter_by_time_range() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
@@ -219,7 +219,7 @@ async fn filter_by_time_range() {
 #[tokio::test]
 async fn filter_by_structured_fields() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
@@ -248,7 +248,7 @@ async fn filter_by_structured_fields() {
 #[tokio::test]
 async fn query_matches_message() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
@@ -277,7 +277,7 @@ async fn query_matches_message() {
 #[tokio::test]
 async fn query_matches_target() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
@@ -302,7 +302,7 @@ async fn query_matches_target() {
 #[tokio::test]
 async fn query_matches_structured_field() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
         .list_events(
@@ -327,7 +327,7 @@ async fn query_matches_structured_field() {
 #[tokio::test]
 async fn list_targets() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let all = logs.list_targets(None).await.unwrap();
     assert_eq!(all.len(), 2);
@@ -342,13 +342,10 @@ async fn list_targets() {
 #[tokio::test]
 async fn list_and_get_spans() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let page = logs
-        .list_spans(
-            &SpanFilter::default(),
-            &ListQuery::default(),
-        )
+        .list_spans(&SpanFilter::default(), &ListQuery::default())
         .await
         .unwrap();
 
@@ -372,7 +369,7 @@ async fn list_and_get_spans() {
 #[tokio::test]
 async fn prune_before_deletes_old_events() {
     let storage = seeded_storage().await;
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let deleted = logs.prune_before(at(1_250)).await.unwrap();
     assert_eq!(deleted, 2);
@@ -398,7 +395,7 @@ async fn prune_before_deletes_old_events() {
 #[tokio::test]
 async fn record_dropped_inserts_synthetic_event() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     logs.record_dropped(42, at(1_000)).await.unwrap();
 
@@ -427,7 +424,7 @@ async fn record_dropped_inserts_synthetic_event() {
 #[tokio::test]
 async fn paginate_events() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     for i in 0..5 {
         logs.insert_event(Level::Info, "test", at(i * 100))
@@ -489,7 +486,7 @@ async fn paginate_events() {
 #[tokio::test]
 async fn nested_spans_preserve_parent_child() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     let parent_id = logs
         .insert_span("parent", Level::Info, "aperture::test", at(1_000))
@@ -522,7 +519,7 @@ async fn nested_spans_preserve_parent_child() {
     let roots = logs
         .list_spans(
             &SpanFilter {
-                parent: ParentFilter::RootOnly,
+                parent: SpanParentFilter::RootOnly,
                 ..Default::default()
             },
             &ListQuery::default(),
@@ -535,7 +532,7 @@ async fn nested_spans_preserve_parent_child() {
     let children = logs
         .list_spans(
             &SpanFilter {
-                parent: ParentFilter::ChildrenOf(parent_id),
+                parent: SpanParentFilter::ChildrenOf(parent_id),
                 ..Default::default()
             },
             &ListQuery::default(),
@@ -548,7 +545,7 @@ async fn nested_spans_preserve_parent_child() {
     let grandchildren = logs
         .list_spans(
             &SpanFilter {
-                parent: ParentFilter::ChildrenOf(child_id),
+                parent: SpanParentFilter::ChildrenOf(child_id),
                 ..Default::default()
             },
             &ListQuery::default(),
@@ -565,24 +562,30 @@ async fn list_boots_groups_by_boot_id_field() {
     let a = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
     let b = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs().unwrap();
+    let logs = storage.logs();
 
     // Two distinct boot ids, with events interleaved in time but grouped apart.
     logs.insert_event(Level::Info, "aperture", at(1_000))
         .message(Some("first boot start"))
-        .fields(Some(r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#))
+        .fields(Some(
+            r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#,
+        ))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(2_000))
         .message(Some("first boot end"))
-        .fields(Some(r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#))
+        .fields(Some(
+            r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#,
+        ))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(3_000))
         .message(Some("second boot start"))
-        .fields(Some(r#"{"boot_id":"00000000-0000-0000-0000-000000000002"}"#))
+        .fields(Some(
+            r#"{"boot_id":"00000000-0000-0000-0000-000000000002"}"#,
+        ))
         .execute()
         .await
         .unwrap();

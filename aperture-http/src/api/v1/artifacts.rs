@@ -4,14 +4,13 @@ use axum::http::StatusCode;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+use super::operation_ids;
 use crate::AppState;
 use crate::dto::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, Page, VersionListParams,
     artifact_page, version_page,
 };
 use crate::error::ApiError;
-
-use super::operation_ids;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

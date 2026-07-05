@@ -23,8 +23,20 @@ pub const GET_ARTIFACT_VERSION: &str = "getArtifactVersion";
 /// `DELETE /api/v1/artifacts/{key}/versions/{digest}`
 pub const DELETE_ARTIFACT_VERSION: &str = "deleteArtifactVersion";
 
-/// `GET /api/v1/downloads`
-pub const LIST_DOWNLOADS: &str = "listDownloads";
+/// `GET /api/v1/tasks`
+pub const LIST_TASKS: &str = "listTasks";
+
+/// `POST /api/v1/tasks`
+pub const CREATE_TASK: &str = "createTask";
+
+/// `GET /api/v1/tasks/{id}`
+pub const GET_TASK: &str = "getTask";
+
+/// `POST /api/v1/tasks/{id}/cancel`
+pub const CANCEL_TASK: &str = "cancelTask";
+
+/// `GET /api/v1/task-definitions`
+pub const LIST_TASK_DEFINITIONS: &str = "listTaskDefinitions";
 
 /// `GET /api/v1/logs`
 pub const LIST_LOGS: &str = "listLogs";

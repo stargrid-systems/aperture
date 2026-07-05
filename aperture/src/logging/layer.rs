@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use aperture_artifacts::{EventRecord, Level, LogWriter, SpanRecord};
+use aperture_storage::{EventRecord, Level, LogWriter, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -149,11 +149,14 @@ impl DbLogLayer {
             shutdown: Some(shutdown_tx),
         };
 
-        (Self {
-            tx,
-            dropped,
-            boot_id: Arc::new(boot_id),
-        }, handle)
+        (
+            Self {
+                tx,
+                dropped,
+                boot_id: Arc::new(boot_id),
+            },
+            handle,
+        )
     }
 
     fn try_send(&self, record: Record) {

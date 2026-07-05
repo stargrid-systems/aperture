@@ -1,13 +1,13 @@
 //! Aperture gateway: composes the HTTP layer with the artifact manager.
 
+use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::error::Error as StdError;
 
-use aperture_artifacts::Artifacts;
-pub use aperture_http::openapi;
-use aperture_http::{AppState, Spectra, SpectraConfig};
+use aperture_artifacts::{Artifacts, DownloadDefinition};
+use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
+use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
@@ -30,7 +30,18 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
 
     artifacts.sync().await.into_diagnostic()?;
 
-    let spectra = Spectra::new(artifacts.clone(), SpectraConfig::default());
+    // Register the task kinds and mark any invocations a previous run left
+    // active as interrupted.
+    let mut registry = TaskRegistry::new();
+    register_kinds(&mut registry, Arc::clone(&artifacts));
+    let tasks = Tasks::new(artifacts.storage().clone(), registry);
+    tasks.reconcile().await.into_diagnostic()?;
+
+    let spectra = Spectra::new(
+        Arc::clone(&artifacts),
+        tasks.clone(),
+        SpectraConfig::default(),
+    );
     // Open a cached frontend right away. A missing one is fetched lazily on the
     // first request.
     spectra
@@ -38,7 +49,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(VERSION, boot_id, spectra);
+    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
@@ -48,17 +59,67 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .into_diagnostic();
 
+    // The server has stopped accepting requests.
     tracing::info!("aperture shutdown starting");
+    tasks.shutdown().await;
     tracing::info!("aperture shutdown complete");
-    if let Ok(logs) = artifacts.storage().logs()
-        && let Err(err) = logs.close_open_spans(jiff::Timestamp::now()).await
+
+    if let Err(err) = artifacts
+        .storage()
+        .logs()
+        .close_open_spans(jiff::Timestamp::now())
+        .await
     {
-        tracing::warn!(error = &err as &dyn StdError, "failed to close open spans on shutdown");
+        tracing::warn!(
+            error = &err as &dyn StdError,
+            "failed to close open spans on shutdown"
+        );
     }
     log_worker.shutdown().await;
 
     result?;
     Ok(())
+}
+
+/// Resolves when the process is asked to stop, via Ctrl+C or SIGTERM.
+async fn shutdown_signal() {
+    use tokio::signal::ctrl_c;
+
+    let interrupt = async {
+        ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = interrupt => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutdown signal received");
+}
+
+/// Returns the OpenAPI specification, with the task kinds projected in.
+pub async fn openapi() -> miette::Result<OpenApiSpec> {
+    let artifacts = Artifacts::open(":memory:", PathBuf::from("."))
+        .await
+        .into_diagnostic()?;
+    let mut registry = TaskRegistry::new();
+    register_kinds(&mut registry, Arc::new(artifacts));
+    Ok(aperture_http::openapi(&registry.descriptors()))
+}
+
+/// Registers every task kind the gateway supports.
+fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
+    registry.register(DownloadDefinition::new(artifacts));
 }
 
 /// Opens the storage database and blob store under `data_dir`.
@@ -72,26 +133,4 @@ async fn open_artifacts(data_dir: &Path) -> miette::Result<Arc<Artifacts>> {
         .await
         .into_diagnostic()?;
     Ok(Arc::new(artifacts))
-}
-
-/// Resolves on Ctrl-C or SIGTERM, whichever arrives first.
-async fn shutdown_signal() {
-    use tokio::signal::ctrl_c;
-    let ctrl_c = async {
-        let _ = ctrl_c().await;
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        use tokio::signal::unix::{SignalKind, signal};
-        let _ = signal(SignalKind::terminate())
-            .expect("install SIGTERM handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = terminate => {}
-    }
 }

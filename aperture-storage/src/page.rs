@@ -257,6 +257,49 @@ impl Filters {
         }
     }
 
+    /// Adds `column = ?` bound to `value`, or nothing when `value` is `None`.
+    pub(crate) fn eq_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `column IN (?, ?, ...)` bound to `values`, or nothing when empty.
+    pub(crate) fn one_of(&mut self, column: &str, values: &[&str]) {
+        if values.is_empty() {
+            return;
+        }
+        self.separator();
+        let first = self.params.len() + 1;
+        for value in values {
+            self.params.push(Value::Text((*value).to_owned()));
+        }
+        let placeholders = (first..first + values.len())
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(self.sql, "{column} IN ({placeholders})");
+    }
+
+    /// Adds `CAST(json_extract(column, '$.<path>') AS TEXT) = ?`, matching a
+    /// field inside the JSON stored in `column`. `column` is a fixed identifier
+    /// from the caller. `path` and `value` are user input and are always bound,
+    /// never interpolated, so the path cannot inject SQL. The `CAST` lets a
+    /// numeric or boolean field match a text value too.
+    pub(crate) fn json_path_eq(&mut self, column: &str, path: &str, value: &str) {
+        self.separator();
+        self.params.push(Value::Text(format!("$.{path}")));
+        let path_ph = self.params.len();
+        self.params.push(Value::Text(value.to_owned()));
+        let value_ph = self.params.len();
+        let _ = write!(
+            self.sql,
+            "CAST(json_extract({column}, ?{path_ph}) AS TEXT) = ?{value_ph}"
+        );
+    }
+
     /// Adds `column LIKE ?` matching `value` as a literal substring (wildcards
     /// escaped), or nothing when `value` is `None`.
     pub(crate) fn like(&mut self, column: &str, value: Option<&str>) {
@@ -268,36 +311,14 @@ impl Filters {
         }
     }
 
-    /// Adds `(column LIKE ?1 ESCAPE '\' OR column LIKE ?2 ESCAPE '\' ...)`
-    /// matching any of `prefixes` as a literal prefix. Wildcards in each
-    /// prefix are escaped. Nothing happens when `prefixes` is empty.
-    pub(crate) fn prefix_any(&mut self, column: &str, prefixes: &[String]) {
-        if prefixes.is_empty() {
-            return;
-        }
-        let mut placeholders: Vec<String> = Vec::with_capacity(prefixes.len());
-        for p in prefixes {
-            self.params
-                .push(Value::Text(format!("{}%", escape_like(p))));
-            placeholders.push(format!("?{}", self.params.len()));
-        }
-        self.separator();
-        let _ = write!(self.sql, "(");
-        for (i, ph) in placeholders.iter().enumerate() {
-            if i > 0 {
-                let _ = write!(self.sql, " OR ");
-            }
-            let _ = write!(self.sql, "{column} LIKE {ph} ESCAPE '\\'");
-        }
-        let _ = write!(self.sql, ")");
-    }
-
     /// Adds `(c1 LIKE ? ESCAPE '\' OR c2 LIKE ? ESCAPE '\' ...)` where each
     /// column references the same reused param value, or nothing when `value`
     /// is `None`. Wildcards in `value` are escaped, so it matches as a literal
     /// substring.
     pub(crate) fn like_any(&mut self, columns: &[&str], value: Option<&str>) {
-        let Some(value) = value else { return; };
+        let Some(value) = value else {
+            return;
+        };
         self.params
             .push(Value::Text(format!("%{}%", escape_like(value))));
         self.separator();
@@ -312,15 +333,6 @@ impl Filters {
             let _ = write!(self.sql, "{col} LIKE ?{placeholder} ESCAPE '\\'");
         }
         self.sql.push(')');
-    }
-
-    /// Adds `column = ?` bound to the integer `value`, or nothing when `None`.
-    pub(crate) fn eq_int(&mut self, column: &str, value: Option<i64>) {
-        if let Some(value) = value {
-            self.params.push(Value::Integer(value));
-            self.separator();
-            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
-        }
     }
 
     /// Adds `column >= ?` bound to the integer `value`, or nothing when `None`.
@@ -338,21 +350,6 @@ impl Filters {
             self.params.push(Value::Integer(value));
             self.separator();
             let _ = write!(self.sql, "{column} <= ?{}", self.params.len());
-        }
-    }
-
-    /// Adds `json_extract(fields, '$.key') = ?` bound to `value`, or nothing
-    /// when `value` is `None`. `key` must be a fixed identifier, never user
-    /// input, since it is interpolated into SQL.
-    pub(crate) fn json_eq(&mut self, key: &str, value: Option<&str>) {
-        if let Some(value) = value {
-            self.params.push(Value::Text(value.to_owned()));
-            self.separator();
-            let _ = write!(
-                self.sql,
-                "json_extract(fields, '$.{key}') = ?{}",
-                self.params.len()
-            );
         }
     }
 
@@ -487,7 +484,7 @@ impl Paginator {
 /// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
 /// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the
 /// SQL.
-fn escape_like(value: &str) -> String {
+pub(crate) fn escape_like(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         if matches!(ch, '\\' | '%' | '_') {

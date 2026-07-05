@@ -1,6 +1,6 @@
 use std::{env, fs};
 
-use aperture_storage::{Artifact, DownloadStatus, ListQuery, Order, Storage, VersionSort};
+use aperture_storage::{Artifact, ListQuery, Storage, VersionSort};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -24,7 +24,7 @@ fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
 #[tokio::test]
 async fn record_latest_and_get_version() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
+    let repo = storage.artifacts();
 
     assert!(repo.latest("spectra").await.unwrap().is_none());
 
@@ -56,7 +56,7 @@ async fn record_latest_and_get_version() {
 #[tokio::test]
 async fn record_version_is_idempotent_per_digest() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
+    let repo = storage.artifacts();
 
     repo.record_version(&version("spectra", "sha256:aaa", 1_000))
         .await
@@ -83,7 +83,7 @@ async fn record_version_is_idempotent_per_digest() {
 #[tokio::test]
 async fn list_keys_returns_latest_and_count() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
+    let repo = storage.artifacts();
 
     repo.record_version(&version("spectra", "sha256:aaa", 1_000))
         .await
@@ -108,7 +108,7 @@ async fn list_keys_returns_latest_and_count() {
 #[tokio::test]
 async fn list_keys_paginates_with_cursor() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
+    let repo = storage.artifacts();
 
     for key in ["a", "b", "c"] {
         repo.record_version(&version(key, &format!("sha256:{key}"), 1_000))
@@ -183,7 +183,7 @@ async fn list_keys_paginates_with_cursor() {
 #[tokio::test]
 async fn list_keys_q_treats_wildcards_literally() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
+    let repo = storage.artifacts();
 
     repo.record_version(&version("a_b", "sha256:1", 1_000))
         .await
@@ -209,7 +209,7 @@ async fn list_keys_q_treats_wildcards_literally() {
 #[tokio::test]
 async fn list_versions_sorts_and_paginates() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
+    let repo = storage.artifacts();
 
     for (digest, ts) in [
         ("sha256:a", 1_000),
@@ -272,7 +272,7 @@ async fn list_versions_sorts_and_paginates() {
 #[tokio::test]
 async fn delete_version_removes_only_that_version() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
+    let repo = storage.artifacts();
 
     repo.record_version(&version("spectra", "sha256:aaa", 1_000))
         .await
@@ -298,106 +298,6 @@ async fn delete_version_removes_only_that_version() {
 }
 
 #[tokio::test]
-async fn lists_downloads_with_filters_and_history() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
-
-    let started = at(1_700_000_000_000);
-    let source = "ghcr.io/stargrid-systems/spectra:0.2.0";
-
-    let id1 = repo
-        .start_download("spectra", source, started)
-        .await
-        .unwrap();
-    repo.finish_download(
-        id1,
-        DownloadStatus::Succeeded,
-        started,
-        Some("sha256:abc"),
-        Some(10),
-        None,
-    )
-    .await
-    .unwrap();
-
-    let id2 = repo
-        .start_download("spectra", source, started)
-        .await
-        .unwrap();
-    repo.finish_download(
-        id2,
-        DownloadStatus::Failed,
-        started,
-        None,
-        None,
-        Some("connection reset"),
-    )
-    .await
-    .unwrap();
-
-    assert!(id2 > id1);
-
-    // Newest first across all downloads.
-    let all = repo
-        .list_downloads(None, None, &ListQuery::default())
-        .await
-        .unwrap();
-    assert_eq!(all.items.len(), 2);
-    assert_eq!(all.items[0].id, id2);
-    assert_eq!(all.items[0].status, DownloadStatus::Failed);
-
-    // Filter by status.
-    let failed = repo
-        .list_downloads(Some(DownloadStatus::Failed), None, &ListQuery::default())
-        .await
-        .unwrap();
-    assert_eq!(failed.items.len(), 1);
-    assert_eq!(failed.items[0].id, id2);
-
-    // Oldest first with explicit order.
-    let oldest = repo
-        .list_downloads(
-            None,
-            Some("spectra"),
-            &ListQuery {
-                order: Some(Order::Asc),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(oldest.items[0].id, id1);
-
-    let history = repo.downloads_for("spectra").await.unwrap();
-    assert_eq!(history.len(), 2);
-    assert!(repo.downloads_for("unknown").await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn lists_running_downloads() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts().unwrap();
-
-    let started = at(1_700_000_000_000);
-    let running = repo
-        .start_download("spectra", "src", started)
-        .await
-        .unwrap();
-    let done = repo
-        .start_download("firmware", "src", started)
-        .await
-        .unwrap();
-    repo.finish_download(done, DownloadStatus::Succeeded, started, None, None, None)
-        .await
-        .unwrap();
-
-    let still_running = repo.list_running().await.unwrap();
-    assert_eq!(still_running.len(), 1);
-    assert_eq!(still_running[0].id, running);
-    assert_eq!(still_running[0].status, DownloadStatus::Running);
-}
-
-#[tokio::test]
 async fn persists_and_migrations_are_idempotent() {
     let path = env::temp_dir().join("aperture-storage-reopen-test.db");
     let cleanup = || {
@@ -412,7 +312,6 @@ async fn persists_and_migrations_are_idempotent() {
         let storage = Storage::open(path).await.unwrap();
         storage
             .artifacts()
-            .unwrap()
             .record_version(&version("spectra", "sha256:aaa", 1_000))
             .await
             .unwrap();
@@ -423,7 +322,6 @@ async fn persists_and_migrations_are_idempotent() {
         assert!(
             storage
                 .artifacts()
-                .unwrap()
                 .latest("spectra")
                 .await
                 .unwrap()

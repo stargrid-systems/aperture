@@ -113,7 +113,7 @@ impl BlobStore {
     }
 
     /// Creates an empty temporary file to stream a blob into. Write through the
-    /// returned [`TempFile`], then store it with [`BlobStore::place`].
+    /// returned `TempFile`, then store it with [`BlobStore::place`].
     pub async fn temp_file(&self) -> Result<TempFile> {
         fs::create_dir_all(self.tmp_dir()).await?;
         let path = self.tmp_dir().join(tmp_name());

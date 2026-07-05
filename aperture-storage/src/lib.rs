@@ -7,23 +7,25 @@
 
 use std::time::Duration;
 
-use turso::{Builder, Database};
+use turso::{Builder, Connection};
 
-pub use self::artifact::{
-    Artifact, ArtifactKey, ArtifactRepository, Download, DownloadStatus, VersionSort,
-};
+pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
 use self::error::database;
 pub use self::error::{Result, StorageError};
 pub use self::log::{
     BootInfo, Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter,
-    ParentFilter, Span, SpanFilter, SpanInsertBuilder, SpanRecord,
+    Span, SpanFilter, SpanInsertBuilder, SpanParentFilter, SpanRecord,
 };
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
+pub use self::task::{
+    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
+    TaskRepository, TaskStatus,
+};
 
-/// Busy timeout for write contention between connections. turso uses WAL mode
-/// by default, but two writers still need to take turns. Without a timeout
-/// the second writer immediately receives "database is locked".
+/// Busy timeout for write contention. turso uses WAL mode by default, but two
+/// writers still need to take turns. Without a timeout the second writer
+/// immediately receives "database is locked".
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 mod artifact;
@@ -32,16 +34,13 @@ mod log;
 mod macros;
 mod migration;
 mod page;
+mod row;
+mod task;
 
 /// Handle to the gateway's persistent storage.
-///
-/// Each call to [`artifacts`](Self::artifacts), [`logs`](Self::logs), or
-/// [`log_writer`](Self::log_writer) opens a fresh [`Connection`] from the
-/// underlying [`Database`]. Connections are independent and do not share a
-/// concurrency guard, so simultaneous handlers and background tasks cannot
-/// conflict with each other.
+#[derive(Clone)]
 pub struct Storage {
-    database: Database,
+    connection: Connection,
 }
 
 impl Storage {
@@ -55,37 +54,29 @@ impl Storage {
             .build()
             .await
             .map_err(database)?;
-        let query = db.connect().map_err(database)?;
-        query.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
-        run(&query).await?;
-        let database = db.clone();
-        Ok(Self { database })
+        let connection = db.connect().map_err(database)?;
+        connection.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
+        run(&connection).await?;
+        Ok(Self { connection })
     }
 
-    /// Opens a new connection and returns the repository over the artifact
-    /// catalog. Each call is independent and does not share a concurrency
-    /// guard with other connections.
-    pub fn artifacts(&self) -> Result<ArtifactRepository> {
-        let conn = self.database.connect().map_err(database)?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
-        Ok(ArtifactRepository::new(conn))
+    /// Returns the repository over the artifact catalog.
+    pub fn artifacts(&self) -> ArtifactRepository {
+        ArtifactRepository::new(self.connection.clone())
     }
 
-    /// Opens a new connection and returns the repository over the structured
-    /// log tables. Each call is independent and does not share a concurrency
-    /// guard with other connections.
-    pub fn logs(&self) -> Result<LogRepository> {
-        let conn = self.database.connect().map_err(database)?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
-        Ok(LogRepository::new(conn))
+    /// Returns the repository over the task catalog.
+    pub fn tasks(&self) -> TaskRepository {
+        TaskRepository::new(self.connection.clone())
     }
 
-    /// Opens a dedicated [`LogWriter`] with its own connection for batch
-    /// inserts from a background task. The connection is isolated from the
-    /// query connection used by HTTP handlers.
+    /// Returns the repository over the structured log tables.
+    pub fn logs(&self) -> LogRepository {
+        LogRepository::new(self.connection.clone())
+    }
+
+    /// Returns a [`LogWriter`] for batch inserts from a background task.
     pub async fn log_writer(&self) -> Result<LogWriter> {
-        let conn = self.database.connect().map_err(database)?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
-        LogWriter::new(conn).await
+        LogWriter::new(self.connection.clone()).await
     }
 }
