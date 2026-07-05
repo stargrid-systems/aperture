@@ -462,6 +462,7 @@ impl LogRepository {
     /// field of stored events. Ordered newest first.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
+        // Raw string because sql!() cannot handle SQL single-quoted literals.
         const SQL_LIST_BOOTS: &str = r#"
             SELECT json_extract(fields, '$.boot_id') AS boot_id,
                    MIN(timestamp) AS first_seen,

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use aperture_storage::{EventFilter, SpanFilter, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -142,18 +144,11 @@ async fn get_span(
 /// Parses a JSON object field filter string like `{"key":"value"}` into a list
 /// of key-value pairs.
 fn parse_field_filter(json: Option<&str>) -> Result<Vec<(String, String)>, ApiError> {
-    let Some(json) = json else {
-        return Ok(Vec::new());
-    };
-    let obj: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(json).map_err(|_| ApiError::BAD_REQUEST)?;
-    let mut pairs = Vec::new();
-    for (key, value) in obj {
-        if let serde_json::Value::String(value) = value {
-            pairs.push((key, value));
-        } else {
-            return Err(ApiError::BAD_REQUEST);
-        }
-    }
-    Ok(pairs)
+    Ok(match json {
+        Some(s) => serde_json::from_str::<HashMap<String, String>>(s)
+            .map_err(|_| ApiError::BAD_REQUEST)?
+            .into_iter()
+            .collect(),
+        None => Vec::new(),
+    })
 }

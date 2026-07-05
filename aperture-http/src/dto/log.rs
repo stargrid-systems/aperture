@@ -7,31 +7,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::dto::{OrderParam, Page};
-
-/// Deserializes either a single comma-separated string or a sequence of
-/// strings into a `Vec<String>`. Accepts `target=A,B` (single param, comma
-/// separated) and `target=A&target=B` (repeated param) forms, as well as a
-/// single value `target=A`. Empty values produce an empty `Vec`.
-fn deserialize_single_or_vec_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(String),
-        Many(Vec<String>),
-    }
-    Ok(match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::One(s) => s
-            .split(',')
-            .filter(|p| !p.is_empty())
-            .map(str::to_owned)
-            .collect(),
-        OneOrMany::Many(v) => v,
-    })
-}
+use crate::dto::{OrderParam, Page, deserialize_single_or_vec_string};
 
 /// Severity level of a log event or span.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]

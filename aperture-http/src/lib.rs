@@ -71,6 +71,10 @@ impl AppState {
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Aperture API"),
+    // TODO(utoipa): These types are only referenced indirectly as field types
+    // of IntoParams structs. utoipa does not discover their schemas
+    // automatically. Force-register them here so the generated spec is
+    // complete. Track upstream: https://github.com/juhaku/utoipa/issues
     components(schemas(OrderParam, VersionSortParam, LevelResponse, TaskStatusParam))
 )]
 struct ApiDoc;
