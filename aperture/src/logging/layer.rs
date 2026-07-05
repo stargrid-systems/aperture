@@ -6,9 +6,6 @@
 //! inserted to record how many were lost.
 
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::Debug;
-use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -18,13 +15,16 @@ use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{MissedTickBehavior, interval};
-use tracing::field::{Field, Visit};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId};
 use tracing::{Event, Level as TracingLevel, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
+
+use self::collector::FieldCollector;
+
+mod collector;
 
 /// Channel capacity. When full, records are dropped.
 const CHANNEL_CAPACITY: usize = 4096;
@@ -55,7 +55,7 @@ struct SpanStart {
     level: Level,
     target: String,
     file: Option<String>,
-    line: Option<i64>,
+    line: Option<u32>,
     started_at: Timestamp,
     fields: Option<String>,
 }
@@ -72,7 +72,7 @@ struct EventMsg {
     message: Option<String>,
     timestamp: Timestamp,
     file: Option<String>,
-    line: Option<i64>,
+    line: Option<u32>,
     fields: Option<String>,
 }
 
@@ -180,8 +180,8 @@ where
             level: tracing_to_db_level(meta.level()),
             target: meta.target().to_owned(),
             file: meta.file().map(str::to_owned),
-            line: meta.line().map(|l| l as i64),
-            started_at: now(),
+            line: meta.line(),
+            started_at: Timestamp::now(),
             fields: visitor.into_json(),
         }));
     }
@@ -202,8 +202,7 @@ where
         // target lives in the `log.target` field. Use whichever is
         // available.
         let target = visitor
-            .log_target()
-            .map(str::to_owned)
+            .take_log_target()
             .unwrap_or_else(|| meta.target().to_owned());
 
         let span_tracing_id = ctx.event_span(event).map(|s| s.id().into_u64());
@@ -211,16 +210,14 @@ where
         let file = visitor
             .take_log_file()
             .or_else(|| meta.file().map(str::to_owned));
-        let line = visitor
-            .take_log_line()
-            .or_else(|| meta.line().map(|l| l as i64));
+        let line = visitor.take_log_line().or_else(|| meta.line());
 
         self.try_send(Record::Event(EventMsg {
             span_tracing_id,
             level: tracing_to_db_level(meta.level()),
             target,
             message: visitor.take_message(),
-            timestamp: now(),
+            timestamp: Timestamp::now(),
             file,
             line,
             fields: visitor.into_json(),
@@ -230,7 +227,7 @@ where
     fn on_close(&self, id: SpanId, _ctx: Context<'_, S>) {
         self.try_send(Record::SpanEnd(SpanEnd {
             tracing_id: id.into_u64(),
-            ended_at: now(),
+            ended_at: Timestamp::now(),
         }));
     }
 }
@@ -355,184 +352,7 @@ async fn flush(writer: &mut LogWriter, batch: &mut Vec<Record>, span_ids: &mut H
 async fn flush_dropped(writer: &mut LogWriter, dropped: &AtomicU64) {
     let count = dropped.swap(0, Ordering::Relaxed);
     if count > 0 {
-        let _ = writer.record_dropped(count, now()).await;
-    }
-}
-
-/// Field visitor that collects all fields into a JSON byte buffer and
-/// extracts the "message" field specially.
-///
-/// Writes JSON directly via `serde_json::to_writer` into a `Vec<u8>`, avoiding
-/// intermediate allocations.
-struct FieldCollector {
-    json: Vec<u8>,
-    first: bool,
-    message: Option<String>,
-    /// Real target from a `log`-bridged event (`log.target` field).
-    log_target: Option<String>,
-    /// Source file from a `log`-bridged event (`log.file` field).
-    log_file: Option<String>,
-    /// Source line from a `log`-bridged event (`log.line` field).
-    log_line: Option<i64>,
-}
-
-impl FieldCollector {
-    fn new(boot_id: &Uuid) -> Self {
-        let mut json = Vec::new();
-        json.extend_from_slice(b"{\"boot_id\":");
-        serde_json::to_writer(&mut json, boot_id).unwrap();
-        Self {
-            json,
-            first: false,
-            message: None,
-            log_target: None,
-            log_file: None,
-            log_line: None,
-        }
-    }
-
-    fn take_message(&mut self) -> Option<String> {
-        self.message.take()
-    }
-
-    /// Returns the real target from a `log`-bridged event, if present.
-    fn log_target(&self) -> Option<&str> {
-        self.log_target.as_deref()
-    }
-
-    fn take_log_file(&mut self) -> Option<String> {
-        self.log_file.take()
-    }
-
-    fn take_log_line(&mut self) -> Option<i64> {
-        self.log_line.take()
-    }
-
-    fn into_json(mut self) -> Option<String> {
-        if self.first {
-            None
-        } else {
-            self.json.push(b'}');
-            Some(String::from_utf8(self.json).expect("buffer is valid UTF-8"))
-        }
-    }
-
-    fn write_key(&mut self, name: &str) {
-        if self.first {
-            self.first = false;
-            self.json.push(b'{');
-        } else {
-            self.json.push(b',');
-        }
-        serde_json::to_writer(&mut self.json, name).unwrap();
-        self.json.push(b':');
-    }
-
-    fn store_str(&mut self, name: &str, value: &str) {
-        match name {
-            "message" => self.message = Some(value.to_owned()),
-            "log.target" => self.log_target = Some(value.to_owned()),
-            "log.file" => self.log_file = Some(value.to_owned()),
-            "log.module_path" => {}
-            _ => {
-                self.write_key(name);
-                serde_json::to_writer(&mut self.json, value).unwrap();
-            }
-        }
-    }
-}
-
-impl Visit for FieldCollector {
-    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
-        if field.name().starts_with("log.") {
-            return;
-        }
-        let s = format!("{value:?}");
-        self.store_str(field.name(), &s);
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.store_str(field.name(), value);
-    }
-
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.write_key(field.name());
-        self.json
-            .extend_from_slice(if value { b"true" } else { b"false" });
-    }
-
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        self.write_key(field.name());
-        serde_json::to_writer(&mut self.json, &value).unwrap();
-    }
-
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        if field.name() == "log.line" {
-            self.log_line = Some(value as i64);
-        } else {
-            self.write_key(field.name());
-            serde_json::to_writer(&mut self.json, &value).unwrap();
-        }
-    }
-
-    fn record_i128(&mut self, field: &Field, value: i128) {
-        self.write_key(field.name());
-        serde_json::to_writer(&mut self.json, &value).unwrap();
-    }
-
-    fn record_u128(&mut self, field: &Field, value: u128) {
-        self.write_key(field.name());
-        serde_json::to_writer(&mut self.json, &value).unwrap();
-    }
-
-    fn record_f64(&mut self, field: &Field, value: f64) {
-        self.write_key(field.name());
-        if let Some(n) = serde_json::Number::from_f64(value) {
-            serde_json::to_writer(&mut self.json, &n).unwrap();
-        } else {
-            self.json.extend_from_slice(b"null");
-        }
-    }
-
-    fn record_bytes(&mut self, field: &Field, value: &[u8]) {
-        let hex: String = value.iter().map(|b| format!("{b:02x}")).collect();
-        self.store_str(field.name(), &hex);
-    }
-
-    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
-        // Record the entire source chain as a JSON array of objects under the
-        // field name. Each object has "type" and "message"; some types add
-        // extra fields (e.g. io::Error exposes "kind").
-        self.write_key(field.name());
-        self.json.push(b'[');
-        let mut current: Option<&(dyn Error + 'static)> = Some(value);
-        let mut first = true;
-        while let Some(error) = current {
-            if !first {
-                self.json.push(b',');
-            }
-            first = false;
-            self.json.extend_from_slice(b"{\"type\":");
-            serde_json::to_writer(&mut self.json, error_type(error)).unwrap();
-            self.json.extend_from_slice(b",\"message\":");
-            serde_json::to_writer(&mut self.json, &format!("{error}")).unwrap();
-            if let Some(io_err) = error.downcast_ref::<io::Error>() {
-                self.json.extend_from_slice(b",\"kind\":");
-                serde_json::to_writer(&mut self.json, &format!("{:?}", io_err.kind())).unwrap();
-            }
-            self.json.push(b'}');
-            current = error.source();
-        }
-        self.json.push(b']');
-    }
-}
-
-/// Returns a short type name for common error types.
-fn error_type(error: &(dyn Error + 'static)) -> &'static str {
-    if error.downcast_ref::<io::Error>().is_some() {
-        "io::Error"
-    } else {
-        "error"
+        let _ = writer.record_dropped(count, Timestamp::now()).await;
     }
 }
 
@@ -545,9 +365,4 @@ fn tracing_to_db_level(level: &TracingLevel) -> Level {
         TracingLevel::WARN => Level::Warn,
         TracingLevel::ERROR => Level::Error,
     }
-}
-
-/// Returns the current timestamp.
-fn now() -> Timestamp {
-    Timestamp::now()
 }

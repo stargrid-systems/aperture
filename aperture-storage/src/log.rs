@@ -10,7 +10,7 @@ use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
 use crate::row::{
-    int_or_null, opt_int, opt_text, opt_ts, req_int, req_text, req_ts, text_ref_or_null,
+    int_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text, req_ts, text_ref_or_null,
 };
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
@@ -87,7 +87,7 @@ pub struct Span {
     pub level: Level,
     pub target: String,
     pub file: Option<String>,
-    pub line: Option<i64>,
+    pub line: Option<u32>,
     pub started_at: Timestamp,
     pub ended_at: Option<Timestamp>,
     pub fields: Option<String>,
@@ -103,7 +103,7 @@ pub struct Event {
     pub message: Option<String>,
     pub timestamp: Timestamp,
     pub file: Option<String>,
-    pub line: Option<i64>,
+    pub line: Option<u32>,
     pub fields: Option<String>,
 }
 
@@ -157,7 +157,7 @@ pub struct SpanRecord<'a> {
     pub level: Level,
     pub target: &'a str,
     pub file: Option<&'a str>,
-    pub line: Option<i64>,
+    pub line: Option<u32>,
     pub started_at: Timestamp,
     pub fields: Option<&'a str>,
 }
@@ -171,7 +171,7 @@ pub struct EventRecord<'a> {
     pub message: Option<&'a str>,
     pub timestamp: Timestamp,
     pub file: Option<&'a str>,
-    pub line: Option<i64>,
+    pub line: Option<u32>,
     pub fields: Option<&'a str>,
 }
 
@@ -512,7 +512,7 @@ pub struct SpanInsertBuilder<'a> {
     level: Level,
     target: &'a str,
     file: Option<&'a str>,
-    line: Option<i64>,
+    line: Option<u32>,
     started_at: Timestamp,
     fields: Option<&'a str>,
 }
@@ -528,7 +528,7 @@ impl<'a> SpanInsertBuilder<'a> {
         self
     }
 
-    pub fn line(mut self, line: Option<i64>) -> Self {
+    pub fn line(mut self, line: Option<u32>) -> Self {
         self.line = line;
         self
     }
@@ -567,7 +567,7 @@ pub struct EventInsertBuilder<'a> {
     timestamp: Timestamp,
     message: Option<&'a str>,
     file: Option<&'a str>,
-    line: Option<i64>,
+    line: Option<u32>,
     fields: Option<&'a str>,
 }
 
@@ -587,7 +587,7 @@ impl<'a> EventInsertBuilder<'a> {
         self
     }
 
-    pub fn line(mut self, line: Option<i64>) -> Self {
+    pub fn line(mut self, line: Option<u32>) -> Self {
         self.line = line;
         self
     }
@@ -718,7 +718,7 @@ fn row_to_event(row: &turso::Row) -> Result<Event> {
         message: opt_text(row, 4)?,
         timestamp: req_ts(row, 5)?,
         file: opt_text(row, 6)?,
-        line: opt_int(row, 7)?,
+        line: opt_u32(row, 7)?,
         fields: opt_text(row, 8)?,
     })
 }
@@ -731,7 +731,7 @@ fn row_to_span(row: &turso::Row) -> Result<Span> {
         level: Level::from_db(req_int(row, 3)?)?,
         target: req_text(row, 4)?,
         file: opt_text(row, 5)?,
-        line: opt_int(row, 6)?,
+        line: opt_u32(row, 6)?,
         started_at: req_ts(row, 7)?,
         ended_at: opt_ts(row, 8)?,
         fields: opt_text(row, 9)?,

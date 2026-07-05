@@ -86,7 +86,7 @@ pub struct LogEventResponse {
     /// Source file, if available.
     pub file: Option<String>,
     /// Source line, if available.
-    pub line: Option<i64>,
+    pub line: Option<u32>,
     /// All structured fields as a JSON object, if any.
     pub fields: Option<serde_json::Value>,
 }
@@ -127,7 +127,7 @@ pub struct LogSpanResponse {
     /// Source file, if available.
     pub file: Option<String>,
     /// Source line, if available.
-    pub line: Option<i64>,
+    pub line: Option<u32>,
     /// When the span started.
     pub started_at: Timestamp,
     /// When the span ended, if it did.

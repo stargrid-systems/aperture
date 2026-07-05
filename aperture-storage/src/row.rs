@@ -22,9 +22,9 @@ pub(crate) fn text_ref_or_null(value: Option<&str>) -> Value {
     }
 }
 
-pub(crate) fn int_or_null(value: Option<i64>) -> Value {
+pub(crate) fn int_or_null<T: Into<i64>>(value: Option<T>) -> Value {
     match value {
-        Some(int) => Value::Integer(int),
+        Some(int) => Value::Integer(int.into()),
         None => Value::Null,
     }
 }
@@ -68,6 +68,18 @@ pub(crate) fn opt_int(row: &Row, idx: usize) -> Result<Option<i64>> {
     match row.get_value(idx).map_err(database)? {
         Value::Null => Ok(None),
         Value::Integer(int) => Ok(Some(int)),
+        other => Err(StorageError::Decode(format!(
+            "expected integer or null at column {idx}, found {other:?}"
+        ))),
+    }
+}
+
+pub(crate) fn opt_u32(row: &Row, idx: usize) -> Result<Option<u32>> {
+    match row.get_value(idx).map_err(database)? {
+        Value::Null => Ok(None),
+        Value::Integer(int) => Ok(Some(u32::try_from(int).map_err(|_| {
+            StorageError::Decode(format!("expected u32 at column {idx}, found {int}"))
+        })?)),
         other => Err(StorageError::Decode(format!(
             "expected integer or null at column {idx}, found {other:?}"
         ))),
