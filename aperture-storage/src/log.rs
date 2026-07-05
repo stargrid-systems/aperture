@@ -300,19 +300,26 @@ impl LogRepository {
         }))
     }
 
-    /// Lists distinct event targets, optionally filtered by prefix.
+    /// Lists distinct targets across both events and spans, optionally
+    /// filtered by prefix.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_targets(&self, q: Option<&str>) -> Result<Vec<String>> {
         // Raw string because sql!() cannot handle SQL single-quoted literals.
         let sql = match q {
             Some(_) => {
                 r#"
-                SELECT DISTINCT target FROM log_events
-                WHERE target LIKE ?1 ESCAPE '\'
+                SELECT target FROM log_events WHERE target LIKE ?1 ESCAPE '\'
+                UNION
+                SELECT target FROM log_spans WHERE target LIKE ?1 ESCAPE '\'
                 ORDER BY target
             "#
             }
-            None => sql!(SELECT DISTINCT target FROM log_events ORDER BY target),
+            None => sql!(
+                SELECT target FROM log_events
+                UNION
+                SELECT target FROM log_spans
+                ORDER BY target
+            ),
         };
         let params: Vec<Value> = match q {
             Some(prefix) => vec![Value::Text(format!("{}%", escape_like(prefix)))],
