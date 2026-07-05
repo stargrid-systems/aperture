@@ -7,7 +7,8 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt::{Debug, Write as _};
+use std::fmt::Debug;
+use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -358,13 +359,13 @@ async fn flush_dropped(writer: &mut LogWriter, dropped: &AtomicU64) {
     }
 }
 
-/// Field visitor that collects all fields into a JSON string and extracts the
-/// "message" field specially.
+/// Field visitor that collects all fields into a JSON byte buffer and
+/// extracts the "message" field specially.
 ///
-/// Writes JSON directly to a `String` for efficiency, avoiding an
-/// intermediate `Map<String, Value>`.
+/// Writes JSON directly via `serde_json::to_writer` into a `Vec<u8>`, avoiding
+/// intermediate allocations.
 struct FieldCollector {
-    json: String,
+    json: Vec<u8>,
     first: bool,
     message: Option<String>,
     /// Real target from a `log`-bridged event (`log.target` field).
@@ -377,9 +378,9 @@ struct FieldCollector {
 
 impl FieldCollector {
     fn new(boot_id: &Uuid) -> Self {
-        let mut json = String::new();
-        let _ = write!(json, "{{\"boot_id\":");
-        write_json_string(&mut json, &boot_id.to_string());
+        let mut json = Vec::new();
+        json.extend_from_slice(b"{\"boot_id\":");
+        serde_json::to_writer(&mut json, boot_id).unwrap();
         Self {
             json,
             first: false,
@@ -411,33 +412,31 @@ impl FieldCollector {
         if self.first {
             None
         } else {
-            self.json.push('}');
-            Some(self.json)
+            self.json.push(b'}');
+            Some(String::from_utf8(self.json).expect("buffer is valid UTF-8"))
         }
     }
 
     fn write_key(&mut self, name: &str) {
         if self.first {
             self.first = false;
-            self.json.push('{');
+            self.json.push(b'{');
         } else {
-            self.json.push(',');
+            self.json.push(b',');
         }
-        write_json_string(&mut self.json, name);
-        self.json.push(':');
+        serde_json::to_writer(&mut self.json, name).unwrap();
+        self.json.push(b':');
     }
 
     fn store_str(&mut self, name: &str, value: &str) {
         match name {
-            // `message` is a dedicated column on the events table, so it is
-            // not also recorded as a structured field.
             "message" => self.message = Some(value.to_owned()),
             "log.target" => self.log_target = Some(value.to_owned()),
             "log.file" => self.log_file = Some(value.to_owned()),
             "log.module_path" => {}
             _ => {
                 self.write_key(name);
-                write_json_string(&mut self.json, value);
+                serde_json::to_writer(&mut self.json, value).unwrap();
             }
         }
     }
@@ -458,12 +457,13 @@ impl Visit for FieldCollector {
 
     fn record_bool(&mut self, field: &Field, value: bool) {
         self.write_key(field.name());
-        self.json.push_str(if value { "true" } else { "false" });
+        self.json
+            .extend_from_slice(if value { b"true" } else { b"false" });
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
         self.write_key(field.name());
-        write!(self.json, "{value}").unwrap();
+        serde_json::to_writer(&mut self.json, &value).unwrap();
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
@@ -471,26 +471,26 @@ impl Visit for FieldCollector {
             self.log_line = Some(value as i64);
         } else {
             self.write_key(field.name());
-            write!(self.json, "{value}").unwrap();
+            serde_json::to_writer(&mut self.json, &value).unwrap();
         }
     }
 
     fn record_i128(&mut self, field: &Field, value: i128) {
         self.write_key(field.name());
-        write!(self.json, "{value}").unwrap();
+        serde_json::to_writer(&mut self.json, &value).unwrap();
     }
 
     fn record_u128(&mut self, field: &Field, value: u128) {
         self.write_key(field.name());
-        write!(self.json, "{value}").unwrap();
+        serde_json::to_writer(&mut self.json, &value).unwrap();
     }
 
     fn record_f64(&mut self, field: &Field, value: f64) {
         self.write_key(field.name());
         if let Some(n) = serde_json::Number::from_f64(value) {
-            write!(self.json, "{n}").unwrap();
+            serde_json::to_writer(&mut self.json, &n).unwrap();
         } else {
-            self.json.push_str("null");
+            self.json.extend_from_slice(b"null");
         }
     }
 
@@ -500,42 +500,40 @@ impl Visit for FieldCollector {
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
-        // Record the entire source chain as a JSON array under the field name.
-        // The head entry is always the Display of `value`; each subsequent
-        // entry is the Display of `Error::source` walking down the chain.
-        // The same field name is reused so callers using `error = &err` still
-        // find the value under `error`, just shaped as an array.
+        // Record the entire source chain as a JSON array of objects under the
+        // field name. Each object has "type" and "message"; some types add
+        // extra fields (e.g. io::Error exposes "kind").
         self.write_key(field.name());
-        self.json.push('[');
+        self.json.push(b'[');
         let mut current: Option<&(dyn Error + 'static)> = Some(value);
         let mut first = true;
         while let Some(error) = current {
             if !first {
-                self.json.push(',');
+                self.json.push(b',');
             }
             first = false;
-            write_json_string(&mut self.json, &format!("{error}"));
+            self.json.extend_from_slice(b"{\"type\":");
+            serde_json::to_writer(&mut self.json, error_type(error)).unwrap();
+            self.json.extend_from_slice(b",\"message\":");
+            serde_json::to_writer(&mut self.json, &format!("{error}")).unwrap();
+            if let Some(io_err) = error.downcast_ref::<io::Error>() {
+                self.json.extend_from_slice(b",\"kind\":");
+                serde_json::to_writer(&mut self.json, &format!("{:?}", io_err.kind())).unwrap();
+            }
+            self.json.push(b'}');
             current = error.source();
         }
-        self.json.push(']');
+        self.json.push(b']');
     }
 }
 
-/// Writes a JSON-escaped string into `out`.
-fn write_json_string(out: &mut String, value: &str) {
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c < '\x20' => write!(out, "\\u{:04x}", c as u32).unwrap(),
-            c => out.push(c),
-        }
+/// Returns a short type name for common error types.
+fn error_type(error: &(dyn Error + 'static)) -> &'static str {
+    if error.downcast_ref::<io::Error>().is_some() {
+        "io::Error"
+    } else {
+        "error"
     }
-    out.push('"');
 }
 
 /// Maps a `tracing::Level` to the storage `Level`.

@@ -1,32 +1,26 @@
 //! Response and query types for the JSON API.
-//!
-//! List endpoints share one envelope ([`Page`]) and one sort direction enum
-//! ([`OrderParam`]). Domain-specific DTOs live in submodules:
-//!
-//! - [`artifact`]: artifact catalog responses and query params
-//! - [`task`]: task invocation responses, progress, and query params
-//! - [`log`]: log event and span responses, boot info, and query params
-
-pub(crate) mod artifact;
-pub(crate) mod log;
-pub(crate) mod task;
 
 use aperture_artifacts::Page as StoragePage;
-pub use artifact::{
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use uuid::Uuid;
+
+pub use self::artifact::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, VersionListParams,
     VersionSortParam, artifact_page, version_page,
 };
-pub use log::{
+pub use self::log::{
     BootResponse, LevelResponse, LogEventResponse, LogListParams, LogSpanDetailResponse,
     LogSpanListParams, LogSpanResponse, LogTargetListParams, boots_response, event_page, span_page,
 };
-use serde::{Deserialize, Serialize};
-pub use task::{
+pub use self::task::{
     CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
     task_page,
 };
-use utoipa::ToSchema;
-use uuid::Uuid;
+
+mod artifact;
+mod log;
+mod task;
 
 /// Version information returned by `GET /api/v1/version`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
