@@ -155,7 +155,7 @@ impl Visit for FieldCollector {
         if let Some(n) = serde_json::Number::from_f64(value) {
             serde_json::to_writer(&mut self.json, &n).unwrap();
         } else {
-            self.json.extend_from_slice(b"null");
+            serde_json::to_writer(&mut self.json, &value.to_string()).unwrap();
         }
     }
 
