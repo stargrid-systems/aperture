@@ -39,9 +39,11 @@ pub(crate) fn ts_or_null(value: Option<Timestamp>) -> Value {
 pub(crate) fn req_text(row: &Row, idx: usize) -> Result<String> {
     match row.get_value(idx).map_err(database)? {
         Value::Text(text) => Ok(text),
-        other => Err(StorageError::Decode(format!(
-            "expected text at column {idx}, found {other:?}"
-        ))),
+        actual => Err(StorageError::ColumnTypeMismatch {
+            column: idx,
+            expected: "text",
+            actual,
+        }),
     }
 }
 
@@ -49,18 +51,22 @@ pub(crate) fn opt_text(row: &Row, idx: usize) -> Result<Option<String>> {
     match row.get_value(idx).map_err(database)? {
         Value::Null => Ok(None),
         Value::Text(text) => Ok(Some(text)),
-        other => Err(StorageError::Decode(format!(
-            "expected text or null at column {idx}, found {other:?}"
-        ))),
+        actual => Err(StorageError::ColumnTypeMismatch {
+            column: idx,
+            expected: "text or null",
+            actual,
+        }),
     }
 }
 
 pub(crate) fn req_int(row: &Row, idx: usize) -> Result<i64> {
     match row.get_value(idx).map_err(database)? {
         Value::Integer(int) => Ok(int),
-        other => Err(StorageError::Decode(format!(
-            "expected integer at column {idx}, found {other:?}"
-        ))),
+        actual => Err(StorageError::ColumnTypeMismatch {
+            column: idx,
+            expected: "integer",
+            actual,
+        }),
     }
 }
 
@@ -68,21 +74,30 @@ pub(crate) fn opt_int(row: &Row, idx: usize) -> Result<Option<i64>> {
     match row.get_value(idx).map_err(database)? {
         Value::Null => Ok(None),
         Value::Integer(int) => Ok(Some(int)),
-        other => Err(StorageError::Decode(format!(
-            "expected integer or null at column {idx}, found {other:?}"
-        ))),
+        actual => Err(StorageError::ColumnTypeMismatch {
+            column: idx,
+            expected: "integer or null",
+            actual,
+        }),
     }
 }
 
 pub(crate) fn opt_u32(row: &Row, idx: usize) -> Result<Option<u32>> {
     match row.get_value(idx).map_err(database)? {
         Value::Null => Ok(None),
-        Value::Integer(int) => Ok(Some(u32::try_from(int).map_err(|_| {
-            StorageError::Decode(format!("expected u32 at column {idx}, found {int}"))
-        })?)),
-        other => Err(StorageError::Decode(format!(
-            "expected integer or null at column {idx}, found {other:?}"
-        ))),
+        Value::Integer(int) => {
+            u32::try_from(int)
+                .map(Some)
+                .map_err(|_| StorageError::U32OutOfRange {
+                    column: idx,
+                    value: int,
+                })
+        }
+        actual => Err(StorageError::ColumnTypeMismatch {
+            column: idx,
+            expected: "integer or null",
+            actual,
+        }),
     }
 }
 
@@ -98,6 +113,5 @@ pub(crate) fn opt_ts(row: &Row, idx: usize) -> Result<Option<Timestamp>> {
 }
 
 fn ts_from_millis(millis: i64) -> Result<Timestamp> {
-    Timestamp::from_millisecond(millis)
-        .map_err(|err| StorageError::Decode(format!("invalid timestamp {millis}: {err}")))
+    Timestamp::from_millisecond(millis).map_err(|_| StorageError::InvalidTimestamp { millis })
 }

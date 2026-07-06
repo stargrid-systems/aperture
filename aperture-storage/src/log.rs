@@ -76,7 +76,7 @@ impl Level {
             2 => Ok(Self::Info),
             3 => Ok(Self::Warn),
             4 => Ok(Self::Error),
-            other => Err(StorageError::Decode(format!("unknown log level {other}"))),
+            other => Err(StorageError::UnknownLogLevel(other)),
         }
     }
 }
@@ -500,10 +500,8 @@ impl LogRepository {
 
     /// Inserts a synthetic event recording that log records were dropped.
     pub async fn record_dropped(&self, count: u64, timestamp: Timestamp) -> Result<()> {
-        let fields =
-            serde_json::to_string(&HashMap::from([("dropped", count)])).map_err(|err| {
-                StorageError::Decode(format!("failed to serialize dropped fields: {err}"))
-            })?;
+        let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
+            .expect("serializing a simple map cannot fail");
         self.insert_event(Level::Warn, "aperture::log", timestamp)
             .message(Some(&format!(
                 "dropped {count} log records due to full buffer"
@@ -720,10 +718,8 @@ impl LogWriter {
 
     /// Inserts a synthetic event recording that log records were dropped.
     pub async fn record_dropped(&mut self, count: u64, timestamp: Timestamp) -> Result<()> {
-        let fields =
-            serde_json::to_string(&HashMap::from([("dropped", count)])).map_err(|err| {
-                StorageError::Decode(format!("failed to serialize dropped fields: {err}"))
-            })?;
+        let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
+            .expect("serializing a simple map cannot fail");
         self.insert_event(EventRecord {
             span_id: None,
             level: Level::Warn,

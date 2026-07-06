@@ -123,7 +123,7 @@ impl Cursor {
     }
 
     fn decode(encoded: &str) -> Result<Self> {
-        let invalid = || StorageError::Decode(format!("invalid cursor {encoded:?}"));
+        let invalid = || StorageError::InvalidCursor(encoded.to_owned());
         let buf = from_hex(encoded).ok_or_else(invalid)?;
         if buf.len() < 9 {
             return Err(invalid());

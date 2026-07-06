@@ -69,9 +69,7 @@ impl TaskStatus {
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
             "interrupted" => Ok(Self::Interrupted),
-            other => Err(StorageError::Decode(format!(
-                "unknown task status {other:?}"
-            ))),
+            other => Err(StorageError::UnknownTaskStatus(other.to_owned())),
         }
     }
 }

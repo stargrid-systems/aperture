@@ -23,7 +23,7 @@ impl ApiError {
 impl From<ArtifactError> for ApiError {
     fn from(err: ArtifactError) -> Self {
         let status = match &err {
-            ArtifactError::Storage(StorageError::Decode(_)) => StatusCode::BAD_REQUEST,
+            ArtifactError::Storage(StorageError::InvalidCursor(_)) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
@@ -36,7 +36,7 @@ impl From<ArtifactError> for ApiError {
 impl From<StorageError> for ApiError {
     fn from(err: StorageError) -> Self {
         let status = match &err {
-            StorageError::Decode(_) => StatusCode::BAD_REQUEST,
+            StorageError::InvalidCursor(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
@@ -50,7 +50,7 @@ impl From<TaskError> for ApiError {
     fn from(err: TaskError) -> Self {
         let status = match &err {
             TaskError::NotRegistered(_) | TaskError::DecodeInput(_) => StatusCode::BAD_REQUEST,
-            TaskError::Storage(StorageError::Decode(_)) => StatusCode::BAD_REQUEST,
+            TaskError::Storage(StorageError::InvalidCursor(_)) => StatusCode::BAD_REQUEST,
             TaskError::NotFound(_) => StatusCode::NOT_FOUND,
             TaskError::AlreadySettled(_) => StatusCode::GONE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
