@@ -395,10 +395,12 @@ async fn prune_before_deletes_old_events() {
 #[tokio::test]
 async fn record_dropped_inserts_synthetic_event() {
     let storage = Storage::open(":memory:").await.unwrap();
+    let mut writer = storage.log_writer().await.unwrap();
+
+    writer.record_dropped(42, at(1_000)).await.unwrap();
+    drop(writer);
+
     let logs = storage.logs();
-
-    logs.record_dropped(42, at(1_000)).await.unwrap();
-
     let page = logs
         .list_events(
             &EventFilter {
@@ -418,7 +420,11 @@ async fn record_dropped_inserts_synthetic_event() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].level, Level::Warn);
     assert_eq!(page.items[0].target, "aperture::log");
-    assert!(page.items[0].message.as_deref().unwrap().contains("42"));
+    assert_eq!(
+        page.items[0].message.as_deref().unwrap(),
+        "dropped log records due to full buffer"
+    );
+    assert!(page.items[0].fields.as_deref().unwrap().contains("42"));
 }
 
 #[tokio::test]

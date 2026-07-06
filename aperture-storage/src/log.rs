@@ -497,20 +497,6 @@ impl LogRepository {
         }
         Ok(boots)
     }
-
-    /// Inserts a synthetic event recording that log records were dropped.
-    pub async fn record_dropped(&self, count: u64, timestamp: Timestamp) -> Result<()> {
-        let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
-            .expect("serializing a simple map cannot fail");
-        self.insert_event(Level::Warn, "aperture::log", timestamp)
-            .message(Some(&format!(
-                "dropped {count} log records due to full buffer"
-            )))
-            .fields(Some(&fields))
-            .execute()
-            .await?;
-        Ok(())
-    }
 }
 
 /// Builder for a span insert. Created by [`LogRepository::insert_span`].
@@ -724,7 +710,7 @@ impl LogWriter {
             span_id: None,
             level: Level::Warn,
             target: "aperture::log",
-            message: Some(&format!("dropped {count} log records due to full buffer")),
+            message: Some("dropped log records due to full buffer"),
             timestamp,
             file: None,
             line: None,
