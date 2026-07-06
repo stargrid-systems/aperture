@@ -103,7 +103,7 @@ impl TaskDefinition for DownloadDefinition {
         };
         Ok(DownloadOutput {
             digest: artifact.digest,
-            size_bytes: artifact.size_bytes.try_into().unwrap_or(0),
+            size_bytes: artifact.size_bytes,
             version: artifact.version,
         })
     }

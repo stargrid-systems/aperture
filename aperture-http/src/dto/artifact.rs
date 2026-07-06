@@ -14,7 +14,7 @@ pub struct ArtifactSummaryResponse {
     /// Logical artifact key.
     pub key: String,
     /// How many versions of this key are stored.
-    pub version_count: i64,
+    pub version_count: u64,
     /// Where the newest version came from.
     pub source: String,
     /// Content digest of the newest version.
@@ -22,7 +22,7 @@ pub struct ArtifactSummaryResponse {
     /// Human-readable version of the newest version, if known.
     pub version: Option<String>,
     /// Stored blob size of the newest version, in bytes.
-    pub size_bytes: i64,
+    pub size_bytes: u64,
     /// When the newest version was downloaded.
     pub downloaded_at: Timestamp,
 }
@@ -56,7 +56,7 @@ pub struct ArtifactVersionResponse {
     /// OCI media type, if applicable.
     pub media_type: Option<String>,
     /// Stored blob size in bytes.
-    pub size_bytes: i64,
+    pub size_bytes: u64,
     /// When this version was downloaded.
     pub downloaded_at: Timestamp,
     /// When this version was last verified, if ever.

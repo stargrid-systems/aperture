@@ -12,7 +12,7 @@ use turso::{Connection, Row, Value, params_from_iter};
 use crate::error::{Result, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::row::{opt_text, opt_ts, req_int, req_text, req_ts, text_or_null, ts_or_null};
+use crate::row::{opt_text, opt_ts, req_int, req_text, req_ts, req_u64, text_or_null, ts_or_null};
 
 /// Columns selected for an [`Artifact`], in [`row_to_artifact`] order.
 const ARTIFACT_COLUMNS: &str =
@@ -34,7 +34,7 @@ pub struct Artifact {
     /// Human-readable version, if known.
     pub version: Option<String>,
     /// Size of the stored blob in bytes.
-    pub size_bytes: i64,
+    pub size_bytes: u64,
     /// When this version was downloaded.
     pub downloaded_at: Timestamp,
     /// When this version was last verified.
@@ -47,7 +47,7 @@ pub struct ArtifactKey {
     /// The newest stored version for this key.
     pub latest: Artifact,
     /// How many versions of this key are stored.
-    pub version_count: i64,
+    pub version_count: u64,
 }
 
 /// Field a version listing is sorted by.
@@ -79,7 +79,7 @@ impl ArtifactRepository {
             Value::Text(artifact.digest.clone()),
             text_or_null(&artifact.media_type),
             text_or_null(&artifact.version),
-            Value::Integer(artifact.size_bytes),
+            Value::Integer(artifact.size_bytes as i64),
             Value::Integer(artifact.downloaded_at.as_millisecond()),
             ts_or_null(artifact.verified_at),
         ]);
@@ -257,7 +257,7 @@ impl ArtifactRepository {
         Ok(paginator.finish(items, |artifact| {
             let value = match sort {
                 VersionSort::DownloadedAt => artifact.downloaded_at.as_millisecond(),
-                VersionSort::SizeBytes => artifact.size_bytes,
+                VersionSort::SizeBytes => artifact.size_bytes as i64,
             };
             (CursorValue::Int(value), artifact.id)
         }))
@@ -300,7 +300,7 @@ fn row_to_artifact(row: &Row) -> Result<Artifact> {
         digest: req_text(row, 3)?,
         media_type: opt_text(row, 4)?,
         version: opt_text(row, 5)?,
-        size_bytes: req_int(row, 6)?,
+        size_bytes: req_u64(row, 6)?,
         downloaded_at: req_ts(row, 7)?,
         verified_at: opt_ts(row, 8)?,
     })
@@ -309,6 +309,6 @@ fn row_to_artifact(row: &Row) -> Result<Artifact> {
 fn row_to_artifact_key(row: &Row) -> Result<ArtifactKey> {
     Ok(ArtifactKey {
         latest: row_to_artifact(row)?,
-        version_count: req_int(row, 9)?,
+        version_count: req_u64(row, 9)?,
     })
 }

@@ -10,7 +10,8 @@ use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
 use crate::row::{
-    int_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text, req_ts, text_ref_or_null,
+    int_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text, req_ts, req_u64,
+    text_ref_or_null,
 };
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
@@ -116,7 +117,7 @@ pub struct BootInfo {
     pub boot_id: Uuid,
     pub first_seen: Timestamp,
     pub last_seen: Timestamp,
-    pub event_count: i64,
+    pub event_count: u64,
 }
 
 /// Filters for log event queries.
@@ -492,7 +493,7 @@ impl LogRepository {
                 boot_id: parsed,
                 first_seen: req_ts(&row, 1)?,
                 last_seen: req_ts(&row, 2)?,
-                event_count: req_int(&row, 3)?,
+                event_count: req_u64(&row, 3)?,
             });
         }
         Ok(boots)

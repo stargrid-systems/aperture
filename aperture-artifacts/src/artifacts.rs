@@ -503,7 +503,7 @@ fn build_artifact(
         digest: digest.to_string(),
         media_type: Some(media_type.to_string()),
         version,
-        size_bytes: size as i64,
+        size_bytes: size,
         downloaded_at: at,
         verified_at: Some(at),
     }

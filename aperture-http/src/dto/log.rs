@@ -252,7 +252,7 @@ pub struct BootResponse {
     /// Timestamp of the latest event in this boot.
     pub last_seen: Timestamp,
     /// Number of events recorded so far in this boot.
-    pub event_count: i64,
+    pub event_count: u64,
     /// True if this is the currently running gateway boot.
     pub is_current: bool,
 }

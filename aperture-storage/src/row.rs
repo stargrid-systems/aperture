@@ -70,6 +70,16 @@ pub(crate) fn req_int(row: &Row, idx: usize) -> Result<i64> {
     }
 }
 
+pub(crate) fn req_u64(row: &Row, idx: usize) -> Result<u64> {
+    req_int(row, idx).and_then(|v| {
+        u64::try_from(v).map_err(|_| StorageError::IntegerCast {
+            column: idx,
+            value: v,
+            target: "u64",
+        })
+    })
+}
+
 pub(crate) fn opt_int(row: &Row, idx: usize) -> Result<Option<i64>> {
     match row.get_value(idx).map_err(database)? {
         Value::Null => Ok(None),
@@ -88,9 +98,10 @@ pub(crate) fn opt_u32(row: &Row, idx: usize) -> Result<Option<u32>> {
         Value::Integer(int) => {
             u32::try_from(int)
                 .map(Some)
-                .map_err(|_| StorageError::U32OutOfRange {
+                .map_err(|_| StorageError::IntegerCast {
                     column: idx,
                     value: int,
+                    target: "u32",
                 })
         }
         actual => Err(StorageError::ColumnTypeMismatch {

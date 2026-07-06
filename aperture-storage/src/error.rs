@@ -42,9 +42,13 @@ pub enum StorageError {
         actual: turso::Value,
     },
 
-    /// An integer at the given column does not fit in `u32`.
-    #[error("integer {value} at column {column} does not fit in u32")]
-    U32OutOfRange { column: usize, value: i64 },
+    /// An integer at the given column does not fit in the target type.
+    #[error("integer {value} at column {column} does not fit in {target}")]
+    IntegerCast {
+        column: usize,
+        value: i64,
+        target: &'static str,
+    },
 
     /// A timestamp stored as milliseconds could not be converted.
     #[error("invalid timestamp {millis} ms")]
