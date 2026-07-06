@@ -1,26 +1,15 @@
-//! A `tracing_subscriber` layer that persists spans and events to the database.
-//!
-//! The layer captures tracing records and sends them through a bounded channel
-//! to a background task that batch-inserts them via [`LogWriter`]. If the
-//! channel is full, records are dropped and a synthetic warning event is
-//! inserted to record how many were lost.
-
 use std::error::Error;
-use std::fmt::Debug;
-use std::{fmt, io};
+use std::fmt::{self, Debug};
+use std::io;
 
 use serde::ser::{SerializeMap as _, SerializeSeq as _};
 use tracing::field::{Field, Visit};
 use uuid::Uuid;
 
-/// Field visitor that collects all fields into a JSON byte buffer and
-/// extracts the "message" field specially.
-///
-/// Writes JSON directly via `serde_json::to_writer` into a `Vec<u8>`, avoiding
-/// intermediate allocations.
+/// Field visitor that collects tracing fields into a [`serde_json::Map`] and
+/// extracts special fields like "message" and log-bridged metadata.
 pub struct FieldCollector {
-    json: Vec<u8>,
-    first: bool,
+    fields: serde_json::Map<String, serde_json::Value>,
     message: Option<String>,
     /// Real target from a `log`-bridged event (`log.target` field).
     log_target: Option<String>,
@@ -32,12 +21,13 @@ pub struct FieldCollector {
 
 impl FieldCollector {
     pub fn new(boot_id: &Uuid) -> Self {
-        let mut json = Vec::new();
-        json.extend_from_slice(b"{\"boot_id\":");
-        serde_json::to_writer(&mut json, boot_id).unwrap();
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "boot_id".to_owned(),
+            serde_json::Value::String((*boot_id).to_string()),
+        );
         Self {
-            json,
-            first: false,
+            fields,
             message: None,
             log_target: None,
             log_file: None,
@@ -49,8 +39,7 @@ impl FieldCollector {
     /// (via `Span::record`). Does not include `boot_id`.
     pub fn additional() -> Self {
         Self {
-            json: Vec::new(),
-            first: true,
+            fields: serde_json::Map::new(),
             message: None,
             log_target: None,
             log_file: None,
@@ -62,7 +51,6 @@ impl FieldCollector {
         self.message.take()
     }
 
-    /// Returns the real target from a `log`-bridged event, if present.
     pub fn take_log_target(&mut self) -> Option<String> {
         self.log_target.take()
     }
@@ -75,24 +63,12 @@ impl FieldCollector {
         self.log_line.take()
     }
 
-    pub fn into_json(mut self) -> Option<String> {
-        if self.first {
+    pub fn into_fields(self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        if self.fields.is_empty() {
             None
         } else {
-            self.json.push(b'}');
-            Some(String::from_utf8(self.json).expect("buffer is valid UTF-8"))
+            Some(self.fields)
         }
-    }
-
-    fn write_key(&mut self, name: &str) {
-        if self.first {
-            self.first = false;
-            self.json.push(b'{');
-        } else {
-            self.json.push(b',');
-        }
-        serde_json::to_writer(&mut self.json, name).unwrap();
-        self.json.push(b':');
     }
 
     fn collect_str<S: fmt::Display>(&mut self, name: &str, value: S) {
@@ -102,8 +78,10 @@ impl FieldCollector {
             "log.file" => self.log_file = Some(value.to_string()),
             "log.module_path" => {}
             _ => {
-                self.write_key(name);
-                serde_json::to_writer(&mut self.json, &SerializeAsDisplay(value)).unwrap();
+                self.fields.insert(
+                    name.to_owned(),
+                    serde_json::Value::String(value.to_string()),
+                );
             }
         }
     }
@@ -114,8 +92,8 @@ impl FieldCollector {
         {
             self.log_line = Some(line);
         } else {
-            self.write_key(name);
-            serde_json::to_writer(&mut self.json, &value).unwrap();
+            self.fields
+                .insert(name.to_owned(), serde_json::to_value(value).unwrap());
         }
     }
 }
@@ -130,8 +108,8 @@ impl Visit for FieldCollector {
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.write_key(field.name());
-        serde_json::to_writer(&mut self.json, &value).unwrap();
+        self.fields
+            .insert(field.name().to_owned(), serde_json::Value::Bool(value));
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
@@ -151,12 +129,10 @@ impl Visit for FieldCollector {
     }
 
     fn record_f64(&mut self, field: &Field, value: f64) {
-        self.write_key(field.name());
-        if let Some(n) = serde_json::Number::from_f64(value) {
-            serde_json::to_writer(&mut self.json, &n).unwrap();
-        } else {
-            serde_json::to_writer(&mut self.json, &value.to_string()).unwrap();
-        }
+        let v = serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .unwrap_or_else(|| serde_json::Value::String(value.to_string()));
+        self.fields.insert(field.name().to_owned(), v);
     }
 
     fn record_bytes(&mut self, field: &Field, value: &[u8]) {
@@ -164,8 +140,10 @@ impl Visit for FieldCollector {
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
-        self.write_key(field.name());
-        serde_json::to_writer(&mut self.json, &ErrorChainSerializer(value)).unwrap();
+        self.fields.insert(
+            field.name().to_owned(),
+            serde_json::to_value(ErrorChainSerializer(value)).unwrap(),
+        );
     }
 }
 

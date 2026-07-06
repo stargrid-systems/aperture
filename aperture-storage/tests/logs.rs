@@ -5,10 +5,19 @@ fn at(millis: i64) -> Timestamp {
     Timestamp::from_millisecond(millis).unwrap()
 }
 
+fn json_map(s: &str) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(s)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone()
+}
+
 async fn seeded_storage() -> Storage {
     let storage = Storage::open(":memory:").await.unwrap();
     let logs = storage.logs();
 
+    let span_fields = json_map(r#"{"key":"spectra"}"#);
     let span_id = logs
         .insert_span(
             "download",
@@ -19,34 +28,37 @@ async fn seeded_storage() -> Storage {
         .parent_id(None)
         .file(Some("src/fetch.rs"))
         .line(Some(42))
-        .fields(Some(r#"{"key":"spectra"}"#))
+        .fields(Some(&span_fields))
         .execute()
         .await
         .unwrap();
 
+    let event_fields = json_map(r#"{"key":"spectra","source":"ghcr.io"}"#);
     logs.insert_event(Level::Info, "aperture_artifacts::fetch", at(1_100))
         .span_id(Some(span_id))
         .message(Some("starting download"))
         .file(Some("src/fetch.rs"))
         .line(Some(10))
-        .fields(Some(r#"{"key":"spectra","source":"ghcr.io"}"#))
+        .fields(Some(&event_fields))
         .execute()
         .await
         .unwrap();
 
+    let retry_fields = json_map(r#"{"key":"spectra","attempt":2}"#);
     logs.insert_event(Level::Warn, "aperture_artifacts::fetch", at(1_200))
         .span_id(Some(span_id))
         .message(Some("retrying download after timeout"))
         .file(Some("src/fetch.rs"))
         .line(Some(25))
-        .fields(Some(r#"{"key":"spectra","attempt":2}"#))
+        .fields(Some(&retry_fields))
         .execute()
         .await
         .unwrap();
 
+    let error_fields = json_map(r#"{"status":500}"#);
     logs.insert_event(Level::Error, "aperture_http::error", at(1_300))
         .message(Some("artifact request failed"))
-        .fields(Some(r#"{"status":500}"#))
+        .fields(Some(&error_fields))
         .execute()
         .await
         .unwrap();
@@ -571,27 +583,23 @@ async fn list_boots_groups_by_boot_id_field() {
     let logs = storage.logs();
 
     // Two distinct boot ids, with events interleaved in time but grouped apart.
+    let boot_a = json_map(r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#);
+    let boot_b = json_map(r#"{"boot_id":"00000000-0000-0000-0000-000000000002"}"#);
     logs.insert_event(Level::Info, "aperture", at(1_000))
         .message(Some("first boot start"))
-        .fields(Some(
-            r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#,
-        ))
+        .fields(Some(&boot_a))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(2_000))
         .message(Some("first boot end"))
-        .fields(Some(
-            r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#,
-        ))
+        .fields(Some(&boot_a))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(3_000))
         .message(Some("second boot start"))
-        .fields(Some(
-            r#"{"boot_id":"00000000-0000-0000-0000-000000000002"}"#,
-        ))
+        .fields(Some(&boot_b))
         .execute()
         .await
         .unwrap();

@@ -22,6 +22,15 @@ pub(crate) fn text_ref_or_null(value: Option<&str>) -> Value {
     }
 }
 
+pub(crate) fn map_ref_or_null(value: Option<&serde_json::Map<String, serde_json::Value>>) -> Value {
+    match value {
+        Some(map) => {
+            Value::Text(serde_json::to_string(map).expect("serializing a JSON map cannot fail"))
+        }
+        None => Value::Null,
+    }
+}
+
 pub(crate) fn int_or_null<T: Into<i64>>(value: Option<T>) -> Value {
     match value {
         Some(int) => Value::Integer(int.into()),

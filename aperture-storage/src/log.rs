@@ -1,7 +1,5 @@
 //! Structured log storage: tracing spans and events persisted for querying.
 
-use std::collections::HashMap;
-
 use jiff::Timestamp;
 use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
@@ -10,8 +8,8 @@ use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
 use crate::row::{
-    int_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text, req_ts, req_u64,
-    text_ref_or_null,
+    int_or_null, map_ref_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text, req_ts,
+    req_u64, text_ref_or_null,
 };
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
@@ -163,7 +161,7 @@ pub struct SpanRecord<'a> {
     pub file: Option<&'a str>,
     pub line: Option<u32>,
     pub started_at: Timestamp,
-    pub fields: Option<&'a str>,
+    pub fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Plain-data description of an event to persist via
@@ -176,7 +174,7 @@ pub struct EventRecord<'a> {
     pub timestamp: Timestamp,
     pub file: Option<&'a str>,
     pub line: Option<u32>,
-    pub fields: Option<&'a str>,
+    pub fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Repository over the structured log tables for query operations.
@@ -510,7 +508,7 @@ pub struct SpanInsertBuilder<'a> {
     file: Option<&'a str>,
     line: Option<u32>,
     started_at: Timestamp,
-    fields: Option<&'a str>,
+    fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 impl<'a> SpanInsertBuilder<'a> {
@@ -529,7 +527,10 @@ impl<'a> SpanInsertBuilder<'a> {
         self
     }
 
-    pub fn fields(mut self, fields: Option<&'a str>) -> Self {
+    pub fn fields(
+        mut self,
+        fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
+    ) -> Self {
         self.fields = fields;
         self
     }
@@ -543,7 +544,7 @@ impl<'a> SpanInsertBuilder<'a> {
             text_ref_or_null(self.file),
             int_or_null(self.line),
             Value::Integer(self.started_at.as_millisecond()),
-            text_ref_or_null(self.fields),
+            map_ref_or_null(self.fields),
         ]);
         self.repo
             .connection
@@ -564,7 +565,7 @@ pub struct EventInsertBuilder<'a> {
     message: Option<&'a str>,
     file: Option<&'a str>,
     line: Option<u32>,
-    fields: Option<&'a str>,
+    fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 impl<'a> EventInsertBuilder<'a> {
@@ -588,7 +589,10 @@ impl<'a> EventInsertBuilder<'a> {
         self
     }
 
-    pub fn fields(mut self, fields: Option<&'a str>) -> Self {
+    pub fn fields(
+        mut self,
+        fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
+    ) -> Self {
         self.fields = fields;
         self
     }
@@ -602,7 +606,7 @@ impl<'a> EventInsertBuilder<'a> {
             Value::Integer(self.timestamp.as_millisecond()),
             text_ref_or_null(self.file),
             int_or_null(self.line),
-            text_ref_or_null(self.fields),
+            map_ref_or_null(self.fields),
         ]);
         self.repo
             .connection
@@ -656,7 +660,7 @@ impl LogWriter {
             text_ref_or_null(record.file),
             int_or_null(record.line),
             Value::Integer(record.started_at.as_millisecond()),
-            text_ref_or_null(record.fields),
+            map_ref_or_null(record.fields),
         ]);
         self.insert_span.execute(params).await.map_err(database)?;
         Ok(self.conn.last_insert_rowid())
@@ -672,7 +676,7 @@ impl LogWriter {
             Value::Integer(record.timestamp.as_millisecond()),
             text_ref_or_null(record.file),
             int_or_null(record.line),
-            text_ref_or_null(record.fields),
+            map_ref_or_null(record.fields),
         ]);
         self.insert_event.execute(params).await.map_err(database)?;
         Ok(self.conn.last_insert_rowid())
@@ -692,12 +696,15 @@ impl LogWriter {
 
     /// Updates the fields JSON of a span. Used when fields are recorded after
     /// the span was created via `Span::record`.
-    pub async fn update_span_fields(&mut self, id: i64, fields: &str) -> Result<()> {
+    pub async fn update_span_fields(
+        &mut self,
+        id: i64,
+        fields: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        let json = serde_json::to_string(fields)
+            .expect("serializing a JSON map produced by serde_json cannot fail");
         self.update_span_fields
-            .execute(params_from_iter([
-                Value::Text(fields.to_owned()),
-                Value::Integer(id),
-            ]))
+            .execute(params_from_iter([Value::Text(json), Value::Integer(id)]))
             .await
             .map_err(database)?;
         Ok(())
@@ -705,8 +712,11 @@ impl LogWriter {
 
     /// Inserts a synthetic event recording that log records were dropped.
     pub async fn record_dropped(&mut self, count: u64, timestamp: Timestamp) -> Result<()> {
-        let fields = serde_json::to_string(&HashMap::from([("dropped", count)]))
-            .expect("serializing a simple map cannot fail");
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "dropped".to_owned(),
+            serde_json::Value::Number(count.into()),
+        );
         self.insert_event(EventRecord {
             span_id: None,
             level: Level::Warn,

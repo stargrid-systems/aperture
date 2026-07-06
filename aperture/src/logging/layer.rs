@@ -58,7 +58,7 @@ struct SpanStart {
     file: Option<String>,
     line: Option<u32>,
     started_at: Timestamp,
-    fields: Option<String>,
+    fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 struct SpanEnd {
@@ -68,7 +68,7 @@ struct SpanEnd {
 
 struct SpanFields {
     tracing_id: u64,
-    fields: String,
+    fields: serde_json::Map<String, serde_json::Value>,
 }
 
 struct EventMsg {
@@ -79,7 +79,7 @@ struct EventMsg {
     timestamp: Timestamp,
     file: Option<String>,
     line: Option<u32>,
-    fields: Option<String>,
+    fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// A tracing layer that persists spans and events to the database.
@@ -201,7 +201,7 @@ where
             file: meta.file().map(str::to_owned),
             line: meta.line(),
             started_at: Timestamp::now(),
-            fields: visitor.into_json(),
+            fields: visitor.into_fields(),
         }));
     }
 
@@ -239,7 +239,7 @@ where
             timestamp: Timestamp::now(),
             file,
             line,
-            fields: visitor.into_json(),
+            fields: visitor.into_fields(),
         }));
     }
 
@@ -267,7 +267,7 @@ where
         }
         let mut visitor = FieldCollector::additional();
         values.record(&mut visitor);
-        if let Some(fields) = visitor.into_json() {
+        if let Some(fields) = visitor.into_fields() {
             self.try_send(Record::SpanFields(SpanFields {
                 tracing_id: id.into_u64(),
                 fields,
@@ -284,7 +284,7 @@ async fn writer_task(
     mut shutdown: oneshot::Receiver<()>,
 ) {
     let mut span_ids: HashMap<u64, i64> = HashMap::new();
-    let mut span_fields: HashMap<u64, String> = HashMap::new();
+    let mut span_fields: HashMap<u64, serde_json::Map<String, serde_json::Value>> = HashMap::new();
     let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
     let mut interval = interval(FLUSH_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -364,7 +364,7 @@ async fn flush(
     writer: &mut LogWriter,
     batch: &mut Vec<Record>,
     span_ids: &mut HashMap<u64, i64>,
-    span_fields: &mut HashMap<u64, String>,
+    span_fields: &mut HashMap<u64, serde_json::Map<String, serde_json::Value>>,
 ) {
     for record in batch.drain(..) {
         match record {
@@ -381,7 +381,7 @@ async fn flush(
                         file: s.file.as_deref(),
                         line: s.line,
                         started_at: s.started_at,
-                        fields: s.fields.as_deref(),
+                        fields: s.fields.as_ref(),
                     })
                     .await;
                 if let Ok(db_id) = result {
@@ -393,10 +393,13 @@ async fn flush(
             }
             Record::SpanFields(f) => {
                 if let Some(&db_id) = span_ids.get(&f.tracing_id) {
-                    let current = span_fields.get(&f.tracing_id).cloned();
-                    let merged = merge_json_fields(current.as_deref(), &f.fields);
-                    span_fields.insert(f.tracing_id, merged.clone());
-                    let _ = writer.update_span_fields(db_id, &merged).await;
+                    let current = span_fields.get_mut(&f.tracing_id);
+                    if let Some(current) = current {
+                        for (k, v) in f.fields {
+                            current.insert(k, v);
+                        }
+                        let _ = writer.update_span_fields(db_id, current).await;
+                    }
                 }
             }
             Record::SpanEnd(s) => {
@@ -419,7 +422,7 @@ async fn flush(
                         timestamp: e.timestamp,
                         file: e.file.as_deref(),
                         line: e.line,
-                        fields: e.fields.as_deref(),
+                        fields: e.fields.as_ref(),
                     })
                     .await;
             }
@@ -445,23 +448,6 @@ fn tracing_to_db_level(level: &TracingLevel) -> Level {
         TracingLevel::WARN => Level::Warn,
         TracingLevel::ERROR => Level::Error,
     }
-}
-
-/// Merges `additions` (a JSON object string) into `existing` (a JSON object
-/// string or `None`). Returns the merged JSON string.
-fn merge_json_fields(existing: Option<&str>, additions: &str) -> String {
-    let mut base: serde_json::Value = existing
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-    if let (Some(base_map), Ok(serde_json::Value::Object(add))) = (
-        base.as_object_mut(),
-        serde_json::from_str::<serde_json::Value>(additions),
-    ) {
-        for (k, v) in add {
-            base_map.insert(k, v);
-        }
-    }
-    base.to_string()
 }
 
 #[cfg(test)]
@@ -627,7 +613,7 @@ mod tests {
                 Record::SpanStart(s) => {
                     assert_eq!(s.name, "my_span");
                     assert!(
-                        s.fields.as_ref().is_some_and(|f| f.contains("initial")),
+                        s.fields.as_ref().is_some_and(|f| f.contains_key("initial")),
                         "initial field should be in span start: {:?}",
                         s.fields
                     );
@@ -635,14 +621,14 @@ mod tests {
                 }
                 Record::SpanFields(f) => {
                     assert!(
-                        f.fields.contains("late_field"),
-                        "late_field should be in span fields: {}",
+                        f.fields.contains_key("late_field"),
+                        "late_field should be in span fields: {:?}",
                         f.fields
                     );
-                    assert!(
-                        f.fields.contains("hello"),
-                        "hello value should be in span fields: {}",
-                        f.fields
+                    assert_eq!(
+                        f.fields.get("late_field"),
+                        Some(&serde_json::Value::String("hello".to_owned())),
+                        "late_field value should be \"hello\""
                     );
                     found_fields = true;
                 }
@@ -651,36 +637,5 @@ mod tests {
         }
         assert!(found_start, "SpanStart record must be present");
         assert!(found_fields, "SpanFields record must be present");
-    }
-
-    /// `merge_json_fields` correctly merges new keys into existing JSON.
-    #[test]
-    fn merge_json_fields_merges_objects() {
-        let existing = r#"{"boot_id":"abc","count":1}"#;
-        let additions = r#"{"status":"ok"}"#;
-        let merged = merge_json_fields(Some(existing), additions);
-        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(v["boot_id"], "abc");
-        assert_eq!(v["count"], 1);
-        assert_eq!(v["status"], "ok");
-    }
-
-    /// `merge_json_fields` works with no existing fields.
-    #[test]
-    fn merge_json_fields_from_empty() {
-        let additions = r#"{"key":"value"}"#;
-        let merged = merge_json_fields(None, additions);
-        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(v["key"], "value");
-    }
-
-    /// `merge_json_fields` overwrites existing keys with new values.
-    #[test]
-    fn merge_json_fields_overwrites() {
-        let existing = r#"{"status":"pending"}"#;
-        let additions = r#"{"status":"done"}"#;
-        let merged = merge_json_fields(Some(existing), additions);
-        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(v["status"], "done");
     }
 }
