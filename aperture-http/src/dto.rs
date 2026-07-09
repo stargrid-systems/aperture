@@ -1,6 +1,9 @@
 //! Response and query types for the JSON API.
 
+use std::collections::HashMap;
+
 use aperture_artifacts::Page as StoragePage;
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -46,6 +49,29 @@ where
             .collect(),
         OneOrMany::Many(v) => v,
     })
+}
+
+/// A structured field filter passed as a string-encoded JSON object in a
+/// query parameter, e.g. `{"key":"value"}`. The raw string is parsed into
+/// key-value pairs during deserialization.
+#[derive(Debug, Clone, Default)]
+pub struct FieldFilter(pub Vec<(String, String)>);
+
+impl FieldFilter {
+    pub fn into_pairs(self) -> Vec<(String, String)> {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for FieldFilter {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        let map: HashMap<String, String> = serde_json::from_str(&raw).map_err(D::Error::custom)?;
+        Ok(Self(map.into_iter().collect()))
+    }
 }
 
 /// Version information returned by `GET /api/v1/version`.

@@ -13,7 +13,7 @@ pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort}
 use self::error::database;
 pub use self::error::{Result, StorageError};
 pub use self::log::{
-    BootInfo, Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogRepository, LogWriter,
+    BootInfo, Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogBatch, LogRepository,
     Span, SpanFilter, SpanInsertBuilder, SpanParentFilter, SpanRecord,
 };
 use self::migration::run;
@@ -93,10 +93,5 @@ impl Storage {
     /// Returns the repository over the structured log tables.
     pub fn logs(&self) -> LogRepository {
         LogRepository::new(self.connect())
-    }
-
-    /// Returns a [`LogWriter`] for batch inserts from a background task.
-    pub async fn log_writer(&self) -> Result<LogWriter> {
-        LogWriter::new(self.connect()).await
     }
 }

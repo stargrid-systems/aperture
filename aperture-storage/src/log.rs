@@ -1,6 +1,7 @@
 //! Structured log storage: tracing spans and events persisted for querying.
 
 use jiff::Timestamp;
+use turso::transaction::Transaction;
 use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
 
@@ -14,34 +15,34 @@ use crate::row::{
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
 const EVENT_COLUMNS: &str =
-    "id, span_id, level, target, message, timestamp, file, line, boot_id, fields";
+    "id, span_id, level, target, message, timestamp, file, line, boot_id, json(fields)";
 
 /// Columns selected for a [`Span`], in [`row_to_span`] order.
 const SPAN_COLUMNS: &str =
-    "id, parent_id, name, level, target, file, line, started_at, ended_at, fields";
+    "id, parent_id, name, level, target, file, line, started_at, ended_at, json(fields)";
 
-/// SQL shared between [`LogRepository`] and [`LogWriter`] for span inserts.
+/// SQL shared between [`LogRepository`] and [`LogBatch`] for span inserts.
 /// File-level because the parameter layout is a shared assumption.
 const SQL_INSERT_SPAN: &str = sql!(
     INSERT INTO log_spans
     (parent_id, name, level, target, file, line, started_at, fields)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, jsonb(?8))
 );
 
-/// SQL shared between [`LogRepository`] and [`LogWriter`] for event inserts.
+/// SQL shared between [`LogRepository`] and [`LogBatch`] for event inserts.
 /// File-level because the parameter layout is a shared assumption.
 const SQL_INSERT_EVENT: &str = sql!(
     INSERT INTO log_events
     (span_id, level, target, message, timestamp, file, line, boot_id, fields)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, jsonb(?9))
 );
 
-/// SQL shared between [`LogRepository`] and [`LogWriter`] for span closes.
+/// SQL shared between [`LogRepository`] and [`LogBatch`] for span closes.
 /// File-level because the parameter layout is a shared assumption.
 const SQL_CLOSE_SPAN: &str = sql!(UPDATE log_spans SET ended_at = ?1 WHERE id = ?2);
 
 /// SQL for updating span fields after late-recorded values arrive.
-const SQL_UPDATE_SPAN_FIELDS: &str = sql!(UPDATE log_spans SET fields = ?1 WHERE id = ?2);
+const SQL_UPDATE_SPAN_FIELDS: &str = sql!(UPDATE log_spans SET fields = jsonb(?1) WHERE id = ?2);
 
 /// Severity level of a tracing event or span.
 ///
@@ -154,7 +155,7 @@ pub struct SpanFilter {
     pub fields: Vec<(String, String)>,
 }
 
-/// Plain-data description of a span to persist via [`LogWriter::insert_span`].
+/// Plain-data description of a span to persist via [`LogBatch::insert_span`].
 pub struct SpanRecord<'a> {
     pub parent_id: Option<i64>,
     pub name: &'a str,
@@ -167,7 +168,7 @@ pub struct SpanRecord<'a> {
 }
 
 /// Plain-data description of an event to persist via
-/// [`LogWriter::insert_event`].
+/// [`LogBatch::insert_event`].
 pub struct EventRecord<'a> {
     pub span_id: Option<i64>,
     pub level: Level,
@@ -233,6 +234,45 @@ impl LogRepository {
             boot_id: None,
             fields: None,
         }
+    }
+
+    /// Opens a batched write transaction over the log tables. All operations
+    /// on the returned [`LogBatch`] are atomic: they commit together when
+    /// [`LogBatch::commit`] is called, or roll back if the batch is dropped
+    /// without committing.
+    pub async fn batch(&self) -> Result<LogBatch<'_>> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .await
+            .map_err(database)?;
+        let insert_span = self
+            .connection
+            .prepare(SQL_INSERT_SPAN)
+            .await
+            .map_err(database)?;
+        let insert_event = self
+            .connection
+            .prepare(SQL_INSERT_EVENT)
+            .await
+            .map_err(database)?;
+        let close_span = self
+            .connection
+            .prepare(SQL_CLOSE_SPAN)
+            .await
+            .map_err(database)?;
+        let update_span_fields = self
+            .connection
+            .prepare(SQL_UPDATE_SPAN_FIELDS)
+            .await
+            .map_err(database)?;
+        Ok(LogBatch {
+            tx,
+            insert_span,
+            insert_event,
+            close_span,
+            update_span_fields,
+        })
     }
 
     /// Records the end time of a span.
@@ -626,39 +666,20 @@ impl<'a> EventInsertBuilder<'a> {
     }
 }
 
-/// Batch writer for structured logs. Holds a [`Connection`] for batch inserts
-/// from a background task.
+/// Batched write transaction over the log tables.
 ///
-/// Prepared statements are reused across inserts for efficiency. Obtain one
-/// with [`Storage::log_writer`].
-///
-/// [`Storage::log_writer`]: crate::Storage::log_writer
-pub struct LogWriter {
-    conn: Connection,
+/// Wraps a database transaction with cached prepared statements so a batch of
+/// span/event operations runs as a single atomic commit. Obtain one with
+/// [`LogRepository::batch`].
+pub struct LogBatch<'conn> {
+    tx: Transaction<'conn>,
     insert_span: Statement,
     insert_event: Statement,
     close_span: Statement,
     update_span_fields: Statement,
 }
 
-impl LogWriter {
-    pub(crate) async fn new(conn: Connection) -> Result<Self> {
-        let insert_span = conn.prepare(SQL_INSERT_SPAN).await.map_err(database)?;
-        let insert_event = conn.prepare(SQL_INSERT_EVENT).await.map_err(database)?;
-        let close_span = conn.prepare(SQL_CLOSE_SPAN).await.map_err(database)?;
-        let update_span_fields = conn
-            .prepare(SQL_UPDATE_SPAN_FIELDS)
-            .await
-            .map_err(database)?;
-        Ok(Self {
-            conn,
-            insert_span,
-            insert_event,
-            close_span,
-            update_span_fields,
-        })
-    }
-
+impl<'conn> LogBatch<'conn> {
     /// Inserts a span and returns its assigned id.
     pub async fn insert_span(&mut self, record: SpanRecord<'_>) -> Result<i64> {
         let params = params_from_iter([
@@ -672,7 +693,7 @@ impl LogWriter {
             map_ref_or_null(record.fields),
         ]);
         self.insert_span.execute(params).await.map_err(database)?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(self.tx.last_insert_rowid())
     }
 
     /// Inserts a log event and returns its assigned id.
@@ -689,7 +710,7 @@ impl LogWriter {
             map_ref_or_null(record.fields),
         ]);
         self.insert_event.execute(params).await.map_err(database)?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(self.tx.last_insert_rowid())
     }
 
     /// Records the end time of a span.
@@ -745,6 +766,11 @@ impl LogWriter {
         })
         .await?;
         Ok(())
+    }
+
+    /// Commits all pending operations. Consumes the batch.
+    pub async fn commit(self) -> Result<()> {
+        self.tx.commit().await.map_err(database)
     }
 }
 

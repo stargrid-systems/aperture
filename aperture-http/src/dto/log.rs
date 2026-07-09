@@ -4,10 +4,11 @@ use aperture_artifacts::{ListQuery, Page as StoragePage};
 use aperture_storage::{BootInfo, Event, Level, Span};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::dto::{OrderParam, Page, deserialize_single_or_vec_string};
+use crate::dto::{FieldFilter, OrderParam, Page, deserialize_single_or_vec_string};
 
 /// Severity level of a log event or span.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
@@ -63,8 +64,8 @@ pub struct LogEventResponse {
     pub file: Option<String>,
     /// Source line, if available.
     pub line: Option<u32>,
-    /// All structured fields as a JSON object, if any.
-    pub fields: Option<serde_json::Value>,
+    /// All structured fields as a JSON object. Empty when there are none.
+    pub fields: Map<String, serde_json::Value>,
 }
 
 impl From<Event> for LogEventResponse {
@@ -72,7 +73,8 @@ impl From<Event> for LogEventResponse {
         let fields = event
             .fields
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
         Self {
             id: event.id,
             span_id: event.span_id,
@@ -108,8 +110,8 @@ pub struct LogSpanResponse {
     pub started_at: Timestamp,
     /// When the span ended, if it did.
     pub ended_at: Option<Timestamp>,
-    /// Span fields as a JSON object, if any.
-    pub fields: Option<serde_json::Value>,
+    /// Span fields as a JSON object. Empty when there are none.
+    pub fields: Map<String, serde_json::Value>,
 }
 
 impl From<Span> for LogSpanResponse {
@@ -117,7 +119,8 @@ impl From<Span> for LogSpanResponse {
         let fields = span
             .fields
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
         Self {
             id: span.id,
             parent_id: span.parent_id,
@@ -169,7 +172,8 @@ pub struct LogListParams {
     /// Only events at or before this time (RFC 3339).
     pub until: Option<Timestamp>,
     /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.
-    pub fields: Option<String>,
+    #[param(value_type = Option<String>)]
+    pub fields: Option<FieldFilter>,
 }
 
 impl LogListParams {
@@ -209,7 +213,8 @@ pub struct LogSpanListParams {
     /// When true, only root spans (no parent) are returned.
     pub parent_null: Option<bool>,
     /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.
-    pub fields: Option<String>,
+    #[param(value_type = Option<String>)]
+    pub fields: Option<FieldFilter>,
 }
 
 impl LogSpanListParams {

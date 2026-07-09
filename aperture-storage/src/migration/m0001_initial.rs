@@ -43,7 +43,7 @@ pub(super) const SQL: &str = sql!(
         line INTEGER,
         started_at INTEGER NOT NULL,
         ended_at INTEGER,
-        fields TEXT
+        fields BLOB
     ) STRICT;
     CREATE INDEX idx_log_spans_parent ON log_spans (parent_id);
     CREATE INDEX idx_log_spans_started ON log_spans (started_at);
@@ -59,7 +59,7 @@ pub(super) const SQL: &str = sql!(
         file TEXT,
         line INTEGER,
         boot_id TEXT,
-        fields TEXT
+        fields BLOB
     ) STRICT;
     CREATE INDEX idx_log_events_timestamp ON log_events (timestamp);
     CREATE INDEX idx_log_events_level ON log_events (level);

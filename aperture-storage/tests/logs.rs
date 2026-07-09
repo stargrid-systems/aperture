@@ -382,15 +382,15 @@ async fn prune_before_deletes_old_events() {
 #[tokio::test]
 async fn record_dropped_inserts_synthetic_event() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let mut writer = storage.log_writer().await.unwrap();
+    let logs = storage.logs();
 
-    writer
+    let mut batch = logs.batch().await.unwrap();
+    batch
         .record_dropped(42, at(1_000), "00000000-0000-0000-0000-000000000001")
         .await
         .unwrap();
-    drop(writer);
+    batch.commit().await.unwrap();
 
-    let logs = storage.logs();
     let page = logs
         .list_events(
             &EventFilter {

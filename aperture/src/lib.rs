@@ -1,6 +1,5 @@
 //! Aperture gateway: composes the HTTP layer with the artifact manager.
 
-use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,12 +22,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;
     let boot_id = Uuid::new_v4();
-    let log_writer = artifacts
-        .storage()
-        .log_writer()
-        .await
-        .map_err(|error| miette::miette!("{error:#}"))?;
-    let log_worker = logging::init(log_writer, boot_id);
+    let log_repo = artifacts.storage().logs();
+    let log_worker = logging::init(log_repo, boot_id);
 
     artifacts.sync().await.into_diagnostic()?;
 
@@ -66,17 +61,9 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     tasks.shutdown().await;
     tracing::info!("aperture shutdown complete");
 
-    if let Err(err) = artifacts
-        .storage()
-        .logs()
-        .close_open_spans(jiff::Timestamp::now())
-        .await
-    {
-        tracing::warn!(
-            error = &err as &dyn StdError,
-            "failed to close open spans on shutdown"
-        );
-    }
+    // The log worker drains pending records, commits them, and closes any
+    // spans left open. close_open_spans runs inside the worker so it sees the
+    // final flush.
     log_worker.shutdown().await;
 
     result?;

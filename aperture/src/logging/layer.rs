@@ -1,16 +1,17 @@
 //! A `tracing_subscriber` layer that persists spans and events to the database.
 //!
 //! The layer captures tracing records and sends them through a bounded channel
-//! to a background task that batch-inserts them via [`LogWriter`]. If the
-//! channel is full, records are dropped and a synthetic warning event is
-//! inserted to record how many were lost.
+//! to a background task that batch-inserts them via [`LogRepository`] in a
+//! single transaction per flush. If the channel is full, records are dropped
+//! and a synthetic warning event is inserted to record how many were lost.
 
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use aperture_storage::{EventRecord, Level, LogWriter, SpanRecord};
+use aperture_storage::{EventRecord, Level, LogRepository, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -139,13 +140,13 @@ impl DbLogLayer {
     /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
     /// should be kept alive for the lifetime of the application. Call
     /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
-    pub fn spawn(writer: LogWriter, boot_id: Uuid) -> (Self, WorkerHandle) {
+    pub fn spawn(repo: LogRepository, boot_id: Uuid) -> (Self, WorkerHandle) {
         let (layer, rx) = Self::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let dropped_clone = Arc::clone(&layer.dropped);
 
         let join = tokio::spawn(writer_task(
-            writer,
+            repo,
             rx,
             dropped_clone,
             shutdown_rx,
@@ -181,7 +182,7 @@ where
             return;
         }
 
-        let mut visitor = FieldCollector::new();
+        let mut visitor = FieldCollector::new(meta.fields());
         attrs.record(&mut visitor);
 
         let tracing_id = id.into_u64();
@@ -212,7 +213,7 @@ where
         }
 
         let meta = event.metadata();
-        let mut visitor = FieldCollector::new();
+        let mut visitor = FieldCollector::new(meta.fields());
         event.record(&mut visitor);
 
         // For log-bridged events the metadata target is "log". The real
@@ -276,7 +277,7 @@ where
 
 /// Background writer task: drains the channel and batch-inserts records.
 async fn writer_task(
-    mut writer: LogWriter,
+    repo: LogRepository,
     mut rx: mpsc::Receiver<Record>,
     dropped: Arc<AtomicU64>,
     mut shutdown: oneshot::Receiver<()>,
@@ -295,28 +296,26 @@ async fn writer_task(
                 while let Ok(record) = rx.try_recv() {
                     batch.push(record);
                 }
-                flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
-                flush_dropped(&mut writer, &dropped, &boot_id).await;
+                flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
+                close_remaining_spans(&repo).await;
                 break;
             }
             maybe_record = rx.recv() => {
                 match maybe_record {
                     Some(record) => batch.push(record),
                     None => {
-                        flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
-                        flush_dropped(&mut writer, &dropped, &boot_id).await;
+                        flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
+                        close_remaining_spans(&repo).await;
                         break;
                     }
                 }
                 if batch.len() >= FLUSH_BATCH {
-                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
-                    flush_dropped(&mut writer, &dropped, &boot_id).await;
+                    flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
                 }
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
-                    flush_dropped(&mut writer, &dropped, &boot_id).await;
+                    flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
                 }
             }
         }
@@ -355,24 +354,32 @@ where
     })
 }
 
-/// Flushes a batch of records to the database using prepared statements.
+/// Flushes a batch of records to the database in a single transaction.
 /// Instrumented with [`FLUSH_SPAN_NAME`] so events emitted by the DB engine
 /// during the flush are filtered by [`DbLogLayer::on_event`].
 #[tracing::instrument(name = FLUSH_SPAN_NAME, level = "trace", skip_all)]
 async fn flush(
-    writer: &mut LogWriter,
+    repo: &LogRepository,
     batch: &mut Vec<Record>,
     span_ids: &mut HashMap<u64, i64>,
     span_fields: &mut HashMap<u64, serde_json::Map<String, serde_json::Value>>,
+    dropped: &AtomicU64,
     boot_id: &str,
 ) {
+    let mut tx = match repo.batch().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = &err as &dyn StdError, "failed to open log batch");
+            return;
+        }
+    };
     for record in batch.drain(..) {
         match record {
             Record::SpanStart(s) => {
                 let parent_db_id = s
                     .parent_tracing_id
                     .and_then(|pid| span_ids.get(&pid).copied());
-                let result = writer
+                let result = tx
                     .insert_span(SpanRecord {
                         parent_id: parent_db_id,
                         name: &s.name,
@@ -386,26 +393,23 @@ async fn flush(
                     .await;
                 if let Ok(db_id) = result {
                     span_ids.insert(s.tracing_id, db_id);
-                    if let Some(fields) = s.fields {
-                        span_fields.insert(s.tracing_id, fields);
-                    }
+                    span_fields.insert(s.tracing_id, s.fields.unwrap_or_default());
                 }
             }
             Record::SpanFields(f) => {
-                if let Some(&db_id) = span_ids.get(&f.tracing_id) {
-                    let current = span_fields.get_mut(&f.tracing_id);
-                    if let Some(current) = current {
-                        for (k, v) in f.fields {
-                            current.insert(k, v);
-                        }
-                        let _ = writer.update_span_fields(db_id, current).await;
+                if let Some(&db_id) = span_ids.get(&f.tracing_id)
+                    && let Some(current) = span_fields.get_mut(&f.tracing_id)
+                {
+                    for (k, v) in f.fields {
+                        current.insert(k, v);
                     }
+                    let _ = tx.update_span_fields(db_id, current).await;
                 }
             }
             Record::SpanEnd(s) => {
                 span_fields.remove(&s.tracing_id);
                 if let Some(&db_id) = span_ids.get(&s.tracing_id) {
-                    let _ = writer.close_span(db_id, s.ended_at).await;
+                    let _ = tx.close_span(db_id, s.ended_at).await;
                     span_ids.remove(&s.tracing_id);
                 }
             }
@@ -413,7 +417,7 @@ async fn flush(
                 let span_db_id = e
                     .span_tracing_id
                     .and_then(|sid| span_ids.get(&sid).copied());
-                let _ = writer
+                let _ = tx
                     .insert_event(EventRecord {
                         span_id: span_db_id,
                         level: e.level,
@@ -429,16 +433,24 @@ async fn flush(
             }
         }
     }
-}
-
-/// Inserts a synthetic event for dropped records, if any.
-#[tracing::instrument(name = FLUSH_SPAN_NAME, level = "trace", skip_all)]
-async fn flush_dropped(writer: &mut LogWriter, dropped: &AtomicU64, boot_id: &str) {
     let count = dropped.swap(0, Ordering::Relaxed);
     if count > 0 {
-        let _ = writer
-            .record_dropped(count, Timestamp::now(), boot_id)
-            .await;
+        let _ = tx.record_dropped(count, Timestamp::now(), boot_id).await;
+    }
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = &err as &dyn StdError, "failed to commit log batch");
+    }
+}
+
+/// Closes every span left open after the writer task exits. Spans may remain
+/// open if the process was interrupted or if a span was never explicitly
+/// closed.
+async fn close_remaining_spans(repo: &LogRepository) {
+    if let Err(err) = repo.close_open_spans(Timestamp::now()).await {
+        tracing::warn!(
+            error = &err as &dyn StdError,
+            "failed to close open spans on shutdown"
+        );
     }
 }
 
@@ -615,10 +627,16 @@ mod tests {
             match record {
                 Record::SpanStart(s) => {
                     assert_eq!(s.name, "my_span");
-                    assert!(
-                        s.fields.as_ref().is_some_and(|f| f.contains_key("initial")),
-                        "initial field should be in span start: {:?}",
-                        s.fields
+                    let fields = s.fields.as_ref().expect("span start should have fields");
+                    assert_eq!(
+                        fields.get("initial"),
+                        Some(&serde_json::json!(42)),
+                        "initial field should be 42: {fields:?}"
+                    );
+                    assert_eq!(
+                        fields.get("late_field"),
+                        Some(&serde_json::Value::Null),
+                        "late_field (Empty) should be null in span start: {fields:?}"
                     );
                     found_start = true;
                 }
@@ -640,5 +658,61 @@ mod tests {
         }
         assert!(found_start, "SpanStart record must be present");
         assert!(found_fields, "SpanFields record must be present");
+    }
+
+    /// A span declared with only `field::Empty` placeholders must still
+    /// produce a non-empty fields map (with null values) so that the writer
+    /// creates a `span_fields` entry. Without this, late-recorded values are
+    /// silently dropped.
+    #[test]
+    fn empty_only_span_produces_null_fields() {
+        use tracing::field;
+
+        let (layer, mut rx) = DbLogLayer::channel();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = Dispatch::new(subscriber).set_default();
+
+        let span = tracing::info_span!("req", user_id = field::Empty, status = field::Empty);
+        let _guard = span.enter();
+        span.record("status", "ok");
+        drop(_guard);
+
+        let mut found_start = false;
+        let mut found_fields = false;
+        while let Ok(record) = rx.try_recv() {
+            match record {
+                Record::SpanStart(s) => {
+                    let fields = s
+                        .fields
+                        .as_ref()
+                        .expect("span with Empty fields must produce a non-empty fields map");
+                    assert_eq!(
+                        fields.get("user_id"),
+                        Some(&serde_json::Value::Null),
+                        "user_id (Empty) should be null"
+                    );
+                    assert_eq!(
+                        fields.get("status"),
+                        Some(&serde_json::Value::Null),
+                        "status (Empty) should be null at start"
+                    );
+                    found_start = true;
+                }
+                Record::SpanFields(f) => {
+                    assert_eq!(
+                        f.fields.get("status"),
+                        Some(&serde_json::Value::String("ok".to_owned())),
+                        "late-recorded status should be \"ok\""
+                    );
+                    found_fields = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(found_start, "SpanStart record must be present");
+        assert!(
+            found_fields,
+            "SpanFields record must be present for late-recorded values"
+        );
     }
 }

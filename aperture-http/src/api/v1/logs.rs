@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use aperture_storage::{EventFilter, SpanFilter, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -35,8 +33,8 @@ async fn list_logs(
     State(state): State<AppState>,
     Query(params): Query<LogListParams>,
 ) -> Result<Json<Page<LogEventResponse>>, ApiError> {
-    let fields = parse_field_filter(params.fields.as_deref())?;
     let query = params.to_query();
+    let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
     let filter = EventFilter {
         min_level: params.min_level.map(Into::into),
         target: params.target,
@@ -95,8 +93,8 @@ async fn list_spans(
     State(state): State<AppState>,
     Query(params): Query<LogSpanListParams>,
 ) -> Result<Json<Page<LogSpanResponse>>, ApiError> {
-    let fields = parse_field_filter(params.fields.as_deref())?;
     let query = params.to_query();
+    let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
     let parent = match (params.parent_id, params.parent_null) {
         (Some(id), _) => SpanParentFilter::ChildrenOf(id),
         (None, Some(true)) => SpanParentFilter::RootOnly,
@@ -139,16 +137,4 @@ async fn get_span(
         span: span.into(),
         events,
     }))
-}
-
-/// Parses a JSON object field filter string like `{"key":"value"}` into a list
-/// of key-value pairs.
-fn parse_field_filter(json: Option<&str>) -> Result<Vec<(String, String)>, ApiError> {
-    Ok(match json {
-        Some(s) => serde_json::from_str::<HashMap<String, String>>(s)
-            .map_err(|_| ApiError::BAD_REQUEST)?
-            .into_iter()
-            .collect(),
-        None => Vec::new(),
-    })
 }

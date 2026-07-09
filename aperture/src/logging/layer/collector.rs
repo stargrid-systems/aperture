@@ -4,7 +4,7 @@ use std::io;
 
 use serde::ser::{SerializeMap as _, SerializeSeq as _};
 use serde_json::{Map, Value};
-use tracing::field::{Field, Visit};
+use tracing::field::{Field, FieldSet, Visit};
 
 /// Field visitor that collects tracing fields into a [`serde_json::Map`] and
 /// extracts special fields like "message" and log-bridged metadata.
@@ -20,9 +20,21 @@ pub struct FieldCollector {
 }
 
 impl FieldCollector {
-    pub fn new() -> Self {
+    /// Creates a collector pre-populated with every declared field set to
+    /// `null`. The visitor overwrites entries as real values arrive. Fields
+    /// declared as `field::Empty` stay `null`. Fields whose values are
+    /// consumed into dedicated fields (message, log.*) are excluded so they
+    /// never appear in the output map.
+    pub fn new(fields: &FieldSet) -> Self {
+        let mut map = Map::with_capacity(fields.len());
+        for field in fields {
+            let name = field.name();
+            if !is_consumed(name) {
+                map.insert(name.to_owned(), Value::Null);
+            }
+        }
         Self {
-            fields: Map::new(),
+            fields: map,
             message: None,
             log_target: None,
             log_file: None,
@@ -142,6 +154,15 @@ impl Visit for FieldCollector {
             serde_json::to_value(ErrorChainSerializer(value)).unwrap(),
         );
     }
+}
+
+/// Whether `name` is a field whose value is extracted into a dedicated field
+/// on [`FieldCollector`] rather than stored in the output map.
+fn is_consumed(name: &str) -> bool {
+    matches!(
+        name,
+        "message" | "log.target" | "log.file" | "log.module_path" | "log.line"
+    )
 }
 
 struct ErrorChainSerializer<'a>(&'a (dyn Error + 'static));

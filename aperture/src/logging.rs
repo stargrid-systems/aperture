@@ -14,7 +14,7 @@
 //!
 //! [`DbLogLayer`]: layer::DbLogLayer
 
-use aperture_storage::LogWriter;
+use aperture_storage::LogRepository;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -33,7 +33,7 @@ const DEFAULT_FILTER: &str = "aperture=info,warn";
 /// Returns a [`WorkerHandle`] for clean shutdown. Keep it alive for the
 /// lifetime of the application and call [`WorkerHandle::shutdown`] before
 /// exiting to flush pending records.
-pub fn init(writer: LogWriter, boot_id: Uuid) -> WorkerHandle {
+pub fn init(repo: LogRepository, boot_id: Uuid) -> WorkerHandle {
     let console_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
     let fmt_layer = fmt::layer().with_filter(console_filter);
@@ -45,7 +45,7 @@ pub fn init(writer: LogWriter, boot_id: Uuid) -> WorkerHandle {
         // HACK: At DEBUG level we get a feedback loop :(
         .with_target("turso", LevelFilter::INFO);
 
-    let (db_layer, handle) = DbLogLayer::spawn(writer, boot_id);
+    let (db_layer, handle) = DbLogLayer::spawn(repo, boot_id);
     let db_layer = db_layer.with_filter(db_filter);
 
     tracing_subscriber::registry()
