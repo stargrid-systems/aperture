@@ -160,7 +160,7 @@ pub struct LogListParams {
     /// `aperture,aperture_http`.
     #[serde(default, deserialize_with = "deserialize_single_or_vec_string")]
     pub target: Vec<String>,
-    /// Substring search across message, target, and structured fields.
+    /// Substring search across message and target.
     pub q: Option<String>,
     /// Only events belonging to this span.
     pub span_id: Option<i64>,

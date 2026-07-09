@@ -13,7 +13,8 @@ use crate::row::{
 };
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
-const EVENT_COLUMNS: &str = "id, span_id, level, target, message, timestamp, file, line, fields";
+const EVENT_COLUMNS: &str =
+    "id, span_id, level, target, message, timestamp, file, line, boot_id, fields";
 
 /// Columns selected for a [`Span`], in [`row_to_span`] order.
 const SPAN_COLUMNS: &str =
@@ -31,8 +32,8 @@ const SQL_INSERT_SPAN: &str = sql!(
 /// File-level because the parameter layout is a shared assumption.
 const SQL_INSERT_EVENT: &str = sql!(
     INSERT INTO log_events
-    (span_id, level, target, message, timestamp, file, line, fields)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    (span_id, level, target, message, timestamp, file, line, boot_id, fields)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
 );
 
 /// SQL shared between [`LogRepository`] and [`LogWriter`] for span closes.
@@ -106,6 +107,7 @@ pub struct Event {
     pub timestamp: Timestamp,
     pub file: Option<String>,
     pub line: Option<u32>,
+    pub boot_id: Option<String>,
     pub fields: Option<String>,
 }
 
@@ -174,6 +176,7 @@ pub struct EventRecord<'a> {
     pub timestamp: Timestamp,
     pub file: Option<&'a str>,
     pub line: Option<u32>,
+    pub boot_id: Option<&'a str>,
     pub fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
@@ -227,6 +230,7 @@ impl LogRepository {
             message: None,
             file: None,
             line: None,
+            boot_id: None,
             fields: None,
         }
     }
@@ -273,7 +277,7 @@ impl LogRepository {
             filters.json_path_eq("fields", key, value);
         }
 
-        filters.like_any(&["message", "target", "fields"], filter.query.as_deref());
+        filters.like_any(&["message", "target"], filter.query.as_deref());
 
         filters.keyset(&keyset, &paginator);
 
@@ -457,22 +461,20 @@ impl LogRepository {
         Ok(event_count)
     }
 
-    /// Lists all distinct boot sessions, derived from the `boot_id` structured
-    /// field of stored events. Ordered newest first.
+    /// Lists all distinct boot sessions, derived from the `boot_id` column of
+    /// stored events. Ordered newest first.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
-        // Raw string because sql!() cannot handle SQL single-quoted literals.
-        const SQL_LIST_BOOTS: &str = r#"
-            SELECT json_extract(fields, '$.boot_id') AS boot_id,
+        const SQL_LIST_BOOTS: &str = sql!(
+            SELECT boot_id,
                    MIN(timestamp) AS first_seen,
                    MAX(timestamp) AS last_seen,
                    COUNT(*) AS event_count
             FROM log_events
-            WHERE fields IS NOT NULL
-              AND json_extract(fields, '$.boot_id') IS NOT NULL
+            WHERE boot_id IS NOT NULL
             GROUP BY boot_id
             ORDER BY first_seen DESC
-        "#;
+        );
         let mut rows = self
             .connection
             .query(SQL_LIST_BOOTS, params_from_iter(Vec::<Value>::new()))
@@ -565,6 +567,7 @@ pub struct EventInsertBuilder<'a> {
     message: Option<&'a str>,
     file: Option<&'a str>,
     line: Option<u32>,
+    boot_id: Option<&'a str>,
     fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
@@ -589,6 +592,11 @@ impl<'a> EventInsertBuilder<'a> {
         self
     }
 
+    pub fn boot_id(mut self, boot_id: Option<&'a str>) -> Self {
+        self.boot_id = boot_id;
+        self
+    }
+
     pub fn fields(
         mut self,
         fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
@@ -606,6 +614,7 @@ impl<'a> EventInsertBuilder<'a> {
             Value::Integer(self.timestamp.as_millisecond()),
             text_ref_or_null(self.file),
             int_or_null(self.line),
+            text_ref_or_null(self.boot_id),
             map_ref_or_null(self.fields),
         ]);
         self.repo
@@ -676,6 +685,7 @@ impl LogWriter {
             Value::Integer(record.timestamp.as_millisecond()),
             text_ref_or_null(record.file),
             int_or_null(record.line),
+            text_ref_or_null(record.boot_id),
             map_ref_or_null(record.fields),
         ]);
         self.insert_event.execute(params).await.map_err(database)?;
@@ -711,7 +721,12 @@ impl LogWriter {
     }
 
     /// Inserts a synthetic event recording that log records were dropped.
-    pub async fn record_dropped(&mut self, count: u64, timestamp: Timestamp) -> Result<()> {
+    pub async fn record_dropped(
+        &mut self,
+        count: u64,
+        timestamp: Timestamp,
+        boot_id: &str,
+    ) -> Result<()> {
         let mut fields = serde_json::Map::new();
         fields.insert(
             "dropped".to_owned(),
@@ -725,6 +740,7 @@ impl LogWriter {
             timestamp,
             file: None,
             line: None,
+            boot_id: Some(boot_id),
             fields: Some(&fields),
         })
         .await?;
@@ -742,7 +758,8 @@ fn row_to_event(row: &turso::Row) -> Result<Event> {
         timestamp: req_ts(row, 5)?,
         file: opt_text(row, 6)?,
         line: opt_u32(row, 7)?,
-        fields: opt_text(row, 8)?,
+        boot_id: opt_text(row, 8)?,
+        fields: opt_text(row, 9)?,
     })
 }
 

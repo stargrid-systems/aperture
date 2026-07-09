@@ -312,31 +312,6 @@ async fn query_matches_target() {
 }
 
 #[tokio::test]
-async fn query_matches_structured_field() {
-    let storage = seeded_storage().await;
-    let logs = storage.logs();
-
-    let page = logs
-        .list_events(
-            &EventFilter {
-                min_level: None,
-                target: Vec::new(),
-                query: Some("ghcr.io".to_owned()),
-                span_id: None,
-                since: None,
-                until: None,
-                fields: Vec::new(),
-            },
-            &ListQuery::default(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].message.as_deref(), Some("starting download"));
-}
-
-#[tokio::test]
 async fn list_targets() {
     let storage = seeded_storage().await;
     let logs = storage.logs();
@@ -409,7 +384,10 @@ async fn record_dropped_inserts_synthetic_event() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut writer = storage.log_writer().await.unwrap();
 
-    writer.record_dropped(42, at(1_000)).await.unwrap();
+    writer
+        .record_dropped(42, at(1_000), "00000000-0000-0000-0000-000000000001")
+        .await
+        .unwrap();
     drop(writer);
 
     let logs = storage.logs();
@@ -575,7 +553,7 @@ async fn nested_spans_preserve_parent_child() {
 }
 
 #[tokio::test]
-async fn list_boots_groups_by_boot_id_field() {
+async fn list_boots_groups_by_boot_id() {
     use aperture_storage::BootInfo;
     let a = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
     let b = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
@@ -583,23 +561,21 @@ async fn list_boots_groups_by_boot_id_field() {
     let logs = storage.logs();
 
     // Two distinct boot ids, with events interleaved in time but grouped apart.
-    let boot_a = json_map(r#"{"boot_id":"00000000-0000-0000-0000-000000000001"}"#);
-    let boot_b = json_map(r#"{"boot_id":"00000000-0000-0000-0000-000000000002"}"#);
     logs.insert_event(Level::Info, "aperture", at(1_000))
         .message(Some("first boot start"))
-        .fields(Some(&boot_a))
+        .boot_id(Some("00000000-0000-0000-0000-000000000001"))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(2_000))
         .message(Some("first boot end"))
-        .fields(Some(&boot_a))
+        .boot_id(Some("00000000-0000-0000-0000-000000000001"))
         .execute()
         .await
         .unwrap();
     logs.insert_event(Level::Info, "aperture", at(3_000))
         .message(Some("second boot start"))
-        .fields(Some(&boot_b))
+        .boot_id(Some("00000000-0000-0000-0000-000000000002"))
         .execute()
         .await
         .unwrap();

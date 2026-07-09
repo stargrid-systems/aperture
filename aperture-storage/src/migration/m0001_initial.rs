@@ -58,10 +58,12 @@ pub(super) const SQL: &str = sql!(
         timestamp INTEGER NOT NULL,
         file TEXT,
         line INTEGER,
+        boot_id TEXT,
         fields TEXT
     ) STRICT;
     CREATE INDEX idx_log_events_timestamp ON log_events (timestamp);
     CREATE INDEX idx_log_events_level ON log_events (level);
     CREATE INDEX idx_log_events_target ON log_events (target);
     CREATE INDEX idx_log_events_span_id ON log_events (span_id);
+    CREATE INDEX idx_log_events_boot_id ON log_events (boot_id);
 );

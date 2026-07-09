@@ -73,8 +73,7 @@ impl AppState {
     info(title = "Aperture API"),
     // TODO(utoipa): These types are only referenced indirectly as field types
     // of IntoParams structs. utoipa does not discover their schemas
-    // automatically. Force-register them here so the generated spec is
-    // complete. Track upstream: https://github.com/juhaku/utoipa/issues
+    // automatically. See: <https://github.com/stargrid-systems/aperture/issues/110>.
     components(schemas(OrderParam, VersionSortParam, LevelResponse, TaskStatusParam))
 )]
 struct ApiDoc;

@@ -3,13 +3,13 @@ use std::fmt::{self, Debug};
 use std::io;
 
 use serde::ser::{SerializeMap as _, SerializeSeq as _};
+use serde_json::{Map, Value};
 use tracing::field::{Field, Visit};
-use uuid::Uuid;
 
 /// Field visitor that collects tracing fields into a [`serde_json::Map`] and
 /// extracts special fields like "message" and log-bridged metadata.
 pub struct FieldCollector {
-    fields: serde_json::Map<String, serde_json::Value>,
+    fields: Map<String, Value>,
     message: Option<String>,
     /// Real target from a `log`-bridged event (`log.target` field).
     log_target: Option<String>,
@@ -20,14 +20,9 @@ pub struct FieldCollector {
 }
 
 impl FieldCollector {
-    pub fn new(boot_id: &Uuid) -> Self {
-        let mut fields = serde_json::Map::new();
-        fields.insert(
-            "boot_id".to_owned(),
-            serde_json::Value::String((*boot_id).to_string()),
-        );
+    pub fn new() -> Self {
         Self {
-            fields,
+            fields: Map::new(),
             message: None,
             log_target: None,
             log_file: None,
@@ -36,10 +31,10 @@ impl FieldCollector {
     }
 
     /// Creates a collector for additional fields recorded after span creation
-    /// (via `Span::record`). Does not include `boot_id`.
+    /// (via `Span::record`).
     pub fn additional() -> Self {
         Self {
-            fields: serde_json::Map::new(),
+            fields: Map::new(),
             message: None,
             log_target: None,
             log_file: None,
@@ -63,7 +58,7 @@ impl FieldCollector {
         self.log_line.take()
     }
 
-    pub fn into_fields(self) -> Option<serde_json::Map<String, serde_json::Value>> {
+    pub fn into_fields(self) -> Option<Map<String, Value>> {
         if self.fields.is_empty() {
             None
         } else {
@@ -78,10 +73,8 @@ impl FieldCollector {
             "log.file" => self.log_file = Some(value.to_string()),
             "log.module_path" => {}
             _ => {
-                self.fields.insert(
-                    name.to_owned(),
-                    serde_json::Value::String(value.to_string()),
-                );
+                self.fields
+                    .insert(name.to_owned(), Value::String(value.to_string()));
             }
         }
     }
@@ -109,7 +102,7 @@ impl Visit for FieldCollector {
 
     fn record_bool(&mut self, field: &Field, value: bool) {
         self.fields
-            .insert(field.name().to_owned(), serde_json::Value::Bool(value));
+            .insert(field.name().to_owned(), Value::Bool(value));
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
@@ -121,17 +114,21 @@ impl Visit for FieldCollector {
     }
 
     fn record_i128(&mut self, field: &Field, value: i128) {
-        self.collect_integer(field.name(), value);
+        // String: serde_json numbers cannot hold the full i128 range.
+        self.fields
+            .insert(field.name().to_owned(), Value::String(value.to_string()));
     }
 
     fn record_u128(&mut self, field: &Field, value: u128) {
-        self.collect_integer(field.name(), value);
+        // String: serde_json numbers cannot hold the full u128 range.
+        self.fields
+            .insert(field.name().to_owned(), Value::String(value.to_string()));
     }
 
     fn record_f64(&mut self, field: &Field, value: f64) {
         let v = serde_json::Number::from_f64(value)
-            .map(serde_json::Value::Number)
-            .unwrap_or_else(|| serde_json::Value::String(value.to_string()));
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(value.to_string()));
         self.fields.insert(field.name().to_owned(), v);
     }
 

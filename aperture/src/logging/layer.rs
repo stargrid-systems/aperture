@@ -89,7 +89,6 @@ struct EventMsg {
 pub struct DbLogLayer {
     tx: mpsc::Sender<Record>,
     dropped: Arc<AtomicU64>,
-    boot_id: Arc<Uuid>,
 }
 
 /// Handle to the background writer task. Keep it alive for as long as the
@@ -129,17 +128,10 @@ impl Drop for WorkerHandle {
 impl DbLogLayer {
     /// Creates the layer and a channel receiver for testing. The receiver
     /// gets all records the layer produces.
-    fn channel(boot_id: Uuid) -> (Self, mpsc::Receiver<Record>) {
+    fn channel() -> (Self, mpsc::Receiver<Record>) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
-        (
-            Self {
-                tx,
-                dropped,
-                boot_id: Arc::new(boot_id),
-            },
-            rx,
-        )
+        (Self { tx, dropped }, rx)
     }
 
     /// Creates the layer and spawns the background writer task.
@@ -148,11 +140,17 @@ impl DbLogLayer {
     /// should be kept alive for the lifetime of the application. Call
     /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
     pub fn spawn(writer: LogWriter, boot_id: Uuid) -> (Self, WorkerHandle) {
-        let (layer, rx) = Self::channel(boot_id);
+        let (layer, rx) = Self::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let dropped_clone = Arc::clone(&layer.dropped);
 
-        let join = tokio::spawn(writer_task(writer, rx, dropped_clone, shutdown_rx));
+        let join = tokio::spawn(writer_task(
+            writer,
+            rx,
+            dropped_clone,
+            shutdown_rx,
+            boot_id.to_string(),
+        ));
 
         let handle = WorkerHandle {
             join: Some(join),
@@ -183,7 +181,7 @@ where
             return;
         }
 
-        let mut visitor = FieldCollector::new(&self.boot_id);
+        let mut visitor = FieldCollector::new();
         attrs.record(&mut visitor);
 
         let tracing_id = id.into_u64();
@@ -214,7 +212,7 @@ where
         }
 
         let meta = event.metadata();
-        let mut visitor = FieldCollector::new(&self.boot_id);
+        let mut visitor = FieldCollector::new();
         event.record(&mut visitor);
 
         // For log-bridged events the metadata target is "log". The real
@@ -282,6 +280,7 @@ async fn writer_task(
     mut rx: mpsc::Receiver<Record>,
     dropped: Arc<AtomicU64>,
     mut shutdown: oneshot::Receiver<()>,
+    boot_id: String,
 ) {
     let mut span_ids: HashMap<u64, i64> = HashMap::new();
     let mut span_fields: HashMap<u64, serde_json::Map<String, serde_json::Value>> = HashMap::new();
@@ -296,28 +295,28 @@ async fn writer_task(
                 while let Ok(record) = rx.try_recv() {
                     batch.push(record);
                 }
-                flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
-                flush_dropped(&mut writer, &dropped).await;
+                flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
+                flush_dropped(&mut writer, &dropped, &boot_id).await;
                 break;
             }
             maybe_record = rx.recv() => {
                 match maybe_record {
                     Some(record) => batch.push(record),
                     None => {
-                        flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
-                        flush_dropped(&mut writer, &dropped).await;
+                        flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
+                        flush_dropped(&mut writer, &dropped, &boot_id).await;
                         break;
                     }
                 }
                 if batch.len() >= FLUSH_BATCH {
-                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
-                    flush_dropped(&mut writer, &dropped).await;
+                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
+                    flush_dropped(&mut writer, &dropped, &boot_id).await;
                 }
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields).await;
-                    flush_dropped(&mut writer, &dropped).await;
+                    flush(&mut writer, &mut batch, &mut span_ids, &mut span_fields, &boot_id).await;
+                    flush_dropped(&mut writer, &dropped, &boot_id).await;
                 }
             }
         }
@@ -365,6 +364,7 @@ async fn flush(
     batch: &mut Vec<Record>,
     span_ids: &mut HashMap<u64, i64>,
     span_fields: &mut HashMap<u64, serde_json::Map<String, serde_json::Value>>,
+    boot_id: &str,
 ) {
     for record in batch.drain(..) {
         match record {
@@ -422,6 +422,7 @@ async fn flush(
                         timestamp: e.timestamp,
                         file: e.file.as_deref(),
                         line: e.line,
+                        boot_id: Some(boot_id),
                         fields: e.fields.as_ref(),
                     })
                     .await;
@@ -432,10 +433,12 @@ async fn flush(
 
 /// Inserts a synthetic event for dropped records, if any.
 #[tracing::instrument(name = FLUSH_SPAN_NAME, level = "trace", skip_all)]
-async fn flush_dropped(writer: &mut LogWriter, dropped: &AtomicU64) {
+async fn flush_dropped(writer: &mut LogWriter, dropped: &AtomicU64, boot_id: &str) {
     let count = dropped.swap(0, Ordering::Relaxed);
     if count > 0 {
-        let _ = writer.record_dropped(count, Timestamp::now()).await;
+        let _ = writer
+            .record_dropped(count, Timestamp::now(), boot_id)
+            .await;
     }
 }
 
@@ -462,7 +465,7 @@ mod tests {
     /// the DB engine emits events, those events would fill the channel.
     #[test]
     fn flush_span_filters_events_and_child_spans() {
-        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let (layer, mut rx) = DbLogLayer::channel();
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
@@ -517,7 +520,7 @@ mod tests {
     /// Events emitted outside any flush span are captured normally.
     #[test]
     fn normal_events_are_captured() {
-        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let (layer, mut rx) = DbLogLayer::channel();
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
@@ -536,7 +539,7 @@ mod tests {
     /// A span created within another span must record the parent's tracing id.
     #[test]
     fn parent_child_span_relationship() {
-        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let (layer, mut rx) = DbLogLayer::channel();
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -572,7 +575,7 @@ mod tests {
     /// A root span (no parent entered) must have `parent_tracing_id = None`.
     #[test]
     fn root_span_has_no_parent() {
-        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let (layer, mut rx) = DbLogLayer::channel();
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -596,7 +599,7 @@ mod tests {
     fn late_span_fields_are_captured() {
         use tracing::field;
 
-        let (layer, mut rx) = DbLogLayer::channel(Uuid::new_v4());
+        let (layer, mut rx) = DbLogLayer::channel();
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
