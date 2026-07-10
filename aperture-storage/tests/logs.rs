@@ -36,7 +36,7 @@ async fn seeded_storage() -> Storage {
             file: Some("src/fetch.rs"),
             line: Some(42),
             started_at: at(1_000),
-            fields: Some(&span_fields),
+            fields: &span_fields,
         })
         .await
         .unwrap();
@@ -50,8 +50,8 @@ async fn seeded_storage() -> Storage {
             timestamp: at(1_100),
             file: Some("src/fetch.rs"),
             line: Some(10),
-            boot_id: Some(uuid::Uuid::nil()),
-            fields: Some(&event_fields),
+            boot_id: uuid::Uuid::nil(),
+            fields: &event_fields,
         })
         .await
         .unwrap();
@@ -65,8 +65,8 @@ async fn seeded_storage() -> Storage {
             timestamp: at(1_200),
             file: Some("src/fetch.rs"),
             line: Some(25),
-            boot_id: Some(uuid::Uuid::nil()),
-            fields: Some(&retry_fields),
+            boot_id: uuid::Uuid::nil(),
+            fields: &retry_fields,
         })
         .await
         .unwrap();
@@ -80,8 +80,8 @@ async fn seeded_storage() -> Storage {
             timestamp: at(1_300),
             file: None,
             line: None,
-            boot_id: Some(uuid::Uuid::nil()),
-            fields: Some(&error_fields),
+            boot_id: uuid::Uuid::nil(),
+            fields: &error_fields,
         })
         .await
         .unwrap();
@@ -441,7 +441,7 @@ async fn record_dropped_inserts_synthetic_event() {
         "dropped log records due to full buffer"
     );
     assert_eq!(
-        page.items[0].fields.as_ref().and_then(|f| f.get("dropped")),
+        page.items[0].fields.get("dropped"),
         Some(&serde_json::json!(42))
     );
 }
@@ -462,8 +462,8 @@ async fn paginate_events() {
                 timestamp: at(i * 100),
                 file: None,
                 line: None,
-                boot_id: None,
-                fields: None,
+                boot_id: uuid::Uuid::nil(),
+                fields: &serde_json::Map::new(),
             })
             .await
             .unwrap();
@@ -536,7 +536,7 @@ async fn nested_spans_preserve_parent_child() {
             file: None,
             line: None,
             started_at: at(1_000),
-            fields: None,
+            fields: &serde_json::Map::new(),
         })
         .await
         .unwrap();
@@ -552,7 +552,7 @@ async fn nested_spans_preserve_parent_child() {
             file: None,
             line: None,
             started_at: at(1_100),
-            fields: None,
+            fields: &serde_json::Map::new(),
         })
         .await
         .unwrap();
@@ -568,7 +568,7 @@ async fn nested_spans_preserve_parent_child() {
             file: None,
             line: None,
             started_at: at(1_200),
-            fields: None,
+            fields: &serde_json::Map::new(),
         })
         .await
         .unwrap();
@@ -645,8 +645,8 @@ async fn list_boots_groups_by_boot_id() {
             timestamp: at(1_000),
             file: None,
             line: None,
-            boot_id: Some(a),
-            fields: None,
+            boot_id: a,
+            fields: &serde_json::Map::new(),
         })
         .await
         .unwrap();
@@ -659,8 +659,8 @@ async fn list_boots_groups_by_boot_id() {
             timestamp: at(2_000),
             file: None,
             line: None,
-            boot_id: Some(a),
-            fields: None,
+            boot_id: a,
+            fields: &serde_json::Map::new(),
         })
         .await
         .unwrap();
@@ -673,8 +673,8 @@ async fn list_boots_groups_by_boot_id() {
             timestamp: at(3_000),
             file: None,
             line: None,
-            boot_id: Some(b),
-            fields: None,
+            boot_id: b,
+            fields: &serde_json::Map::new(),
         })
         .await
         .unwrap();

@@ -601,7 +601,7 @@ mod tests {
             match record {
                 Record::SpanStart(s) => {
                     assert_eq!(s.name, "my_span");
-                    let fields = s.fields.as_ref().expect("span start should have fields");
+                    let fields = &s.fields;
                     assert_eq!(
                         fields.get("initial"),
                         Some(&serde_json::json!(42)),
@@ -656,10 +656,7 @@ mod tests {
         while let Ok(record) = rx.try_recv() {
             match record {
                 Record::SpanStart(s) => {
-                    let fields = s
-                        .fields
-                        .as_ref()
-                        .expect("span with Empty fields must produce a non-empty fields map");
+                    let fields = &s.fields;
                     assert_eq!(
                         fields.get("user_id"),
                         Some(&serde_json::Value::Null),
