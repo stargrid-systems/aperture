@@ -8,9 +8,10 @@
 //! - A [`DbLogLayer`] that persists spans and events to the database.
 //!
 //! The `log` crate is bridged into tracing by `tracing-subscriber`'s
-//! `tracing-log` feature (enabled automatically). The real target, file, and
-//! line from `log` records are carried as `log.*` fields and extracted by
-//! [`DbLogLayer`] rather than using the static `"log"` target.
+//! `tracing-log` feature. `SubscriberInitExt::init` calls `LogTracer::init`
+//! when that feature is active. The real target, file, and line from `log`
+//! records are carried as `log.*` fields and extracted by [`DbLogLayer`]
+//! rather than using the static `"log"` target.
 //!
 //! [`DbLogLayer`]: layer::DbLogLayer
 

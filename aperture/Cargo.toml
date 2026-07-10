@@ -24,6 +24,5 @@ serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "fs", "sync", "time", "signal"] }
 tracing = { workspace = true }
-tracing-log = { workspace = true, features = ["std", "log-tracer"] }
-tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi", "tracing-log"] }
 uuid = { workspace = true, features = ["std", "v4"] }
