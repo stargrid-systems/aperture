@@ -48,6 +48,22 @@ pub(crate) fn int_or_null<T: Into<i64>>(value: Option<T>) -> Value {
     }
 }
 
+/// Bitwise cast from u64 to i64 for database storage.
+///
+/// SQLite stores integers as signed 64-bit. Values above `i64::MAX` wrap to
+/// negative numbers. Equality comparisons are preserved, but ordering
+/// comparisons (`<`, `>`, `ORDER BY`) on the stored column are meaningless.
+pub(crate) fn u64_as_i64(value: u64) -> i64 {
+    value as i64
+}
+
+pub(crate) fn u64_or_null(value: Option<u64>) -> Value {
+    match value {
+        Some(v) => Value::Integer(u64_as_i64(v)),
+        None => Value::Null,
+    }
+}
+
 pub(crate) fn ts_or_null(value: Option<Timestamp>) -> Value {
     match value {
         Some(timestamp) => Value::Integer(timestamp.as_millisecond()),
