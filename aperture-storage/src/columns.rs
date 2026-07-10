@@ -20,17 +20,7 @@ impl Columns {
     pub const fn new(names: &'static [&'static str]) -> Self {
         let mut i = 0;
         while i < names.len() {
-            let bytes = names[i].as_bytes();
-            assert!(!bytes.is_empty(), "column name must not be empty");
-            let mut j = 0;
-            while j < bytes.len() {
-                let b = bytes[j];
-                assert!(
-                    (b >= b'a' && b <= b'z') || (b >= b'0' && b <= b'9') || b == b'_',
-                    "column name must be lowercase ASCII identifier"
-                );
-                j += 1;
-            }
+            validate_column_name(names[i]);
             i += 1;
         }
         Self { names }
@@ -38,10 +28,10 @@ impl Columns {
 
     /// Returns the index of `name` in the column list. Panics if not found.
     pub const fn index_of(&self, name: &str) -> usize {
-        let target = name.as_bytes();
         let mut i = 0;
         while i < self.names.len() {
-            if str_eq(self.names[i].as_bytes(), target) {
+            // Using eq_ignore_ascii_case here because it's const-stable.
+            if self.names[i].eq_ignore_ascii_case(name) {
                 return i;
             }
             i += 1;
@@ -62,20 +52,6 @@ impl Columns {
     }
 }
 
-const fn str_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < a.len() {
-        if a[i] != b[i] {
-            return false;
-        }
-        i += 1;
-    }
-    true
-}
-
 impl fmt::Display for Columns {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
@@ -87,5 +63,19 @@ impl fmt::Display for Columns {
             f.write_str(name)?;
         }
         Ok(())
+    }
+}
+
+const fn validate_column_name(name: &str) {
+    let bytes = name.as_bytes();
+    assert!(!bytes.is_empty(), "column name must not be empty");
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        assert!(
+            matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'),
+            "column name must be lowercase ASCII identifier"
+        );
+        i += 1;
     }
 }
