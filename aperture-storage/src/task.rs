@@ -16,12 +16,18 @@ use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::row::{
-    int_or_null, opt_int, opt_text, opt_ts, req_int, req_text, req_ts, text_ref_or_null,
+    int_or_null, opt_db_id, opt_text, opt_ts, req_db_id, req_text, req_ts, text_ref_or_null,
 };
 
 /// Columns selected for a [`TaskInvocation`], in [`row_to_task`] order.
 const TASK_COLUMNS: &str =
     "id, kind, parent_id, status, input, output, error, created_at, started_at, finished_at";
+
+mod col {
+    pub const KIND: &str = "kind";
+    pub const PARENT_ID: &str = "parent_id";
+    pub const STATUS: &str = "status";
+}
 
 /// Lifecycle state of a single task invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,19 +393,22 @@ impl TaskRepository {
 
         let mut filters = Filters::new();
         match status {
-            Some(StatusFilter::Exact(status)) => filters.eq_text("status", Some(status.as_db())),
+            Some(StatusFilter::Exact(status)) => filters.eq_text(col::STATUS, Some(status.as_db())),
             Some(StatusFilter::Active) => {
-                filters.one_of("status", db_values(&TaskStatus::ACTIVE).iter().copied())
+                filters.one_of(col::STATUS, db_values(&TaskStatus::ACTIVE).iter().copied())
             }
             Some(StatusFilter::Finished) => {
-                filters.one_of("status", db_values(&TaskStatus::FINISHED).iter().copied());
+                filters.one_of(
+                    col::STATUS,
+                    db_values(&TaskStatus::FINISHED).iter().copied(),
+                );
             }
             None => {}
         }
-        filters.eq_text("kind", kind);
+        filters.eq_text(col::KIND, kind);
         match parent {
             Some(ParentFilter::Root) => filters.raw("parent_id IS NULL"),
-            Some(ParentFilter::Of(id)) => filters.eq_int("parent_id", Some(id.get())),
+            Some(ParentFilter::Of(id)) => filters.eq_int(col::PARENT_ID, Some(id.get())),
             None => {}
         }
         for filter in json {
@@ -481,9 +490,9 @@ fn db_values(statuses: &[TaskStatus]) -> Vec<&'static str> {
 
 fn row_to_task(row: &Row) -> Result<TaskInvocation> {
     Ok(TaskInvocation {
-        id: DbId::from(req_int(row, 0)?),
+        id: req_db_id(row, 0)?,
         kind: req_text(row, 1)?,
-        parent_id: opt_int(row, 2)?.map(DbId::from),
+        parent_id: opt_db_id(row, 2)?,
         status: TaskStatus::from_db(&req_text(row, 3)?)?,
         input: req_text(row, 4)?,
         output: opt_text(row, 5)?,

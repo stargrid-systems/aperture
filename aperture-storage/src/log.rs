@@ -11,8 +11,8 @@ use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
 use crate::row::{
-    int_or_null, json_map, map_ref_or_null, opt_int, opt_text, opt_ts, opt_u32, opt_uuid, req_int,
-    req_text, req_ts, req_u64, text_ref_or_null, uuid_or_null,
+    int_or_null, json_map, map_ref_or_null, opt_db_id, opt_text, opt_ts, opt_u32, opt_uuid,
+    req_db_id, req_int, req_text, req_ts, req_u64, text_ref_or_null, uuid_or_null,
 };
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
@@ -22,6 +22,17 @@ const EVENT_COLUMNS: &str =
 /// Columns selected for a [`Span`], in [`row_to_span`] order.
 const SPAN_COLUMNS: &str =
     "id, parent_id, name, level, target, file, line, started_at, ended_at, fields";
+
+mod col {
+    pub const FIELDS: &str = "fields";
+    pub const LEVEL: &str = "level";
+    pub const MESSAGE: &str = "message";
+    pub const PARENT_ID: &str = "parent_id";
+    pub const SPAN_ID: &str = "span_id";
+    pub const STARTED_AT: &str = "started_at";
+    pub const TARGET: &str = "target";
+    pub const TIMESTAMP: &str = "timestamp";
+}
 
 /// SQL shared between [`LogRepository`] and [`LogBatch`] for span inserts.
 /// File-level because the parameter layout is a shared assumption.
@@ -50,17 +61,6 @@ const SQL_UPDATE_SPAN_FIELDS: &str = sql!(
     SET fields = json_patch(fields, ?1)
     WHERE tracing_id = ?2 AND boot_id = ?3
 );
-
-mod col {
-    pub(super) const FIELDS: &str = "fields";
-    pub(super) const LEVEL: &str = "level";
-    pub(super) const MESSAGE: &str = "message";
-    pub(super) const PARENT_ID: &str = "parent_id";
-    pub(super) const SPAN_ID: &str = "span_id";
-    pub(super) const STARTED_AT: &str = "started_at";
-    pub(super) const TARGET: &str = "target";
-    pub(super) const TIMESTAMP: &str = "timestamp";
-}
 
 /// Severity level of a tracing event or span.
 ///
@@ -630,8 +630,8 @@ impl<'conn> LogBatch<'conn> {
 
 fn row_to_event(row: &turso::Row) -> Result<Event> {
     Ok(Event {
-        id: DbId::from(req_int(row, 0)?),
-        span_id: opt_int(row, 1)?.map(DbId::from),
+        id: req_db_id(row, 0)?,
+        span_id: opt_db_id(row, 1)?,
         level: Level::from_db(req_int(row, 2)?)?,
         target: req_text(row, 3)?,
         message: opt_text(row, 4)?,
@@ -645,8 +645,8 @@ fn row_to_event(row: &turso::Row) -> Result<Event> {
 
 fn row_to_span(row: &turso::Row) -> Result<Span> {
     Ok(Span {
-        id: DbId::from(req_int(row, 0)?),
-        parent_id: opt_int(row, 1)?.map(DbId::from),
+        id: req_db_id(row, 0)?,
+        parent_id: opt_db_id(row, 1)?,
         name: req_text(row, 2)?,
         level: Level::from_db(req_int(row, 3)?)?,
         target: req_text(row, 4)?,

@@ -9,6 +9,7 @@ use turso::{Row, Value};
 use uuid::Uuid;
 
 use crate::error::{Result, StorageError, database};
+use crate::id::DbId;
 
 pub(crate) fn text_or_null(value: &Option<String>) -> Value {
     match value {
@@ -107,6 +108,14 @@ pub(crate) fn json_map(row: &Row, idx: usize) -> Result<Map<String, serde_json::
         .as_object()
         .cloned()
         .unwrap_or_default())
+}
+
+pub(crate) fn req_db_id(row: &Row, idx: usize) -> Result<DbId> {
+    Ok(DbId::from(req_int(row, idx)?))
+}
+
+pub(crate) fn opt_db_id(row: &Row, idx: usize) -> Result<Option<DbId>> {
+    Ok(opt_int(row, idx)?.map(DbId::from))
 }
 
 pub(crate) fn req_int(row: &Row, idx: usize) -> Result<i64> {
