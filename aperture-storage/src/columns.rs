@@ -40,10 +40,7 @@ impl Columns {
     }
 
     /// Looks up `name` and applies `f` to the row at that index.
-    pub fn extract<R, F, T>(&self, row: &R, name: &str, f: F) -> T
-    where
-        F: FnOnce(&R, usize) -> T,
-    {
+    pub fn extract<R, T>(&self, row: &R, name: &str, f: fn(row: &R, index: usize) -> T) -> T {
         f(row, self.index_of(name))
     }
 
