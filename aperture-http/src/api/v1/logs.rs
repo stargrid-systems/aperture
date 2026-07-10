@@ -40,6 +40,7 @@ async fn list_logs(
         target: params.target,
         query: params.q,
         span_id: params.span_id,
+        boot_id: params.boot_id,
         since: params.since,
         until: params.until,
         fields,
@@ -103,6 +104,7 @@ async fn list_spans(
     let filter = SpanFilter {
         min_level: params.min_level.map(Into::into),
         target: params.target,
+        boot_id: params.boot_id,
         since: params.since,
         until: params.until,
         parent,

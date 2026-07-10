@@ -339,6 +339,15 @@ impl Filters {
         self.sql.push(')');
     }
 
+    /// Adds `column = ?` bound to the blob `value`, or nothing when `None`.
+    pub(crate) fn eq_blob(&mut self, column: &str, value: Option<Vec<u8>>) {
+        if let Some(value) = value {
+            self.params.push(Value::Blob(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+        }
+    }
+
     /// Adds `column >= ?` bound to the integer `value`, or nothing when `None`.
     pub(crate) fn gte_int(&mut self, column: &str, value: Option<i64>) {
         if let Some(value) = value {

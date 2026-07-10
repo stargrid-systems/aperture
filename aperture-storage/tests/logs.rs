@@ -107,6 +107,7 @@ async fn list_events_newest_first() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -141,6 +142,7 @@ async fn filter_by_min_level() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -167,6 +169,7 @@ async fn filter_by_target() {
                 target: vec!["aperture_artifacts::fetch".to_owned()],
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -196,6 +199,7 @@ async fn filter_by_span_id() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -213,6 +217,7 @@ async fn filter_by_span_id() {
                 target: Vec::new(),
                 query: None,
                 span_id: Some(span_id),
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -238,6 +243,7 @@ async fn filter_by_time_range() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: Some(at(1_150)),
                 until: Some(at(1_250)),
                 fields: Vec::new(),
@@ -266,6 +272,7 @@ async fn filter_by_structured_fields() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: vec![("key".to_owned(), "spectra".to_owned())],
@@ -295,6 +302,7 @@ async fn query_matches_message() {
                 target: Vec::new(),
                 query: Some("download".to_owned()),
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -324,6 +332,7 @@ async fn query_matches_target() {
                 target: Vec::new(),
                 query: Some("aperture_http".to_owned()),
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -394,6 +403,7 @@ async fn prune_before_deletes_old_events() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -424,6 +434,7 @@ async fn record_dropped_inserts_synthetic_event() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -477,6 +488,7 @@ async fn paginate_events() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -501,6 +513,7 @@ async fn paginate_events() {
                 target: Vec::new(),
                 query: None,
                 span_id: None,
+                boot_id: None,
                 since: None,
                 until: None,
                 fields: Vec::new(),
@@ -691,4 +704,18 @@ async fn list_boots_groups_by_boot_id() {
     assert_eq!(boots[1].event_count, 2);
     assert_eq!(boots[1].first_seen, at(1_000));
     assert_eq!(boots[1].last_seen, at(2_000));
+
+    let page = logs
+        .list_events(
+            &EventFilter {
+                boot_id: Some(a),
+                ..Default::default()
+            },
+            &ListQuery::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.items[0].boot_id, a);
+    assert_eq!(page.items[1].boot_id, a);
 }

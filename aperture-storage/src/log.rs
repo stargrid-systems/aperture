@@ -162,11 +162,13 @@ pub struct BootInfo {
 }
 
 /// Filters for log event queries.
+#[derive(Default)]
 pub struct EventFilter {
     pub min_level: Option<Level>,
     pub target: Vec<String>,
     pub query: Option<String>,
     pub span_id: Option<DbId>,
+    pub boot_id: Option<Uuid>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
     pub fields: Vec<(String, String)>,
@@ -189,6 +191,7 @@ pub enum SpanParentFilter {
 pub struct SpanFilter {
     pub min_level: Option<Level>,
     pub target: Vec<String>,
+    pub boot_id: Option<Uuid>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
     pub parent: SpanParentFilter,
@@ -291,6 +294,7 @@ impl LogRepository {
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
         filters.eq_int(col::SPAN_ID, filter.span_id.map(DbId::get));
+        filters.eq_blob(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
         filters.gte_int(col::TIMESTAMP, filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int(col::TIMESTAMP, filter.until.map(|ts| ts.as_millisecond()));
 
@@ -384,6 +388,7 @@ impl LogRepository {
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
+        filters.eq_blob(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
         filters.gte_int(col::STARTED_AT, filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int(col::STARTED_AT, filter.until.map(|ts| ts.as_millisecond()));
         for (key, value) in &filter.fields {
