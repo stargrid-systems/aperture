@@ -15,7 +15,7 @@ use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::row::{
-    opt_text, opt_ts, req_db_id, req_text, req_ts, req_u64, text_or_null, ts_or_null,
+    int_or_null_ts, opt_text, opt_ts, req_db_id, req_text, req_ts, req_u64, text_or_null,
 };
 
 mod col {
@@ -106,7 +106,7 @@ impl ArtifactRepository {
             text_or_null(&artifact.version),
             Value::Integer(artifact.size_bytes as i64),
             Value::Integer(artifact.downloaded_at.as_millisecond()),
-            ts_or_null(artifact.verified_at),
+            int_or_null_ts(artifact.verified_at),
         ]);
         self.connection
             .execute(

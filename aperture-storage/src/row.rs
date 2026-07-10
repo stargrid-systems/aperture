@@ -32,7 +32,9 @@ pub(crate) fn uuid_or_null(value: Option<Uuid>) -> Value {
     }
 }
 
-pub(crate) fn map_ref_or_null(value: Option<&serde_json::Map<String, serde_json::Value>>) -> Value {
+pub(crate) fn json_text_or_null(
+    value: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Value {
     match value {
         Some(map) => {
             Value::Text(serde_json::to_string(map).expect("serializing a JSON map cannot fail"))
@@ -53,18 +55,19 @@ pub(crate) fn int_or_null<T: Into<i64>>(value: Option<T>) -> Value {
 /// SQLite stores integers as signed 64-bit. Values above `i64::MAX` wrap to
 /// negative numbers. Equality comparisons are preserved, but ordering
 /// comparisons (`<`, `>`, `ORDER BY`) on the stored column are meaningless.
-pub(crate) fn u64_as_i64(value: u64) -> i64 {
-    value as i64
+pub(crate) fn int_u64(value: u64) -> i64 {
+    value.cast_signed()
 }
 
-pub(crate) fn u64_or_null(value: Option<u64>) -> Value {
+/// See the note on [`int_u64`].
+pub(crate) fn int_or_null_u64(value: Option<u64>) -> Value {
     match value {
-        Some(v) => Value::Integer(u64_as_i64(v)),
+        Some(v) => Value::Integer(int_u64(v)),
         None => Value::Null,
     }
 }
 
-pub(crate) fn ts_or_null(value: Option<Timestamp>) -> Value {
+pub(crate) fn int_or_null_ts(value: Option<Timestamp>) -> Value {
     match value {
         Some(timestamp) => Value::Integer(timestamp.as_millisecond()),
         None => Value::Null,

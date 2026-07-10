@@ -12,8 +12,8 @@ use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
 use crate::row::{
-    int_or_null, json_map, map_ref_or_null, opt_db_id, opt_text, opt_ts, opt_u32, opt_uuid,
-    req_db_id, req_int, req_text, req_ts, req_u64, text_ref_or_null, u64_as_i64, u64_or_null,
+    int_or_null, int_or_null_u64, int_u64, json_map, json_text_or_null, opt_db_id, opt_text,
+    opt_ts, opt_u32, opt_uuid, req_db_id, req_int, req_text, req_ts, req_u64, text_ref_or_null,
     uuid_or_null,
 };
 
@@ -549,8 +549,8 @@ impl<'conn> LogBatch<'conn> {
     /// Inserts a span.
     pub async fn insert_span(&mut self, record: SpanRecord<'_>) -> Result<()> {
         let params = params_from_iter([
-            Value::Integer(u64_as_i64(record.tracing_id)),
-            u64_or_null(record.parent_tracing_id),
+            Value::Integer(int_u64(record.tracing_id)),
+            int_or_null_u64(record.parent_tracing_id),
             Value::Blob(record.boot_id.as_bytes().to_vec()),
             Value::Text(record.name.to_owned()),
             Value::Integer(record.level.as_db()),
@@ -558,7 +558,7 @@ impl<'conn> LogBatch<'conn> {
             text_ref_or_null(record.file),
             int_or_null(record.line),
             Value::Integer(record.started_at.as_millisecond()),
-            map_ref_or_null(record.fields),
+            json_text_or_null(record.fields),
         ]);
         self.insert_span.execute(params).await.map_err(database)?;
         Ok(())
@@ -567,7 +567,7 @@ impl<'conn> LogBatch<'conn> {
     /// Inserts a log event.
     pub async fn insert_event(&mut self, record: EventRecord<'_>) -> Result<()> {
         let params = params_from_iter([
-            u64_or_null(record.span_tracing_id),
+            int_or_null_u64(record.span_tracing_id),
             Value::Integer(record.level.as_db()),
             Value::Text(record.target.to_owned()),
             text_ref_or_null(record.message),
@@ -575,7 +575,7 @@ impl<'conn> LogBatch<'conn> {
             text_ref_or_null(record.file),
             int_or_null(record.line),
             uuid_or_null(record.boot_id),
-            map_ref_or_null(record.fields),
+            json_text_or_null(record.fields),
         ]);
         self.insert_event.execute(params).await.map_err(database)?;
         Ok(())
@@ -591,7 +591,7 @@ impl<'conn> LogBatch<'conn> {
         self.close_span
             .execute(params_from_iter([
                 Value::Integer(ended_at.as_millisecond()),
-                Value::Integer(u64_as_i64(tracing_id)),
+                Value::Integer(int_u64(tracing_id)),
                 Value::Blob(boot_id.as_bytes().to_vec()),
             ]))
             .await
@@ -611,7 +611,7 @@ impl<'conn> LogBatch<'conn> {
         self.update_span_fields
             .execute(params_from_iter([
                 Value::Text(json),
-                Value::Integer(u64_as_i64(tracing_id)),
+                Value::Integer(int_u64(tracing_id)),
                 Value::Blob(boot_id.as_bytes().to_vec()),
             ]))
             .await
