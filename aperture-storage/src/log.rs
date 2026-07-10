@@ -91,7 +91,7 @@ const SQL_UPDATE_SPAN_FIELDS: &str = sql!(
 
 /// Severity level of a tracing event or span.
 ///
-/// Stored as [`i64`] in the database (see [`Level::as_db`]). Higher values are
+/// Stored as [`i64`] in the database (see `Level::as_db`). Higher values are
 /// more severe, so `level >= N` filters by minimum severity without a CASE
 /// expression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,9 +336,9 @@ impl LogRepository {
     /// filtered by prefix.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_targets(&self, q: Option<&str>) -> Result<Vec<String>> {
-        // Raw string because sql!() cannot handle SQL single-quoted literals.
         let sql = match q {
             Some(_) => {
+                // Raw string because sql!() cannot handle SQL single-quoted literals.
                 r#"
                 SELECT target FROM log_events WHERE target LIKE ?1 ESCAPE '\'
                 UNION
