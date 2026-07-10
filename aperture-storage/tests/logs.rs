@@ -441,7 +441,7 @@ async fn record_dropped_inserts_synthetic_event() {
         "dropped log records due to full buffer"
     );
     assert_eq!(
-        page.items[0].fields.get("dropped"),
+        page.items[0].fields.as_ref().and_then(|f| f.get("dropped")),
         Some(&serde_json::json!(42))
     );
 }

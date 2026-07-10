@@ -66,8 +66,8 @@ pub struct LogEventResponse {
     pub line: Option<u32>,
     /// Boot session this event belongs to, if known.
     pub boot_id: Option<Uuid>,
-    /// All structured fields as a JSON object. Empty when there are none.
-    pub fields: Map<String, serde_json::Value>,
+    /// Structured fields as a JSON object, if any.
+    pub fields: Option<Map<String, serde_json::Value>>,
 }
 
 impl From<Event> for LogEventResponse {
@@ -108,8 +108,8 @@ pub struct LogSpanResponse {
     pub started_at: Timestamp,
     /// When the span ended, if it did.
     pub ended_at: Option<Timestamp>,
-    /// Span fields as a JSON object. Empty when there are none.
-    pub fields: Map<String, serde_json::Value>,
+    /// Span fields as a JSON object, if any.
+    pub fields: Option<Map<String, serde_json::Value>>,
 }
 
 impl From<Span> for LogSpanResponse {

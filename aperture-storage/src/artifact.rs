@@ -7,16 +7,14 @@
 //! and usable.
 
 use jiff::Timestamp;
-use turso::{Connection, Row, Value, params_from_iter};
+use turso::{Connection, Row, params_from_iter};
 
 use crate::columns::Columns;
 use crate::error::{Result, database};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::row::{
-    int_or_null_ts, opt_text, opt_ts, req_db_id, req_text, req_ts, req_u64, text_or_null,
-};
+use crate::sql::{ToSql, get};
 
 mod col {
     pub const DIGEST: &str = "digest";
@@ -99,14 +97,14 @@ impl ArtifactRepository {
     #[tracing::instrument(level = "info", skip(self, artifact))]
     pub async fn record_version(&self, artifact: &Artifact) -> Result<()> {
         let params = params_from_iter([
-            Value::Text(artifact.key.clone()),
-            Value::Text(artifact.source.clone()),
-            Value::Text(artifact.digest.clone()),
-            text_or_null(&artifact.media_type),
-            text_or_null(&artifact.version),
-            Value::Integer(artifact.size_bytes as i64),
-            Value::Integer(artifact.downloaded_at.as_millisecond()),
-            int_or_null_ts(artifact.verified_at),
+            artifact.key.to_sql(),
+            artifact.source.to_sql(),
+            artifact.digest.to_sql(),
+            artifact.media_type.to_sql(),
+            artifact.version.to_sql(),
+            artifact.size_bytes.to_sql(),
+            artifact.downloaded_at.to_sql(),
+            artifact.verified_at.to_sql(),
         ]);
         self.connection
             .execute(
@@ -141,7 +139,7 @@ impl ArtifactRepository {
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Text(key.to_owned())]))
+            .query(&sql, params_from_iter([key.to_sql()]))
             .await
             .map_err(database)?;
         match rows.next().await.map_err(database)? {
@@ -159,10 +157,7 @@ impl ArtifactRepository {
         );
         let mut rows = self
             .connection
-            .query(
-                &sql,
-                params_from_iter([Value::Text(key.to_owned()), Value::Text(digest.to_owned())]),
-            )
+            .query(&sql, params_from_iter([key.to_sql(), digest.to_sql()]))
             .await
             .map_err(database)?;
         match rows.next().await.map_err(database)? {
@@ -186,7 +181,7 @@ impl ArtifactRepository {
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Text(key.to_owned())]))
+            .query(&sql, params_from_iter([key.to_sql()]))
             .await
             .map_err(database)?;
         match rows.next().await.map_err(database)? {
@@ -312,7 +307,7 @@ impl ArtifactRepository {
         self.connection
             .execute(
                 sql!(DELETE FROM artifacts WHERE key = ?1 AND digest = ?2),
-                params_from_iter([Value::Text(key.to_owned()), Value::Text(digest.to_owned())]),
+                params_from_iter([key.to_sql(), digest.to_sql()]),
             )
             .await
             .map_err(database)?;
@@ -322,21 +317,21 @@ impl ArtifactRepository {
 
 fn row_to_artifact(row: &Row) -> Result<Artifact> {
     Ok(Artifact {
-        id: ARTIFACT_COLUMNS.extract(row, col::ID, req_db_id)?,
-        key: ARTIFACT_COLUMNS.extract(row, col::KEY, req_text)?,
-        source: ARTIFACT_COLUMNS.extract(row, col::SOURCE, req_text)?,
-        digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST, req_text)?,
-        media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE, opt_text)?,
-        version: ARTIFACT_COLUMNS.extract(row, col::VERSION, opt_text)?,
-        size_bytes: ARTIFACT_COLUMNS.extract(row, col::SIZE_BYTES, req_u64)?,
-        downloaded_at: ARTIFACT_COLUMNS.extract(row, col::DOWNLOADED_AT, req_ts)?,
-        verified_at: ARTIFACT_COLUMNS.extract(row, col::VERIFIED_AT, opt_ts)?,
+        id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
+        key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
+        source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
+        digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST)?,
+        media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE)?,
+        version: ARTIFACT_COLUMNS.extract(row, col::VERSION)?,
+        size_bytes: ARTIFACT_COLUMNS.extract(row, col::SIZE_BYTES)?,
+        downloaded_at: ARTIFACT_COLUMNS.extract(row, col::DOWNLOADED_AT)?,
+        verified_at: ARTIFACT_COLUMNS.extract(row, col::VERIFIED_AT)?,
     })
 }
 
 fn row_to_artifact_key(row: &Row) -> Result<ArtifactKey> {
     Ok(ArtifactKey {
         latest: row_to_artifact(row)?,
-        version_count: req_u64(row, ARTIFACT_COLUMNS.len())?,
+        version_count: get(row, ARTIFACT_COLUMNS.len())?,
     })
 }

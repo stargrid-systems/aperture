@@ -9,16 +9,14 @@
 use std::result::Result as StdResult;
 
 use jiff::Timestamp;
-use turso::{Connection, Row, Value, params_from_iter};
+use turso::{Connection, Row, params_from_iter};
 
 use crate::columns::Columns;
 use crate::error::{Result, StorageError, database};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::row::{
-    int_or_null, opt_db_id, opt_text, opt_ts, req_db_id, req_text, req_ts, text_ref_or_null,
-};
+use crate::sql::ToSql;
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
@@ -75,7 +73,7 @@ impl TaskStatus {
         Self::Interrupted,
     ];
 
-    fn as_db(self) -> &'static str {
+    pub(crate) fn as_db(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Running => "running",
@@ -86,7 +84,7 @@ impl TaskStatus {
         }
     }
 
-    fn from_db(value: &str) -> Result<Self> {
+    pub(crate) fn from_db(value: &str) -> Result<Self> {
         match value {
             "pending" => Ok(Self::Pending),
             "running" => Ok(Self::Running),
@@ -272,11 +270,11 @@ impl TaskRepository {
         created_at: Timestamp,
     ) -> Result<DbId> {
         let params = params_from_iter([
-            Value::Text(kind.to_owned()),
-            int_or_null(parent_id),
-            Value::Text(TaskStatus::Pending.as_db().to_owned()),
-            Value::Text(input.to_owned()),
-            Value::Integer(created_at.as_millisecond()),
+            kind.to_sql(),
+            parent_id.to_sql(),
+            TaskStatus::Pending.to_sql(),
+            input.to_sql(),
+            created_at.to_sql(),
         ]);
         self.connection
             .execute(
@@ -304,12 +302,12 @@ impl TaskRepository {
         started_at: Timestamp,
     ) -> Result<DbId> {
         let params = params_from_iter([
-            Value::Text(kind.to_owned()),
-            int_or_null(parent_id),
-            Value::Text(TaskStatus::Running.as_db().to_owned()),
-            Value::Text(input.to_owned()),
-            Value::Integer(started_at.as_millisecond()),
-            Value::Integer(started_at.as_millisecond()),
+            kind.to_sql(),
+            parent_id.to_sql(),
+            TaskStatus::Running.to_sql(),
+            input.to_sql(),
+            started_at.to_sql(),
+            started_at.to_sql(),
         ]);
         self.connection
             .execute(
@@ -331,9 +329,9 @@ impl TaskRepository {
             .execute(
                 sql!(UPDATE tasks SET status = ?1, started_at = ?2 WHERE id = ?3),
                 params_from_iter([
-                    Value::Text(TaskStatus::Running.as_db().to_owned()),
-                    Value::Integer(started_at.as_millisecond()),
-                    Value::Integer(id.get()),
+                    TaskStatus::Running.to_sql(),
+                    started_at.to_sql(),
+                    id.to_sql(),
                 ]),
             )
             .await
@@ -364,11 +362,11 @@ impl TaskRepository {
                     WHERE id = ?5 AND finished_at IS NULL
                 ),
                 params_from_iter([
-                    Value::Text(status.as_db().to_owned()),
-                    Value::Integer(finished_at.as_millisecond()),
-                    text_ref_or_null(output),
-                    text_ref_or_null(error),
-                    Value::Integer(id.get()),
+                    status.to_sql(),
+                    finished_at.to_sql(),
+                    output.to_sql(),
+                    error.to_sql(),
+                    id.to_sql(),
                 ]),
             )
             .await
@@ -385,7 +383,7 @@ impl TaskRepository {
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Integer(id.get())]))
+            .query(&sql, params_from_iter([id.to_sql()]))
             .await
             .map_err(database)?;
         match rows.next().await.map_err(database)? {
@@ -465,7 +463,7 @@ impl TaskRepository {
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Integer(parent_id.get())]))
+            .query(&sql, params_from_iter([parent_id.to_sql()]))
             .await
             .map_err(database)?;
         let mut tasks = Vec::new();
@@ -487,10 +485,7 @@ impl TaskRepository {
             .connection
             .query(
                 &sql,
-                params_from_iter([
-                    Value::Text(TaskStatus::Pending.as_db().to_owned()),
-                    Value::Text(TaskStatus::Running.as_db().to_owned()),
-                ]),
+                params_from_iter([TaskStatus::Pending.to_sql(), TaskStatus::Running.to_sql()]),
             )
             .await
             .map_err(database)?;
@@ -508,16 +503,16 @@ fn db_values(statuses: &[TaskStatus]) -> Vec<&'static str> {
 
 fn row_to_task(row: &Row) -> Result<TaskInvocation> {
     Ok(TaskInvocation {
-        id: TASK_COLUMNS.extract(row, col::ID, req_db_id)?,
-        kind: TASK_COLUMNS.extract(row, col::KIND, req_text)?,
-        parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID, opt_db_id)?,
-        status: TaskStatus::from_db(&TASK_COLUMNS.extract(row, col::STATUS, req_text)?)?,
-        input: TASK_COLUMNS.extract(row, col::INPUT, req_text)?,
-        output: TASK_COLUMNS.extract(row, col::OUTPUT, opt_text)?,
-        error: TASK_COLUMNS.extract(row, col::ERROR, opt_text)?,
-        created_at: TASK_COLUMNS.extract(row, col::CREATED_AT, req_ts)?,
-        started_at: TASK_COLUMNS.extract(row, col::STARTED_AT, opt_ts)?,
-        finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT, opt_ts)?,
+        id: TASK_COLUMNS.extract(row, col::ID)?,
+        kind: TASK_COLUMNS.extract(row, col::KIND)?,
+        parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
+        status: TASK_COLUMNS.extract(row, col::STATUS)?,
+        input: TASK_COLUMNS.extract(row, col::INPUT)?,
+        output: TASK_COLUMNS.extract(row, col::OUTPUT)?,
+        error: TASK_COLUMNS.extract(row, col::ERROR)?,
+        created_at: TASK_COLUMNS.extract(row, col::CREATED_AT)?,
+        started_at: TASK_COLUMNS.extract(row, col::STARTED_AT)?,
+        finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT)?,
     })
 }
 

@@ -3,6 +3,11 @@
 
 use std::fmt;
 
+use turso::Row;
+
+use crate::error::{Result, database};
+use crate::sql::FromSql;
+
 /// A set of column names for a SELECT clause, validated at construction time.
 ///
 /// All names must be simple lowercase ASCII identifiers (letters, digits,
@@ -39,9 +44,12 @@ impl Columns {
         panic!("column not found in column list");
     }
 
-    /// Looks up `name` and applies `f` to the row at that index.
-    pub fn extract<R, T>(&self, row: &R, name: &str, f: fn(row: &R, index: usize) -> T) -> T {
-        f(row, self.index_of(name))
+    /// Looks up `name` and extracts a value of type `T` from `row` at that
+    /// index.
+    pub fn extract<T: FromSql>(&self, row: &Row, name: &str) -> Result<T> {
+        let idx = self.index_of(name);
+        let value = row.get_value(idx).map_err(database)?;
+        T::from_sql(value, idx)
     }
 
     pub const fn len(&self) -> usize {

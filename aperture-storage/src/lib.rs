@@ -32,7 +32,7 @@ mod log;
 mod macros;
 mod migration;
 mod page;
-mod row;
+mod sql;
 mod task;
 
 /// Busy timeout for write contention. turso uses WAL mode by default, but two

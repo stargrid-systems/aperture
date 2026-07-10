@@ -11,11 +11,7 @@ use crate::error::{Result, StorageError, database};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
-use crate::row::{
-    int_or_null, int_or_null_u64, int_u64, json_map, json_text_or_null, opt_db_id, opt_text,
-    opt_ts, opt_u32, opt_uuid, req_db_id, req_int, req_text, req_ts, req_u64, text_ref_or_null,
-    uuid_or_null,
-};
+use crate::sql::{ToSql, get};
 
 mod col {
     pub const BOOT_ID: &str = "boot_id";
@@ -140,7 +136,7 @@ pub struct Span {
     pub line: Option<u32>,
     pub started_at: Timestamp,
     pub ended_at: Option<Timestamp>,
-    pub fields: Map<String, serde_json::Value>,
+    pub fields: Option<Map<String, serde_json::Value>>,
 }
 
 /// A persisted tracing event (log record).
@@ -155,7 +151,7 @@ pub struct Event {
     pub file: Option<String>,
     pub line: Option<u32>,
     pub boot_id: Option<Uuid>,
-    pub fields: Map<String, serde_json::Value>,
+    pub fields: Option<Map<String, serde_json::Value>>,
 }
 
 /// One boot session observed in the log store.
@@ -365,7 +361,7 @@ impl LogRepository {
             .map_err(database)?;
         let mut targets = Vec::new();
         while let Some(row) = rows.next().await.map_err(database)? {
-            targets.push(req_text(&row, 0)?);
+            targets.push(get(&row, 0)?);
         }
         Ok(targets)
     }
@@ -523,9 +519,9 @@ impl LogRepository {
             };
             boots.push(BootInfo {
                 boot_id: parsed,
-                first_seen: req_ts(&row, 1)?,
-                last_seen: req_ts(&row, 2)?,
-                event_count: req_u64(&row, 3)?,
+                first_seen: get(&row, 1)?,
+                last_seen: get(&row, 2)?,
+                event_count: get(&row, 3)?,
             });
         }
         Ok(boots)
@@ -549,16 +545,16 @@ impl<'conn> LogBatch<'conn> {
     /// Inserts a span.
     pub async fn insert_span(&mut self, record: SpanRecord<'_>) -> Result<()> {
         let params = params_from_iter([
-            Value::Integer(int_u64(record.tracing_id)),
-            int_or_null_u64(record.parent_tracing_id),
-            Value::Blob(record.boot_id.as_bytes().to_vec()),
-            Value::Text(record.name.to_owned()),
-            Value::Integer(record.level.as_db()),
-            Value::Text(record.target.to_owned()),
-            text_ref_or_null(record.file),
-            int_or_null(record.line),
-            Value::Integer(record.started_at.as_millisecond()),
-            json_text_or_null(record.fields),
+            record.tracing_id.to_sql(),
+            record.parent_tracing_id.to_sql(),
+            record.boot_id.to_sql(),
+            record.name.to_sql(),
+            record.level.to_sql(),
+            record.target.to_sql(),
+            record.file.to_sql(),
+            record.line.to_sql(),
+            record.started_at.to_sql(),
+            record.fields.to_sql(),
         ]);
         self.insert_span.execute(params).await.map_err(database)?;
         Ok(())
@@ -567,15 +563,15 @@ impl<'conn> LogBatch<'conn> {
     /// Inserts a log event.
     pub async fn insert_event(&mut self, record: EventRecord<'_>) -> Result<()> {
         let params = params_from_iter([
-            int_or_null_u64(record.span_tracing_id),
-            Value::Integer(record.level.as_db()),
-            Value::Text(record.target.to_owned()),
-            text_ref_or_null(record.message),
-            Value::Integer(record.timestamp.as_millisecond()),
-            text_ref_or_null(record.file),
-            int_or_null(record.line),
-            uuid_or_null(record.boot_id),
-            json_text_or_null(record.fields),
+            record.span_tracing_id.to_sql(),
+            record.level.to_sql(),
+            record.target.to_sql(),
+            record.message.to_sql(),
+            record.timestamp.to_sql(),
+            record.file.to_sql(),
+            record.line.to_sql(),
+            record.boot_id.to_sql(),
+            record.fields.to_sql(),
         ]);
         self.insert_event.execute(params).await.map_err(database)?;
         Ok(())
@@ -590,9 +586,9 @@ impl<'conn> LogBatch<'conn> {
     ) -> Result<()> {
         self.close_span
             .execute(params_from_iter([
-                Value::Integer(ended_at.as_millisecond()),
-                Value::Integer(int_u64(tracing_id)),
-                Value::Blob(boot_id.as_bytes().to_vec()),
+                ended_at.to_sql(),
+                tracing_id.to_sql(),
+                boot_id.to_sql(),
             ]))
             .await
             .map_err(database)?;
@@ -611,8 +607,8 @@ impl<'conn> LogBatch<'conn> {
         self.update_span_fields
             .execute(params_from_iter([
                 Value::Text(json),
-                Value::Integer(int_u64(tracing_id)),
-                Value::Blob(boot_id.as_bytes().to_vec()),
+                tracing_id.to_sql(),
+                boot_id.to_sql(),
             ]))
             .await
             .map_err(database)?;
@@ -654,30 +650,30 @@ impl<'conn> LogBatch<'conn> {
 
 fn row_to_event(row: &turso::Row) -> Result<Event> {
     Ok(Event {
-        id: EVENT_COLUMNS.extract(row, col::ID, req_db_id)?,
-        span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID, opt_db_id)?,
-        level: Level::from_db(EVENT_COLUMNS.extract(row, col::LEVEL, req_int)?)?,
-        target: EVENT_COLUMNS.extract(row, col::TARGET, req_text)?,
-        message: EVENT_COLUMNS.extract(row, col::MESSAGE, opt_text)?,
-        timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP, req_ts)?,
-        file: EVENT_COLUMNS.extract(row, col::FILE, opt_text)?,
-        line: EVENT_COLUMNS.extract(row, col::LINE, opt_u32)?,
-        boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID, opt_uuid)?,
-        fields: EVENT_COLUMNS.extract(row, col::FIELDS, json_map)?,
+        id: EVENT_COLUMNS.extract(row, col::ID)?,
+        span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
+        level: EVENT_COLUMNS.extract(row, col::LEVEL)?,
+        target: EVENT_COLUMNS.extract(row, col::TARGET)?,
+        message: EVENT_COLUMNS.extract(row, col::MESSAGE)?,
+        timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP)?,
+        file: EVENT_COLUMNS.extract(row, col::FILE)?,
+        line: EVENT_COLUMNS.extract(row, col::LINE)?,
+        boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID)?,
+        fields: EVENT_COLUMNS.extract(row, col::FIELDS)?,
     })
 }
 
 fn row_to_span(row: &turso::Row) -> Result<Span> {
     Ok(Span {
-        id: SPAN_COLUMNS.extract(row, col::ID, req_db_id)?,
-        parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID, opt_db_id)?,
-        name: SPAN_COLUMNS.extract(row, col::NAME, req_text)?,
-        level: Level::from_db(SPAN_COLUMNS.extract(row, col::LEVEL, req_int)?)?,
-        target: SPAN_COLUMNS.extract(row, col::TARGET, req_text)?,
-        file: SPAN_COLUMNS.extract(row, col::FILE, opt_text)?,
-        line: SPAN_COLUMNS.extract(row, col::LINE, opt_u32)?,
-        started_at: SPAN_COLUMNS.extract(row, col::STARTED_AT, req_ts)?,
-        ended_at: SPAN_COLUMNS.extract(row, col::ENDED_AT, opt_ts)?,
-        fields: SPAN_COLUMNS.extract(row, col::FIELDS, json_map)?,
+        id: SPAN_COLUMNS.extract(row, col::ID)?,
+        parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID)?,
+        name: SPAN_COLUMNS.extract(row, col::NAME)?,
+        level: SPAN_COLUMNS.extract(row, col::LEVEL)?,
+        target: SPAN_COLUMNS.extract(row, col::TARGET)?,
+        file: SPAN_COLUMNS.extract(row, col::FILE)?,
+        line: SPAN_COLUMNS.extract(row, col::LINE)?,
+        started_at: SPAN_COLUMNS.extract(row, col::STARTED_AT)?,
+        ended_at: SPAN_COLUMNS.extract(row, col::ENDED_AT)?,
+        fields: SPAN_COLUMNS.extract(row, col::FIELDS)?,
     })
 }
