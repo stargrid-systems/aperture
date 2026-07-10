@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize, de};
 pub struct DbId(i64);
 
 impl DbId {
-    pub fn get(self) -> i64 {
+    pub const fn get(self) -> i64 {
         self.0
     }
 }
@@ -62,7 +62,21 @@ impl<'de> Deserialize<'de> for DbId {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map(Self).map_err(de::Error::custom)
+        struct Visitor;
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = DbId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a database identifier string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                v.parse().map_err(de::Error::custom)
+            }
+        }
+        deserializer.deserialize_str(Visitor)
     }
 }
