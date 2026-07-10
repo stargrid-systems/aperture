@@ -25,6 +25,7 @@ pub use self::task::{
 };
 
 mod artifact;
+mod columns;
 mod error;
 mod id;
 mod log;

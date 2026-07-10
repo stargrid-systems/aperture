@@ -9,15 +9,39 @@
 use jiff::Timestamp;
 use turso::{Connection, Row, Value, params_from_iter};
 
+use crate::columns::Columns;
 use crate::error::{Result, database};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::row::{opt_text, opt_ts, req_int, req_text, req_ts, req_u64, text_or_null, ts_or_null};
+use crate::row::{
+    opt_text, opt_ts, req_db_id, req_text, req_ts, req_u64, text_or_null, ts_or_null,
+};
+
+mod col {
+    pub const DIGEST: &str = "digest";
+    pub const DOWNLOADED_AT: &str = "downloaded_at";
+    pub const ID: &str = "id";
+    pub const KEY: &str = "key";
+    pub const MEDIA_TYPE: &str = "media_type";
+    pub const SIZE_BYTES: &str = "size_bytes";
+    pub const SOURCE: &str = "source";
+    pub const VERIFIED_AT: &str = "verified_at";
+    pub const VERSION: &str = "version";
+}
 
 /// Columns selected for an [`Artifact`], in [`row_to_artifact`] order.
-const ARTIFACT_COLUMNS: &str =
-    "id, key, source, digest, media_type, version, size_bytes, downloaded_at, verified_at";
+const ARTIFACT_COLUMNS: Columns = Columns::new(&[
+    col::ID,
+    col::KEY,
+    col::SOURCE,
+    col::DIGEST,
+    col::MEDIA_TYPE,
+    col::VERSION,
+    col::SIZE_BYTES,
+    col::DOWNLOADED_AT,
+    col::VERIFIED_AT,
+]);
 
 /// A stored version of an artifact. Every row maps to a materialized blob.
 #[derive(Debug, Clone, PartialEq)]
@@ -230,15 +254,15 @@ impl ArtifactRepository {
     ) -> Result<Page<Artifact>> {
         let paginator = Paginator::new(query, Order::Desc)?;
         let column = match sort {
-            VersionSort::DownloadedAt => "downloaded_at",
-            VersionSort::SizeBytes => "size_bytes",
+            VersionSort::DownloadedAt => col::DOWNLOADED_AT,
+            VersionSort::SizeBytes => col::SIZE_BYTES,
         };
         let keyset = Keyset::with_id(column, paginator.query_order());
 
         let mut filters = Filters::new();
-        filters.eq_text("key", Some(key));
-        filters.eq_text("media_type", media_type);
-        filters.eq_text("version", version);
+        filters.eq_text(col::KEY, Some(key));
+        filters.eq_text(col::MEDIA_TYPE, media_type);
+        filters.eq_text(col::VERSION, version);
         filters.keyset(&keyset, &paginator);
 
         let sql = format!(
@@ -298,21 +322,21 @@ impl ArtifactRepository {
 
 fn row_to_artifact(row: &Row) -> Result<Artifact> {
     Ok(Artifact {
-        id: DbId::from(req_int(row, 0)?),
-        key: req_text(row, 1)?,
-        source: req_text(row, 2)?,
-        digest: req_text(row, 3)?,
-        media_type: opt_text(row, 4)?,
-        version: opt_text(row, 5)?,
-        size_bytes: req_u64(row, 6)?,
-        downloaded_at: req_ts(row, 7)?,
-        verified_at: opt_ts(row, 8)?,
+        id: ARTIFACT_COLUMNS.extract(row, col::ID, req_db_id)?,
+        key: ARTIFACT_COLUMNS.extract(row, col::KEY, req_text)?,
+        source: ARTIFACT_COLUMNS.extract(row, col::SOURCE, req_text)?,
+        digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST, req_text)?,
+        media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE, opt_text)?,
+        version: ARTIFACT_COLUMNS.extract(row, col::VERSION, opt_text)?,
+        size_bytes: ARTIFACT_COLUMNS.extract(row, col::SIZE_BYTES, req_u64)?,
+        downloaded_at: ARTIFACT_COLUMNS.extract(row, col::DOWNLOADED_AT, req_ts)?,
+        verified_at: ARTIFACT_COLUMNS.extract(row, col::VERIFIED_AT, opt_ts)?,
     })
 }
 
 fn row_to_artifact_key(row: &Row) -> Result<ArtifactKey> {
     Ok(ArtifactKey {
         latest: row_to_artifact(row)?,
-        version_count: req_u64(row, 9)?,
+        version_count: req_u64(row, ARTIFACT_COLUMNS.len())?,
     })
 }

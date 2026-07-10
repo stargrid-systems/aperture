@@ -6,6 +6,7 @@ use turso::transaction::Transaction;
 use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
 
+use crate::columns::Columns;
 use crate::error::{Result, StorageError, database};
 use crate::id::DbId;
 use crate::macros::sql;
@@ -15,24 +16,50 @@ use crate::row::{
     req_db_id, req_int, req_text, req_ts, req_u64, text_ref_or_null, uuid_or_null,
 };
 
-/// Columns selected for an [`Event`], in [`row_to_event`] order.
-const EVENT_COLUMNS: &str =
-    "id, span_id, level, target, message, timestamp, file, line, boot_id, fields";
-
-/// Columns selected for a [`Span`], in [`row_to_span`] order.
-const SPAN_COLUMNS: &str =
-    "id, parent_id, name, level, target, file, line, started_at, ended_at, fields";
-
 mod col {
+    pub const BOOT_ID: &str = "boot_id";
+    pub const ENDED_AT: &str = "ended_at";
     pub const FIELDS: &str = "fields";
+    pub const FILE: &str = "file";
+    pub const ID: &str = "id";
     pub const LEVEL: &str = "level";
+    pub const LINE: &str = "line";
     pub const MESSAGE: &str = "message";
+    pub const NAME: &str = "name";
     pub const PARENT_ID: &str = "parent_id";
     pub const SPAN_ID: &str = "span_id";
     pub const STARTED_AT: &str = "started_at";
     pub const TARGET: &str = "target";
     pub const TIMESTAMP: &str = "timestamp";
 }
+
+/// Columns selected for an [`Event`], in [`row_to_event`] order.
+const EVENT_COLUMNS: Columns = Columns::new(&[
+    col::ID,
+    col::SPAN_ID,
+    col::LEVEL,
+    col::TARGET,
+    col::MESSAGE,
+    col::TIMESTAMP,
+    col::FILE,
+    col::LINE,
+    col::BOOT_ID,
+    col::FIELDS,
+]);
+
+/// Columns selected for a [`Span`], in [`row_to_span`] order.
+const SPAN_COLUMNS: Columns = Columns::new(&[
+    col::ID,
+    col::PARENT_ID,
+    col::NAME,
+    col::LEVEL,
+    col::TARGET,
+    col::FILE,
+    col::LINE,
+    col::STARTED_AT,
+    col::ENDED_AT,
+    col::FIELDS,
+]);
 
 /// SQL shared between [`LogRepository`] and [`LogBatch`] for span inserts.
 /// File-level because the parameter layout is a shared assumption.
@@ -630,30 +657,30 @@ impl<'conn> LogBatch<'conn> {
 
 fn row_to_event(row: &turso::Row) -> Result<Event> {
     Ok(Event {
-        id: req_db_id(row, 0)?,
-        span_id: opt_db_id(row, 1)?,
-        level: Level::from_db(req_int(row, 2)?)?,
-        target: req_text(row, 3)?,
-        message: opt_text(row, 4)?,
-        timestamp: req_ts(row, 5)?,
-        file: opt_text(row, 6)?,
-        line: opt_u32(row, 7)?,
-        boot_id: opt_uuid(row, 8)?,
-        fields: json_map(row, 9)?,
+        id: EVENT_COLUMNS.extract(row, col::ID, req_db_id)?,
+        span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID, opt_db_id)?,
+        level: Level::from_db(EVENT_COLUMNS.extract(row, col::LEVEL, req_int)?)?,
+        target: EVENT_COLUMNS.extract(row, col::TARGET, req_text)?,
+        message: EVENT_COLUMNS.extract(row, col::MESSAGE, opt_text)?,
+        timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP, req_ts)?,
+        file: EVENT_COLUMNS.extract(row, col::FILE, opt_text)?,
+        line: EVENT_COLUMNS.extract(row, col::LINE, opt_u32)?,
+        boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID, opt_uuid)?,
+        fields: EVENT_COLUMNS.extract(row, col::FIELDS, json_map)?,
     })
 }
 
 fn row_to_span(row: &turso::Row) -> Result<Span> {
     Ok(Span {
-        id: req_db_id(row, 0)?,
-        parent_id: opt_db_id(row, 1)?,
-        name: req_text(row, 2)?,
-        level: Level::from_db(req_int(row, 3)?)?,
-        target: req_text(row, 4)?,
-        file: opt_text(row, 5)?,
-        line: opt_u32(row, 6)?,
-        started_at: req_ts(row, 7)?,
-        ended_at: opt_ts(row, 8)?,
-        fields: json_map(row, 9)?,
+        id: SPAN_COLUMNS.extract(row, col::ID, req_db_id)?,
+        parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID, opt_db_id)?,
+        name: SPAN_COLUMNS.extract(row, col::NAME, req_text)?,
+        level: Level::from_db(SPAN_COLUMNS.extract(row, col::LEVEL, req_int)?)?,
+        target: SPAN_COLUMNS.extract(row, col::TARGET, req_text)?,
+        file: SPAN_COLUMNS.extract(row, col::FILE, opt_text)?,
+        line: SPAN_COLUMNS.extract(row, col::LINE, opt_u32)?,
+        started_at: SPAN_COLUMNS.extract(row, col::STARTED_AT, req_ts)?,
+        ended_at: SPAN_COLUMNS.extract(row, col::ENDED_AT, opt_ts)?,
+        fields: SPAN_COLUMNS.extract(row, col::FIELDS, json_map)?,
     })
 }

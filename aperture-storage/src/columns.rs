@@ -1,0 +1,91 @@
+//! Compile-time validated column lists for SELECT construction and index
+//! lookup.
+
+use std::fmt;
+
+/// A set of column names for a SELECT clause, validated at construction time.
+///
+/// All names must be simple lowercase ASCII identifiers (letters, digits,
+/// underscore). This guarantees they are safe to interpolate into SQL without
+/// quoting. Use [`Columns::index_of`] to look up a column's position by name,
+/// so row decoders stay in sync if columns are reordered.
+pub(crate) struct Columns {
+    names: &'static [&'static str],
+}
+
+impl Columns {
+    /// Creates a column list from a slice of static strings, validating that
+    /// each is a simple lowercase ASCII identifier. Panics at compile time if
+    /// any name is invalid.
+    pub const fn new(names: &'static [&'static str]) -> Self {
+        let mut i = 0;
+        while i < names.len() {
+            let bytes = names[i].as_bytes();
+            assert!(!bytes.is_empty(), "column name must not be empty");
+            let mut j = 0;
+            while j < bytes.len() {
+                let b = bytes[j];
+                assert!(
+                    (b >= b'a' && b <= b'z') || (b >= b'0' && b <= b'9') || b == b'_',
+                    "column name must be lowercase ASCII identifier"
+                );
+                j += 1;
+            }
+            i += 1;
+        }
+        Self { names }
+    }
+
+    /// Returns the index of `name` in the column list. Panics if not found.
+    pub const fn index_of(&self, name: &str) -> usize {
+        let target = name.as_bytes();
+        let mut i = 0;
+        while i < self.names.len() {
+            if str_eq(self.names[i].as_bytes(), target) {
+                return i;
+            }
+            i += 1;
+        }
+        panic!("column not found in column list");
+    }
+
+    /// Looks up `name` and applies `f` to the row at that index.
+    pub fn extract<R, F, T>(&self, row: &R, name: &str, f: F) -> T
+    where
+        F: FnOnce(&R, usize) -> T,
+    {
+        f(row, self.index_of(name))
+    }
+
+    pub const fn len(&self) -> usize {
+        self.names.len()
+    }
+}
+
+const fn str_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+impl fmt::Display for Columns {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for name in self.names {
+            if !first {
+                f.write_str(", ")?;
+            }
+            first = false;
+            f.write_str(name)?;
+        }
+        Ok(())
+    }
+}

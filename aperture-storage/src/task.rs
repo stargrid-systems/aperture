@@ -11,6 +11,7 @@ use std::result::Result as StdResult;
 use jiff::Timestamp;
 use turso::{Connection, Row, Value, params_from_iter};
 
+use crate::columns::Columns;
 use crate::error::{Result, StorageError, database};
 use crate::id::DbId;
 use crate::macros::sql;
@@ -19,15 +20,32 @@ use crate::row::{
     int_or_null, opt_db_id, opt_text, opt_ts, req_db_id, req_text, req_ts, text_ref_or_null,
 };
 
-/// Columns selected for a [`TaskInvocation`], in [`row_to_task`] order.
-const TASK_COLUMNS: &str =
-    "id, kind, parent_id, status, input, output, error, created_at, started_at, finished_at";
-
 mod col {
+    pub const CREATED_AT: &str = "created_at";
+    pub const ERROR: &str = "error";
+    pub const FINISHED_AT: &str = "finished_at";
+    pub const ID: &str = "id";
+    pub const INPUT: &str = "input";
     pub const KIND: &str = "kind";
+    pub const OUTPUT: &str = "output";
     pub const PARENT_ID: &str = "parent_id";
+    pub const STARTED_AT: &str = "started_at";
     pub const STATUS: &str = "status";
 }
+
+/// Columns selected for a [`TaskInvocation`], in [`row_to_task`] order.
+const TASK_COLUMNS: Columns = Columns::new(&[
+    col::ID,
+    col::KIND,
+    col::PARENT_ID,
+    col::STATUS,
+    col::INPUT,
+    col::OUTPUT,
+    col::ERROR,
+    col::CREATED_AT,
+    col::STARTED_AT,
+    col::FINISHED_AT,
+]);
 
 /// Lifecycle state of a single task invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,8 +149,8 @@ impl JsonField {
     /// interpolate.
     fn column(self) -> &'static str {
         match self {
-            Self::Input => "input",
-            Self::Output => "output",
+            Self::Input => col::INPUT,
+            Self::Output => col::OUTPUT,
         }
     }
 }
@@ -389,7 +407,7 @@ impl TaskRepository {
         query: &ListQuery,
     ) -> Result<Page<TaskInvocation>> {
         let paginator = Paginator::new(query, Order::Desc)?;
-        let keyset = Keyset::unique("id", paginator.query_order());
+        let keyset = Keyset::unique(col::ID, paginator.query_order());
 
         let mut filters = Filters::new();
         match status {
@@ -490,16 +508,16 @@ fn db_values(statuses: &[TaskStatus]) -> Vec<&'static str> {
 
 fn row_to_task(row: &Row) -> Result<TaskInvocation> {
     Ok(TaskInvocation {
-        id: req_db_id(row, 0)?,
-        kind: req_text(row, 1)?,
-        parent_id: opt_db_id(row, 2)?,
-        status: TaskStatus::from_db(&req_text(row, 3)?)?,
-        input: req_text(row, 4)?,
-        output: opt_text(row, 5)?,
-        error: opt_text(row, 6)?,
-        created_at: req_ts(row, 7)?,
-        started_at: opt_ts(row, 8)?,
-        finished_at: opt_ts(row, 9)?,
+        id: TASK_COLUMNS.extract(row, col::ID, req_db_id)?,
+        kind: TASK_COLUMNS.extract(row, col::KIND, req_text)?,
+        parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID, opt_db_id)?,
+        status: TaskStatus::from_db(&TASK_COLUMNS.extract(row, col::STATUS, req_text)?)?,
+        input: TASK_COLUMNS.extract(row, col::INPUT, req_text)?,
+        output: TASK_COLUMNS.extract(row, col::OUTPUT, opt_text)?,
+        error: TASK_COLUMNS.extract(row, col::ERROR, opt_text)?,
+        created_at: TASK_COLUMNS.extract(row, col::CREATED_AT, req_ts)?,
+        started_at: TASK_COLUMNS.extract(row, col::STARTED_AT, opt_ts)?,
+        finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT, opt_ts)?,
     })
 }
 
