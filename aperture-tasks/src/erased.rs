@@ -115,7 +115,7 @@ impl<T: TaskDefinition> ErasedDefinition for T {
                 });
                 ctx.complete(outcome).await;
             }
-            .instrument(tracing::info_span!("task", kind, id)),
+            .instrument(tracing::info_span!("task", kind, id = id.get())),
         )
     }
 }

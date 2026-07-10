@@ -174,11 +174,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "jiff",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "tracing",
  "turso",
+ "utoipa",
  "uuid",
 ]
 

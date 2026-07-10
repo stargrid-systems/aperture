@@ -12,6 +12,7 @@ use turso::{Builder, Connection, Database};
 pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
 use self::error::database;
 pub use self::error::{Result, StorageError};
+pub use self::id::DbId;
 pub use self::log::{
     BootInfo, Event, EventFilter, EventRecord, Level, LogBatch, LogRepository, Span, SpanFilter,
     SpanParentFilter, SpanRecord,
@@ -25,6 +26,7 @@ pub use self::task::{
 
 mod artifact;
 mod error;
+mod id;
 mod log;
 mod macros;
 mod migration;

@@ -1,4 +1,4 @@
-use aperture_storage::{EventFilter, SpanFilter, SpanParentFilter};
+use aperture_storage::{DbId, EventFilter, SpanFilter, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -21,10 +21,6 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_span))
 }
 
-fn parse_id(s: &str) -> Result<i64, ApiError> {
-    s.parse().map_err(|_| ApiError::BAD_REQUEST)
-}
-
 /// Lists log events with optional filtering.
 #[utoipa::path(
     get,
@@ -39,12 +35,11 @@ async fn list_logs(
 ) -> Result<Json<Page<LogEventResponse>>, ApiError> {
     let query = params.to_query();
     let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
-    let span_id = params.span_id.as_deref().map(parse_id).transpose()?;
     let filter = EventFilter {
         min_level: params.min_level.map(Into::into),
         target: params.target,
         query: params.q,
-        span_id,
+        span_id: params.span_id,
         since: params.since,
         until: params.until,
         fields,
@@ -101,7 +96,7 @@ async fn list_spans(
     let query = params.to_query();
     let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
     let parent = match (params.parent_id, params.parent_null) {
-        (Some(id), _) => SpanParentFilter::ChildrenOf(parse_id(&id)?),
+        (Some(id), _) => SpanParentFilter::ChildrenOf(id),
         (None, Some(true)) => SpanParentFilter::RootOnly,
         (None, _) => SpanParentFilter::default(),
     };
@@ -123,7 +118,7 @@ async fn list_spans(
     get,
     path = "/spans/{id}",
     operation_id = operation_ids::GET_SPAN,
-    params(("id" = String, Path, description = "Span id")),
+    params(("id" = DbId, Path, description = "Span id")),
     responses(
         (status = 200, description = "Span with events", body = LogSpanDetailResponse),
         (status = 404, description = "Unknown span"),
@@ -131,9 +126,8 @@ async fn list_spans(
 )]
 async fn get_span(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<DbId>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
-    let id = parse_id(&id)?;
     let logs = state.logs()?;
     let span = logs.get_span(id).await?;
     let span = span.ok_or(ApiError::NOT_FOUND)?;

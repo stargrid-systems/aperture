@@ -5,7 +5,7 @@
 //! the system error for operating the task system: resolving kinds, encoding
 //! and decoding payloads, and talking to storage.
 
-use aperture_storage::StorageError;
+use aperture_storage::{DbId, StorageError};
 
 /// The outcome of a task body that did not succeed.
 ///
@@ -46,10 +46,10 @@ pub enum TaskError {
     Storage(#[from] StorageError),
     /// The referenced task exists but has already finished.
     #[error("task {0} has already finished")]
-    AlreadySettled(i64),
+    AlreadySettled(DbId),
     /// The referenced task does not exist.
     #[error("task {0} not found")]
-    NotFound(i64),
+    NotFound(DbId),
     /// The task body did not succeed.
     #[error(transparent)]
     Run(#[from] RunError),

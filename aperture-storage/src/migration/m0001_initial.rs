@@ -35,7 +35,9 @@ pub(super) const SQL: &str = sql!(
 
     CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,
-        parent_id INTEGER REFERENCES log_spans (id),
+        tracing_id INTEGER NOT NULL,
+        parent_tracing_id INTEGER,
+        boot_id TEXT,
         name TEXT NOT NULL,
         level INTEGER NOT NULL,
         target TEXT NOT NULL,
@@ -45,13 +47,14 @@ pub(super) const SQL: &str = sql!(
         ended_at INTEGER,
         fields BLOB
     ) STRICT;
-    CREATE INDEX idx_log_spans_parent ON log_spans (parent_id);
+    CREATE INDEX idx_log_spans_tracing ON log_spans (tracing_id, boot_id);
+    CREATE INDEX idx_log_spans_parent_tracing ON log_spans (parent_tracing_id);
     CREATE INDEX idx_log_spans_started ON log_spans (started_at);
     CREATE INDEX idx_log_spans_target ON log_spans (target);
 
     CREATE TABLE log_events (
         id INTEGER PRIMARY KEY,
-        span_id INTEGER REFERENCES log_spans (id),
+        span_tracing_id INTEGER,
         level INTEGER NOT NULL,
         target TEXT NOT NULL,
         message TEXT,
@@ -64,6 +67,40 @@ pub(super) const SQL: &str = sql!(
     CREATE INDEX idx_log_events_timestamp ON log_events (timestamp);
     CREATE INDEX idx_log_events_level ON log_events (level);
     CREATE INDEX idx_log_events_target ON log_events (target);
-    CREATE INDEX idx_log_events_span_id ON log_events (span_id);
+    CREATE INDEX idx_log_events_span_tracing ON log_events (span_tracing_id);
     CREATE INDEX idx_log_events_boot_id ON log_events (boot_id);
+
+    CREATE VIEW log_spans_resolved AS
+    SELECT
+        child.id,
+        parent.id AS parent_id,
+        child.name,
+        child.level,
+        child.target,
+        child.file,
+        child.line,
+        child.started_at,
+        child.ended_at,
+        json(child.fields) AS fields
+    FROM log_spans child
+    LEFT JOIN log_spans parent
+        ON child.parent_tracing_id = parent.tracing_id
+        AND child.boot_id = parent.boot_id;
+
+    CREATE VIEW log_events_resolved AS
+    SELECT
+        log_events.id,
+        span.id AS span_id,
+        log_events.level,
+        log_events.target,
+        log_events.message,
+        log_events.timestamp,
+        log_events.file,
+        log_events.line,
+        log_events.boot_id,
+        json(log_events.fields) AS fields
+    FROM log_events
+    LEFT JOIN log_spans span
+        ON log_events.span_tracing_id = span.tracing_id
+        AND log_events.boot_id = span.boot_id;
 );

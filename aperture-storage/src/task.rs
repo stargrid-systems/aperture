@@ -12,6 +12,7 @@ use jiff::Timestamp;
 use turso::{Connection, Row, Value, params_from_iter};
 
 use crate::error::{Result, StorageError, database};
+use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::row::{
@@ -78,11 +79,11 @@ impl TaskStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskInvocation {
     /// Store-assigned id.
-    pub id: i64,
+    pub id: DbId,
     /// The kind of task, matching a registered definition.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<i64>,
+    pub parent_id: Option<DbId>,
     /// The lifecycle state.
     pub status: TaskStatus,
     /// JSON-encoded input the task was created with.
@@ -223,7 +224,7 @@ pub enum ParentFilter {
     /// Only top-level invocations, with no parent.
     Root,
     /// Only the children of one invocation.
-    Of(i64),
+    Of(DbId),
 }
 
 /// Repository over the task catalog.
@@ -242,10 +243,10 @@ impl TaskRepository {
     pub async fn create(
         &self,
         kind: &str,
-        parent_id: Option<i64>,
+        parent_id: Option<DbId>,
         input: &str,
         created_at: Timestamp,
-    ) -> Result<i64> {
+    ) -> Result<DbId> {
         let params = params_from_iter([
             Value::Text(kind.to_owned()),
             int_or_null(parent_id),
@@ -263,7 +264,7 @@ impl TaskRepository {
             )
             .await
             .map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+        Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
     /// Records a new invocation already in the [`TaskStatus::Running`] state
@@ -274,10 +275,10 @@ impl TaskRepository {
     pub async fn create_running(
         &self,
         kind: &str,
-        parent_id: Option<i64>,
+        parent_id: Option<DbId>,
         input: &str,
         started_at: Timestamp,
-    ) -> Result<i64> {
+    ) -> Result<DbId> {
         let params = params_from_iter([
             Value::Text(kind.to_owned()),
             int_or_null(parent_id),
@@ -296,19 +297,19 @@ impl TaskRepository {
             )
             .await
             .map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+        Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
     /// Marks the invocation with `id` as running.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn mark_running(&self, id: i64, started_at: Timestamp) -> Result<()> {
+    pub async fn mark_running(&self, id: DbId, started_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
                 sql!(UPDATE tasks SET status = ?1, started_at = ?2 WHERE id = ?3),
                 params_from_iter([
                     Value::Text(TaskStatus::Running.as_db().to_owned()),
                     Value::Integer(started_at.as_millisecond()),
-                    Value::Integer(id),
+                    Value::Integer(id.get()),
                 ]),
             )
             .await
@@ -325,7 +326,7 @@ impl TaskRepository {
     #[tracing::instrument(level = "info", skip(self, output, error))]
     pub async fn finish(
         &self,
-        id: i64,
+        id: DbId,
         status: TaskStatus,
         finished_at: Timestamp,
         output: Option<&str>,
@@ -343,7 +344,7 @@ impl TaskRepository {
                     Value::Integer(finished_at.as_millisecond()),
                     text_ref_or_null(output),
                     text_ref_or_null(error),
-                    Value::Integer(id),
+                    Value::Integer(id.get()),
                 ]),
             )
             .await
@@ -353,14 +354,14 @@ impl TaskRepository {
 
     /// Returns the invocation with `id`, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: i64) -> Result<Option<TaskInvocation>> {
+    pub async fn get(&self, id: DbId) -> Result<Option<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE id = ?1),
             cols = TASK_COLUMNS
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Integer(id)]))
+            .query(&sql, params_from_iter([Value::Integer(id.get())]))
             .await
             .map_err(database)?;
         match rows.next().await.map_err(database)? {
@@ -398,7 +399,7 @@ impl TaskRepository {
         filters.eq_text("kind", kind);
         match parent {
             Some(ParentFilter::Root) => filters.raw("parent_id IS NULL"),
-            Some(ParentFilter::Of(id)) => filters.eq_int("parent_id", Some(id)),
+            Some(ParentFilter::Of(id)) => filters.eq_int("parent_id", Some(id.get())),
             None => {}
         }
         for filter in json {
@@ -423,19 +424,19 @@ impl TaskRepository {
         while let Some(row) = rows.next().await.map_err(database)? {
             items.push(row_to_task(&row)?);
         }
-        Ok(paginator.finish(items, |task| (CursorValue::Int(task.id), task.id)))
+        Ok(paginator.finish(items, |task| (CursorValue::Int(task.id.get()), task.id.get())))
     }
 
     /// Lists the children of `parent_id`, oldest first.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn children(&self, parent_id: i64) -> Result<Vec<TaskInvocation>> {
+    pub async fn children(&self, parent_id: DbId) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE parent_id = ?1 ORDER BY id),
             cols = TASK_COLUMNS,
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Integer(parent_id)]))
+            .query(&sql, params_from_iter([Value::Integer(parent_id.get())]))
             .await
             .map_err(database)?;
         let mut tasks = Vec::new();
@@ -478,9 +479,9 @@ fn db_values(statuses: &[TaskStatus]) -> Vec<&'static str> {
 
 fn row_to_task(row: &Row) -> Result<TaskInvocation> {
     Ok(TaskInvocation {
-        id: req_int(row, 0)?,
+        id: DbId::from(req_int(row, 0)?),
         kind: req_text(row, 1)?,
-        parent_id: opt_int(row, 2)?,
+        parent_id: opt_int(row, 2)?.map(DbId::from),
         status: TaskStatus::from_db(&req_text(row, 3)?)?,
         input: req_text(row, 4)?,
         output: opt_text(row, 5)?,

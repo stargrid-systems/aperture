@@ -10,6 +10,7 @@ use jiff::Timestamp;
 use turso::{Connection, Row, Value, params_from_iter};
 
 use crate::error::{Result, database};
+use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::row::{opt_text, opt_ts, req_int, req_text, req_ts, req_u64, text_or_null, ts_or_null};
@@ -22,7 +23,7 @@ const ARTIFACT_COLUMNS: &str =
 #[derive(Debug, Clone, PartialEq)]
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
-    pub id: i64,
+    pub id: DbId,
     /// Logical key, for example `spectra` or `tool/avrdude`.
     pub key: String,
     /// Where it came from (an image reference or a URL).
@@ -209,7 +210,7 @@ impl ArtifactRepository {
             items.push(row_to_artifact_key(&row)?);
         }
         Ok(paginator.finish(items, |key| {
-            (CursorValue::Text(key.latest.key.clone()), key.latest.id)
+            (CursorValue::Text(key.latest.key.clone()), key.latest.id.get())
         }))
     }
 
@@ -259,7 +260,7 @@ impl ArtifactRepository {
                 VersionSort::DownloadedAt => artifact.downloaded_at.as_millisecond(),
                 VersionSort::SizeBytes => artifact.size_bytes as i64,
             };
-            (CursorValue::Int(value), artifact.id)
+            (CursorValue::Int(value), artifact.id.get())
         }))
     }
 
@@ -294,7 +295,7 @@ impl ArtifactRepository {
 
 fn row_to_artifact(row: &Row) -> Result<Artifact> {
     Ok(Artifact {
-        id: req_int(row, 0)?,
+        id: DbId::from(req_int(row, 0)?),
         key: req_text(row, 1)?,
         source: req_text(row, 2)?,
         digest: req_text(row, 3)?,

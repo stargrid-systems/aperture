@@ -25,9 +25,11 @@ async fn seeded_storage() -> Storage {
     let error_fields = json_map(r#"{"status":500}"#);
 
     let mut batch = logs.batch().await.unwrap();
-    let span_id = batch
+    batch
         .insert_span(SpanRecord {
-            parent_id: None,
+            tracing_id: 1,
+            parent_tracing_id: None,
+            boot_id: "test-boot",
             name: "download",
             level: Level::Info,
             target: "aperture_artifacts::fetch",
@@ -41,14 +43,14 @@ async fn seeded_storage() -> Storage {
 
     batch
         .insert_event(EventRecord {
-            span_id: Some(span_id),
+            span_tracing_id: Some(1),
             level: Level::Info,
             target: "aperture_artifacts::fetch",
             message: Some("starting download"),
             timestamp: at(1_100),
             file: Some("src/fetch.rs"),
             line: Some(10),
-            boot_id: None,
+            boot_id: Some("test-boot"),
             fields: Some(&event_fields),
         })
         .await
@@ -56,14 +58,14 @@ async fn seeded_storage() -> Storage {
 
     batch
         .insert_event(EventRecord {
-            span_id: Some(span_id),
+            span_tracing_id: Some(1),
             level: Level::Warn,
             target: "aperture_artifacts::fetch",
             message: Some("retrying download after timeout"),
             timestamp: at(1_200),
             file: Some("src/fetch.rs"),
             line: Some(25),
-            boot_id: None,
+            boot_id: Some("test-boot"),
             fields: Some(&retry_fields),
         })
         .await
@@ -71,20 +73,20 @@ async fn seeded_storage() -> Storage {
 
     batch
         .insert_event(EventRecord {
-            span_id: None,
+            span_tracing_id: None,
             level: Level::Error,
             target: "aperture_http::error",
             message: Some("artifact request failed"),
             timestamp: at(1_300),
             file: None,
             line: None,
-            boot_id: None,
+            boot_id: Some("test-boot"),
             fields: Some(&error_fields),
         })
         .await
         .unwrap();
 
-    batch.close_span(span_id, at(1_400)).await.unwrap();
+    batch.close_span(1, "test-boot", at(1_400)).await.unwrap();
     batch.commit().await.unwrap();
 
     storage
@@ -450,7 +452,7 @@ async fn paginate_events() {
     for i in 0..5 {
         batch
             .insert_event(EventRecord {
-                span_id: None,
+                span_tracing_id: None,
                 level: Level::Info,
                 target: "test",
                 message: Some(&format!("event {i}")),
@@ -520,9 +522,11 @@ async fn nested_spans_preserve_parent_child() {
     let logs = storage.logs().unwrap();
 
     let mut batch = logs.batch().await.unwrap();
-    let parent_id = batch
+    batch
         .insert_span(SpanRecord {
-            parent_id: None,
+            tracing_id: 1,
+            parent_tracing_id: None,
+            boot_id: "test",
             name: "parent",
             level: Level::Info,
             target: "aperture::test",
@@ -534,9 +538,11 @@ async fn nested_spans_preserve_parent_child() {
         .await
         .unwrap();
 
-    let child_id = batch
+    batch
         .insert_span(SpanRecord {
-            parent_id: Some(parent_id),
+            tracing_id: 2,
+            parent_tracing_id: Some(1),
+            boot_id: "test",
             name: "child",
             level: Level::Debug,
             target: "aperture::test",
@@ -548,9 +554,11 @@ async fn nested_spans_preserve_parent_child() {
         .await
         .unwrap();
 
-    let grandchild_id = batch
+    batch
         .insert_span(SpanRecord {
-            parent_id: Some(child_id),
+            tracing_id: 3,
+            parent_tracing_id: Some(2),
+            boot_id: "test",
             name: "grandchild",
             level: Level::Trace,
             target: "aperture::test",
@@ -563,13 +571,18 @@ async fn nested_spans_preserve_parent_child() {
         .unwrap();
     batch.commit().await.unwrap();
 
-    assert_eq!(grandchild_id, child_id + 1);
+    let page = logs
+        .list_spans(&SpanFilter::default(), &ListQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 3);
 
-    let child = logs.get_span(child_id).await.unwrap().unwrap();
-    assert_eq!(child.parent_id, Some(parent_id));
+    let parent = page.items.iter().find(|s| s.name == "parent").unwrap();
+    let child = page.items.iter().find(|s| s.name == "child").unwrap();
+    let grandchild = page.items.iter().find(|s| s.name == "grandchild").unwrap();
 
-    let grandchild = logs.get_span(grandchild_id).await.unwrap().unwrap();
-    assert_eq!(grandchild.parent_id, Some(child_id));
+    assert_eq!(child.parent_id, Some(parent.id));
+    assert_eq!(grandchild.parent_id, Some(child.id));
 
     let roots = logs
         .list_spans(
@@ -587,7 +600,7 @@ async fn nested_spans_preserve_parent_child() {
     let children = logs
         .list_spans(
             &SpanFilter {
-                parent: SpanParentFilter::ChildrenOf(parent_id),
+                parent: SpanParentFilter::ChildrenOf(parent.id),
                 ..Default::default()
             },
             &ListQuery::default(),
@@ -600,7 +613,7 @@ async fn nested_spans_preserve_parent_child() {
     let grandchildren = logs
         .list_spans(
             &SpanFilter {
-                parent: SpanParentFilter::ChildrenOf(child_id),
+                parent: SpanParentFilter::ChildrenOf(child.id),
                 ..Default::default()
             },
             &ListQuery::default(),
@@ -622,7 +635,7 @@ async fn list_boots_groups_by_boot_id() {
     let mut batch = logs.batch().await.unwrap();
     batch
         .insert_event(EventRecord {
-            span_id: None,
+            span_tracing_id: None,
             level: Level::Info,
             target: "aperture",
             message: Some("first boot start"),
@@ -636,7 +649,7 @@ async fn list_boots_groups_by_boot_id() {
         .unwrap();
     batch
         .insert_event(EventRecord {
-            span_id: None,
+            span_tracing_id: None,
             level: Level::Info,
             target: "aperture",
             message: Some("first boot end"),
@@ -650,7 +663,7 @@ async fn list_boots_groups_by_boot_id() {
         .unwrap();
     batch
         .insert_event(EventRecord {
-            span_id: None,
+            span_tracing_id: None,
             level: Level::Info,
             target: "aperture",
             message: Some("second boot start"),

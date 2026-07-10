@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
+use aperture_storage::DbId;
 use aperture_tasks::{
     JsonField, JsonFilter, JsonPath, ParentFilter, Progress, ProgressMessage, StatusFilter,
     TaskDescriptor, TaskInvocation, TaskStatus,
@@ -13,7 +14,6 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::dto::{OrderParam, Page};
-use crate::error::ApiError;
 
 /// Lifecycle state of a task invocation.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
@@ -89,11 +89,11 @@ impl From<Progress> for ProgressResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TaskResponse {
     /// Invocation id.
-    pub id: String,
+    pub id: DbId,
     /// The kind of task.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<String>,
+    pub parent_id: Option<DbId>,
     /// Lifecycle state.
     pub status: TaskStatusResponse,
     /// The input the task was created with.
@@ -117,9 +117,9 @@ impl TaskResponse {
     pub fn new(task: TaskInvocation, progress: Option<Progress>) -> Self {
         let running = matches!(task.status, TaskStatus::Pending | TaskStatus::Running);
         Self {
-            id: task.id.to_string(),
+            id: task.id,
             kind: task.kind,
-            parent_id: task.parent_id.map(|id| id.to_string()),
+            parent_id: task.parent_id,
             status: task.status.into(),
             input: parse_json(&task.input),
             output: task.output.as_deref().map(parse_json),
@@ -225,7 +225,7 @@ pub struct TaskListParams {
     /// Only tasks of this kind.
     pub kind: Option<String>,
     /// Only children of this task.
-    pub parent: Option<String>,
+    pub parent: Option<DbId>,
     /// Only top-level tasks (no parent). Ignored when `parent` is set.
     pub root: Option<bool>,
     /// Only tasks whose input JSON has `input_value` at this path, for example
@@ -249,14 +249,11 @@ impl TaskListParams {
         }
     }
 
-    pub fn parent_filter(&self) -> Result<Option<ParentFilter>, ApiError> {
-        match (&self.parent, self.root) {
-            (Some(id), _) => {
-                let id = id.parse().map_err(|_| ApiError::BAD_REQUEST)?;
-                Ok(Some(ParentFilter::Of(id)))
-            }
-            (None, Some(true)) => Ok(Some(ParentFilter::Root)),
-            _ => Ok(None),
+    pub fn parent_filter(&self) -> Option<ParentFilter> {
+        match (self.parent, self.root) {
+            (Some(id), _) => Some(ParentFilter::Of(id)),
+            (None, Some(true)) => Some(ParentFilter::Root),
+            _ => None,
         }
     }
 
@@ -293,7 +290,7 @@ fn parse_json(raw: &str) -> Value {
 /// progress to running tasks from `live` (keyed by task id).
 pub fn task_page(
     page: StoragePage<TaskInvocation>,
-    live: &HashMap<i64, Progress>,
+    live: &HashMap<DbId, Progress>,
 ) -> Page<TaskResponse> {
     Page::from_storage(page, |task| {
         let progress = live.get(&task.id).cloned();

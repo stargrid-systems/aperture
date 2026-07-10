@@ -1,11 +1,10 @@
 //! A `tracing_subscriber` layer that persists spans and events to the database.
 //!
 //! The layer captures tracing records and sends them through a bounded channel
-//! to a background task that batch-inserts them via [`LogRepository`] in a
+//! to a background writer that batch-inserts them via [`LogRepository`] in a
 //! single transaction per flush. If the channel is full, records are dropped
 //! and a synthetic warning event is inserted to record how many were lost.
 
-use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -283,8 +282,6 @@ async fn writer_task(
     mut shutdown: oneshot::Receiver<()>,
     boot_id: String,
 ) {
-    let mut span_ids: HashMap<u64, i64> = HashMap::new();
-    let mut span_fields: HashMap<u64, serde_json::Map<String, serde_json::Value>> = HashMap::new();
     let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
     let mut interval = interval(FLUSH_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -296,7 +293,7 @@ async fn writer_task(
                 while let Ok(record) = rx.try_recv() {
                     batch.push(record);
                 }
-                flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
+                flush(&repo, &mut batch, &dropped, &boot_id).await;
                 close_remaining_spans(&repo).await;
                 break;
             }
@@ -304,18 +301,18 @@ async fn writer_task(
                 match maybe_record {
                     Some(record) => batch.push(record),
                     None => {
-                        flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
+                        flush(&repo, &mut batch, &dropped, &boot_id).await;
                         close_remaining_spans(&repo).await;
                         break;
                     }
                 }
                 if batch.len() >= FLUSH_BATCH {
-                    flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
+                    flush(&repo, &mut batch, &dropped, &boot_id).await;
                 }
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    flush(&repo, &mut batch, &mut span_ids, &mut span_fields, &dropped, &boot_id).await;
+                    flush(&repo, &mut batch, &dropped, &boot_id).await;
                 }
             }
         }
@@ -355,17 +352,11 @@ where
 }
 
 /// Flushes a batch of records to the database in a single transaction.
+///
 /// Instrumented with [`FLUSH_SPAN_NAME`] so events emitted by the DB engine
 /// during the flush are filtered by [`DbLogLayer::on_event`].
 #[tracing::instrument(name = FLUSH_SPAN_NAME, level = "trace", skip_all)]
-async fn flush(
-    repo: &LogRepository,
-    batch: &mut Vec<Record>,
-    span_ids: &mut HashMap<u64, i64>,
-    span_fields: &mut HashMap<u64, serde_json::Map<String, serde_json::Value>>,
-    dropped: &AtomicU64,
-    boot_id: &str,
-) {
+async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU64, boot_id: &str) {
     let mut tx = match repo.batch().await {
         Ok(tx) => tx,
         Err(err) => {
@@ -376,12 +367,11 @@ async fn flush(
     for record in batch.drain(..) {
         match record {
             Record::SpanStart(s) => {
-                let parent_db_id = s
-                    .parent_tracing_id
-                    .and_then(|pid| span_ids.get(&pid).copied());
-                let result = tx
+                let _ = tx
                     .insert_span(SpanRecord {
-                        parent_id: parent_db_id,
+                        tracing_id: s.tracing_id,
+                        parent_tracing_id: s.parent_tracing_id,
+                        boot_id,
                         name: &s.name,
                         level: s.level,
                         target: &s.target,
@@ -391,35 +381,19 @@ async fn flush(
                         fields: s.fields.as_ref(),
                     })
                     .await;
-                if let Ok(db_id) = result {
-                    span_ids.insert(s.tracing_id, db_id);
-                    span_fields.insert(s.tracing_id, s.fields.unwrap_or_default());
-                }
             }
             Record::SpanFields(f) => {
-                if let Some(&db_id) = span_ids.get(&f.tracing_id)
-                    && let Some(current) = span_fields.get_mut(&f.tracing_id)
-                {
-                    for (k, v) in f.fields {
-                        current.insert(k, v);
-                    }
-                    let _ = tx.update_span_fields(db_id, current).await;
-                }
+                let _ = tx
+                    .update_span_fields(f.tracing_id, boot_id, &f.fields)
+                    .await;
             }
             Record::SpanEnd(s) => {
-                span_fields.remove(&s.tracing_id);
-                if let Some(&db_id) = span_ids.get(&s.tracing_id) {
-                    let _ = tx.close_span(db_id, s.ended_at).await;
-                    span_ids.remove(&s.tracing_id);
-                }
+                let _ = tx.close_span(s.tracing_id, boot_id, s.ended_at).await;
             }
             Record::Event(e) => {
-                let span_db_id = e
-                    .span_tracing_id
-                    .and_then(|sid| span_ids.get(&sid).copied());
                 let _ = tx
                     .insert_event(EventRecord {
-                        span_id: span_db_id,
+                        span_tracing_id: e.span_tracing_id,
                         level: e.level,
                         target: &e.target,
                         message: e.message.as_deref(),

@@ -1,7 +1,7 @@
 //! DTOs for the structured log endpoints.
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{BootInfo, Event, Level, Span};
+use aperture_storage::{BootInfo, DbId, Event, Level, Span};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
@@ -49,9 +49,9 @@ impl From<LevelResponse> for Level {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogEventResponse {
     /// Event id.
-    pub id: String,
+    pub id: DbId,
     /// Span this event belongs to, if any.
-    pub span_id: Option<String>,
+    pub span_id: Option<DbId>,
     /// Severity level.
     pub level: LevelResponse,
     /// Module path that emitted the event.
@@ -73,8 +73,8 @@ pub struct LogEventResponse {
 impl From<Event> for LogEventResponse {
     fn from(event: Event) -> Self {
         Self {
-            id: event.id.to_string(),
-            span_id: event.span_id.map(|id| id.to_string()),
+            id: event.id,
+            span_id: event.span_id,
             level: event.level.into(),
             target: event.target,
             message: event.message,
@@ -91,9 +91,9 @@ impl From<Event> for LogEventResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogSpanResponse {
     /// Span id.
-    pub id: String,
+    pub id: DbId,
     /// Parent span id, if any.
-    pub parent_id: Option<String>,
+    pub parent_id: Option<DbId>,
     /// Span name.
     pub name: String,
     /// Severity level.
@@ -115,8 +115,8 @@ pub struct LogSpanResponse {
 impl From<Span> for LogSpanResponse {
     fn from(span: Span) -> Self {
         Self {
-            id: span.id.to_string(),
-            parent_id: span.parent_id.map(|id| id.to_string()),
+            id: span.id,
+            parent_id: span.parent_id,
             name: span.name,
             level: span.level.into(),
             target: span.target,
@@ -159,7 +159,7 @@ pub struct LogListParams {
     /// Substring search across message and target.
     pub q: Option<String>,
     /// Only events belonging to this span.
-    pub span_id: Option<String>,
+    pub span_id: Option<DbId>,
     /// Only events at or after this time (RFC 3339).
     pub since: Option<Timestamp>,
     /// Only events at or before this time (RFC 3339).
@@ -201,7 +201,7 @@ pub struct LogSpanListParams {
     /// Only spans started at or before this time (RFC 3339).
     pub until: Option<Timestamp>,
     /// Only direct children of this span id.
-    pub parent_id: Option<String>,
+    pub parent_id: Option<DbId>,
     /// When true, only root spans (no parent) are returned.
     pub parent_null: Option<bool>,
     /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.

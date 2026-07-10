@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use aperture_storage::DbId;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -14,7 +15,7 @@ use crate::tasks::{TaskHandle, TasksInner};
 /// signal, a progress reporter, and the means to spawn sub-tasks under itself.
 #[derive(Clone)]
 pub struct TaskContext {
-    id: i64,
+        id: DbId,
     inner: Arc<TasksInner>,
     cancel: CancellationToken,
     progress: Arc<ProgressState>,
@@ -22,7 +23,7 @@ pub struct TaskContext {
 
 impl TaskContext {
     pub(crate) fn new(
-        id: i64,
+    id: DbId,
         inner: Arc<TasksInner>,
         cancel: CancellationToken,
         progress: Arc<ProgressState>,
@@ -36,7 +37,7 @@ impl TaskContext {
     }
 
     /// The id of the invocation this body is running.
-    pub fn id(&self) -> i64 {
+    pub fn id(&self) -> DbId {
         self.id
     }
 
