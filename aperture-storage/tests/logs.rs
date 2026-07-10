@@ -29,7 +29,7 @@ async fn seeded_storage() -> Storage {
         .insert_span(SpanRecord {
             tracing_id: 1,
             parent_tracing_id: None,
-            boot_id: "test-boot",
+            boot_id: uuid::Uuid::nil(),
             name: "download",
             level: Level::Info,
             target: "aperture_artifacts::fetch",
@@ -50,7 +50,7 @@ async fn seeded_storage() -> Storage {
             timestamp: at(1_100),
             file: Some("src/fetch.rs"),
             line: Some(10),
-            boot_id: Some("test-boot"),
+            boot_id: Some(uuid::Uuid::nil()),
             fields: Some(&event_fields),
         })
         .await
@@ -65,7 +65,7 @@ async fn seeded_storage() -> Storage {
             timestamp: at(1_200),
             file: Some("src/fetch.rs"),
             line: Some(25),
-            boot_id: Some("test-boot"),
+            boot_id: Some(uuid::Uuid::nil()),
             fields: Some(&retry_fields),
         })
         .await
@@ -80,13 +80,16 @@ async fn seeded_storage() -> Storage {
             timestamp: at(1_300),
             file: None,
             line: None,
-            boot_id: Some("test-boot"),
+            boot_id: Some(uuid::Uuid::nil()),
             fields: Some(&error_fields),
         })
         .await
         .unwrap();
 
-    batch.close_span(1, "test-boot", at(1_400)).await.unwrap();
+    batch
+        .close_span(1, uuid::Uuid::nil(), at(1_400))
+        .await
+        .unwrap();
     batch.commit().await.unwrap();
 
     storage
@@ -409,7 +412,7 @@ async fn record_dropped_inserts_synthetic_event() {
 
     let mut batch = logs.batch().await.unwrap();
     batch
-        .record_dropped(42, at(1_000), "00000000-0000-0000-0000-000000000001")
+        .record_dropped(42, at(1_000), uuid::Uuid::nil())
         .await
         .unwrap();
     batch.commit().await.unwrap();
@@ -526,7 +529,7 @@ async fn nested_spans_preserve_parent_child() {
         .insert_span(SpanRecord {
             tracing_id: 1,
             parent_tracing_id: None,
-            boot_id: "test",
+            boot_id: uuid::Uuid::nil(),
             name: "parent",
             level: Level::Info,
             target: "aperture::test",
@@ -542,7 +545,7 @@ async fn nested_spans_preserve_parent_child() {
         .insert_span(SpanRecord {
             tracing_id: 2,
             parent_tracing_id: Some(1),
-            boot_id: "test",
+            boot_id: uuid::Uuid::nil(),
             name: "child",
             level: Level::Debug,
             target: "aperture::test",
@@ -558,7 +561,7 @@ async fn nested_spans_preserve_parent_child() {
         .insert_span(SpanRecord {
             tracing_id: 3,
             parent_tracing_id: Some(2),
-            boot_id: "test",
+            boot_id: uuid::Uuid::nil(),
             name: "grandchild",
             level: Level::Trace,
             target: "aperture::test",
@@ -642,7 +645,7 @@ async fn list_boots_groups_by_boot_id() {
             timestamp: at(1_000),
             file: None,
             line: None,
-            boot_id: Some("00000000-0000-0000-0000-000000000001"),
+            boot_id: Some(a),
             fields: None,
         })
         .await
@@ -656,7 +659,7 @@ async fn list_boots_groups_by_boot_id() {
             timestamp: at(2_000),
             file: None,
             line: None,
-            boot_id: Some("00000000-0000-0000-0000-000000000001"),
+            boot_id: Some(a),
             fields: None,
         })
         .await
@@ -670,7 +673,7 @@ async fn list_boots_groups_by_boot_id() {
             timestamp: at(3_000),
             file: None,
             line: None,
-            boot_id: Some("00000000-0000-0000-0000-000000000002"),
+            boot_id: Some(b),
             fields: None,
         })
         .await

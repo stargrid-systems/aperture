@@ -210,7 +210,10 @@ impl ArtifactRepository {
             items.push(row_to_artifact_key(&row)?);
         }
         Ok(paginator.finish(items, |key| {
-            (CursorValue::Text(key.latest.key.clone()), key.latest.id.get())
+            (
+                CursorValue::Text(key.latest.key.clone()),
+                key.latest.id.get(),
+            )
         }))
     }
 

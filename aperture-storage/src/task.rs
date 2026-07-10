@@ -424,7 +424,9 @@ impl TaskRepository {
         while let Some(row) = rows.next().await.map_err(database)? {
             items.push(row_to_task(&row)?);
         }
-        Ok(paginator.finish(items, |task| (CursorValue::Int(task.id.get()), task.id.get())))
+        Ok(paginator.finish(items, |task| {
+            (CursorValue::Int(task.id.get()), task.id.get())
+        }))
     }
 
     /// Lists the children of `parent_id`, oldest first.

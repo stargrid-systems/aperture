@@ -60,6 +60,7 @@ impl Storage {
     pub async fn open(path: &str) -> Result<Self> {
         let db = Builder::new_local(path)
             .experimental_index_method(true)
+            .experimental_custom_types(true)
             .build()
             .await
             .map_err(database)?;

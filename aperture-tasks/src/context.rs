@@ -15,7 +15,7 @@ use crate::tasks::{TaskHandle, TasksInner};
 /// signal, a progress reporter, and the means to spawn sub-tasks under itself.
 #[derive(Clone)]
 pub struct TaskContext {
-        id: DbId,
+    id: DbId,
     inner: Arc<TasksInner>,
     cancel: CancellationToken,
     progress: Arc<ProgressState>,
@@ -23,7 +23,7 @@ pub struct TaskContext {
 
 impl TaskContext {
     pub(crate) fn new(
-    id: DbId,
+        id: DbId,
         inner: Arc<TasksInner>,
         cancel: CancellationToken,
         progress: Arc<ProgressState>,

@@ -1,4 +1,8 @@
 //! Migration 0001: artifact catalog, task invocations, and structured logs.
+//!
+//! `boot_id` is stored as `BLOB` rather than the turso `uuid` custom type
+//! because the latter is broken in STRICT tables as of turso 0.6. See
+//! <https://github.com/tursodatabase/turso/issues/6221>. The way it's used now should hopefully be compatible with a future fix.
 
 use crate::macros::sql;
 
@@ -37,7 +41,7 @@ pub(super) const SQL: &str = sql!(
         id INTEGER PRIMARY KEY,
         tracing_id INTEGER NOT NULL,
         parent_tracing_id INTEGER,
-        boot_id TEXT,
+        boot_id BLOB,
         name TEXT NOT NULL,
         level INTEGER NOT NULL,
         target TEXT NOT NULL,
@@ -45,7 +49,7 @@ pub(super) const SQL: &str = sql!(
         line INTEGER,
         started_at INTEGER NOT NULL,
         ended_at INTEGER,
-        fields BLOB
+        fields jsonb
     ) STRICT;
     CREATE INDEX idx_log_spans_tracing ON log_spans (tracing_id, boot_id);
     CREATE INDEX idx_log_spans_parent_tracing ON log_spans (parent_tracing_id);
@@ -61,8 +65,8 @@ pub(super) const SQL: &str = sql!(
         timestamp INTEGER NOT NULL,
         file TEXT,
         line INTEGER,
-        boot_id TEXT,
-        fields BLOB
+        boot_id BLOB,
+        fields jsonb
     ) STRICT;
     CREATE INDEX idx_log_events_timestamp ON log_events (timestamp);
     CREATE INDEX idx_log_events_level ON log_events (level);

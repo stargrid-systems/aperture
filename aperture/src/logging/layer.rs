@@ -144,13 +144,7 @@ impl DbLogLayer {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let dropped_clone = Arc::clone(&layer.dropped);
 
-        let join = tokio::spawn(writer_task(
-            repo,
-            rx,
-            dropped_clone,
-            shutdown_rx,
-            boot_id.to_string(),
-        ));
+        let join = tokio::spawn(writer_task(repo, rx, dropped_clone, shutdown_rx, boot_id));
 
         let handle = WorkerHandle {
             join: Some(join),
@@ -280,7 +274,7 @@ async fn writer_task(
     mut rx: mpsc::Receiver<Record>,
     dropped: Arc<AtomicU64>,
     mut shutdown: oneshot::Receiver<()>,
-    boot_id: String,
+    boot_id: Uuid,
 ) {
     let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
     let mut interval = interval(FLUSH_INTERVAL);
@@ -293,7 +287,7 @@ async fn writer_task(
                 while let Ok(record) = rx.try_recv() {
                     batch.push(record);
                 }
-                flush(&repo, &mut batch, &dropped, &boot_id).await;
+                flush(&repo, &mut batch, &dropped, boot_id).await;
                 close_remaining_spans(&repo).await;
                 break;
             }
@@ -301,18 +295,18 @@ async fn writer_task(
                 match maybe_record {
                     Some(record) => batch.push(record),
                     None => {
-                        flush(&repo, &mut batch, &dropped, &boot_id).await;
+                        flush(&repo, &mut batch, &dropped, boot_id).await;
                         close_remaining_spans(&repo).await;
                         break;
                     }
                 }
                 if batch.len() >= FLUSH_BATCH {
-                    flush(&repo, &mut batch, &dropped, &boot_id).await;
+                    flush(&repo, &mut batch, &dropped, boot_id).await;
                 }
             }
             _ = interval.tick() => {
                 if !batch.is_empty() {
-                    flush(&repo, &mut batch, &dropped, &boot_id).await;
+                    flush(&repo, &mut batch, &dropped, boot_id).await;
                 }
             }
         }
@@ -356,7 +350,7 @@ where
 /// Instrumented with [`FLUSH_SPAN_NAME`] so events emitted by the DB engine
 /// during the flush are filtered by [`DbLogLayer::on_event`].
 #[tracing::instrument(name = FLUSH_SPAN_NAME, level = "trace", skip_all)]
-async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU64, boot_id: &str) {
+async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU64, boot_id: Uuid) {
     let mut tx = match repo.batch().await {
         Ok(tx) => tx,
         Err(err) => {
@@ -407,12 +401,19 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
             }
         }
     }
-    let count = dropped.swap(0, Ordering::Relaxed);
+    let count = dropped.load(Ordering::Relaxed);
     if count > 0 {
         let _ = tx.record_dropped(count, Timestamp::now(), boot_id).await;
     }
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = &err as &dyn StdError, "failed to commit log batch");
+    match tx.commit().await {
+        Ok(()) => {
+            if count > 0 {
+                dropped.fetch_sub(count, Ordering::Relaxed);
+            }
+        }
+        Err(err) => {
+            tracing::error!(error = &err as &dyn StdError, "failed to commit log batch");
+        }
     }
 }
 

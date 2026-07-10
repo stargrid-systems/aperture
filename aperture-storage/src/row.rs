@@ -6,6 +6,7 @@
 use jiff::Timestamp;
 use serde_json::Map;
 use turso::{Row, Value};
+use uuid::Uuid;
 
 use crate::error::{Result, StorageError, database};
 
@@ -19,6 +20,13 @@ pub(crate) fn text_or_null(value: &Option<String>) -> Value {
 pub(crate) fn text_ref_or_null(value: Option<&str>) -> Value {
     match value {
         Some(text) => Value::Text(text.to_owned()),
+        None => Value::Null,
+    }
+}
+
+pub(crate) fn uuid_or_null(value: Option<Uuid>) -> Value {
+    match value {
+        Some(uuid) => Value::Blob(uuid.as_bytes().to_vec()),
         None => Value::Null,
     }
 }
@@ -64,6 +72,24 @@ pub(crate) fn opt_text(row: &Row, idx: usize) -> Result<Option<String>> {
         actual => Err(StorageError::ColumnTypeMismatch {
             column: idx,
             expected: "text or null",
+            actual,
+        }),
+    }
+}
+
+pub(crate) fn opt_uuid(row: &Row, idx: usize) -> Result<Option<Uuid>> {
+    match row.get_value(idx).map_err(database)? {
+        Value::Null => Ok(None),
+        Value::Blob(bytes) => Ok(Some(Uuid::from_slice(&bytes).map_err(|_| {
+            StorageError::ColumnTypeMismatch {
+                column: idx,
+                expected: "16-byte uuid blob",
+                actual: Value::Blob(bytes),
+            }
+        })?)),
+        actual => Err(StorageError::ColumnTypeMismatch {
+            column: idx,
+            expected: "uuid blob or null",
             actual,
         }),
     }

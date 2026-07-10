@@ -11,8 +11,8 @@ use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
 use crate::row::{
-    int_or_null, json_map, map_ref_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text,
-    req_ts, req_u64, text_ref_or_null,
+    int_or_null, json_map, map_ref_or_null, opt_int, opt_text, opt_ts, opt_u32, opt_uuid, req_int,
+    req_text, req_ts, req_u64, text_ref_or_null, uuid_or_null,
 };
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
@@ -28,7 +28,7 @@ const SPAN_COLUMNS: &str =
 const SQL_INSERT_SPAN: &str = sql!(
     INSERT INTO log_spans
     (tracing_id, parent_tracing_id, boot_id, name, level, target, file, line, started_at, fields)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, jsonb(?10))
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
 );
 
 /// SQL shared between [`LogRepository`] and [`LogBatch`] for event inserts.
@@ -36,7 +36,7 @@ const SQL_INSERT_SPAN: &str = sql!(
 const SQL_INSERT_EVENT: &str = sql!(
     INSERT INTO log_events
     (span_tracing_id, level, target, message, timestamp, file, line, boot_id, fields)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, jsonb(?9))
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
 );
 
 /// SQL shared between [`LogRepository`] and [`LogBatch`] for span closes.
@@ -47,7 +47,7 @@ const SQL_CLOSE_SPAN: &str =
 /// SQL for merging late-recorded field values into a span's existing fields.
 const SQL_UPDATE_SPAN_FIELDS: &str = sql!(
     UPDATE log_spans
-    SET fields = jsonb(json_patch(fields, jsonb(?1)))
+    SET fields = json_patch(fields, ?1)
     WHERE tracing_id = ?2 AND boot_id = ?3
 );
 
@@ -126,7 +126,7 @@ pub struct Event {
     pub timestamp: Timestamp,
     pub file: Option<String>,
     pub line: Option<u32>,
-    pub boot_id: Option<String>,
+    pub boot_id: Option<Uuid>,
     pub fields: Map<String, serde_json::Value>,
 }
 
@@ -177,7 +177,7 @@ pub struct SpanFilter {
 pub struct SpanRecord<'a> {
     pub tracing_id: u64,
     pub parent_tracing_id: Option<u64>,
-    pub boot_id: &'a str,
+    pub boot_id: Uuid,
     pub name: &'a str,
     pub level: Level,
     pub target: &'a str,
@@ -197,7 +197,7 @@ pub struct EventRecord<'a> {
     pub timestamp: Timestamp,
     pub file: Option<&'a str>,
     pub line: Option<u32>,
-    pub boot_id: Option<&'a str>,
+    pub boot_id: Option<Uuid>,
     pub fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
@@ -298,7 +298,10 @@ impl LogRepository {
             items.push(row_to_event(&row)?);
         }
         Ok(paginator.finish(items, |event| {
-            (CursorValue::Int(event.timestamp.as_millisecond()), event.id.get())
+            (
+                CursorValue::Int(event.timestamp.as_millisecond()),
+                event.id.get(),
+            )
         }))
     }
 
@@ -384,7 +387,10 @@ impl LogRepository {
             items.push(row_to_span(&row)?);
         }
         Ok(paginator.finish(items, |span| {
-            (CursorValue::Int(span.started_at.as_millisecond()), span.id.get())
+            (
+                CursorValue::Int(span.started_at.as_millisecond()),
+                span.id.get(),
+            )
         }))
     }
 
@@ -480,11 +486,11 @@ impl LogRepository {
             .map_err(database)?;
         let mut boots = Vec::new();
         while let Some(row) = rows.next().await.map_err(database)? {
-            let text = match row.get_value(0).map_err(database)? {
-                Value::Text(text) => text,
+            let bytes = match row.get_value(0).map_err(database)? {
+                Value::Blob(bytes) => bytes,
                 _ => continue,
             };
-            let Some(parsed) = Uuid::parse_str(&text).ok() else {
+            let Ok(parsed) = Uuid::from_slice(&bytes) else {
                 continue;
             };
             boots.push(BootInfo {
@@ -516,8 +522,10 @@ impl<'conn> LogBatch<'conn> {
     pub async fn insert_span(&mut self, record: SpanRecord<'_>) -> Result<()> {
         let params = params_from_iter([
             Value::Integer(record.tracing_id as i64),
-            record.parent_tracing_id.map_or(Value::Null, |v| Value::Integer(v as i64)),
-            Value::Text(record.boot_id.to_owned()),
+            record
+                .parent_tracing_id
+                .map_or(Value::Null, |v| Value::Integer(v as i64)),
+            Value::Blob(record.boot_id.as_bytes().to_vec()),
             Value::Text(record.name.to_owned()),
             Value::Integer(record.level.as_db()),
             Value::Text(record.target.to_owned()),
@@ -533,14 +541,16 @@ impl<'conn> LogBatch<'conn> {
     /// Inserts a log event.
     pub async fn insert_event(&mut self, record: EventRecord<'_>) -> Result<()> {
         let params = params_from_iter([
-            record.span_tracing_id.map_or(Value::Null, |v| Value::Integer(v as i64)),
+            record
+                .span_tracing_id
+                .map_or(Value::Null, |v| Value::Integer(v as i64)),
             Value::Integer(record.level.as_db()),
             Value::Text(record.target.to_owned()),
             text_ref_or_null(record.message),
             Value::Integer(record.timestamp.as_millisecond()),
             text_ref_or_null(record.file),
             int_or_null(record.line),
-            text_ref_or_null(record.boot_id),
+            uuid_or_null(record.boot_id),
             map_ref_or_null(record.fields),
         ]);
         self.insert_event.execute(params).await.map_err(database)?;
@@ -548,12 +558,17 @@ impl<'conn> LogBatch<'conn> {
     }
 
     /// Records the end time of a span identified by its tracing_id.
-    pub async fn close_span(&mut self, tracing_id: u64, boot_id: &str, ended_at: Timestamp) -> Result<()> {
+    pub async fn close_span(
+        &mut self,
+        tracing_id: u64,
+        boot_id: Uuid,
+        ended_at: Timestamp,
+    ) -> Result<()> {
         self.close_span
             .execute(params_from_iter([
                 Value::Integer(ended_at.as_millisecond()),
                 Value::Integer(tracing_id as i64),
-                Value::Text(boot_id.to_owned()),
+                Value::Blob(boot_id.as_bytes().to_vec()),
             ]))
             .await
             .map_err(database)?;
@@ -564,7 +579,7 @@ impl<'conn> LogBatch<'conn> {
     pub async fn update_span_fields(
         &mut self,
         tracing_id: u64,
-        boot_id: &str,
+        boot_id: Uuid,
         fields: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
         let json = serde_json::to_string(fields)
@@ -573,7 +588,7 @@ impl<'conn> LogBatch<'conn> {
             .execute(params_from_iter([
                 Value::Text(json),
                 Value::Integer(tracing_id as i64),
-                Value::Text(boot_id.to_owned()),
+                Value::Blob(boot_id.as_bytes().to_vec()),
             ]))
             .await
             .map_err(database)?;
@@ -585,7 +600,7 @@ impl<'conn> LogBatch<'conn> {
         &mut self,
         count: u64,
         timestamp: Timestamp,
-        boot_id: &str,
+        boot_id: Uuid,
     ) -> Result<()> {
         let mut fields = serde_json::Map::new();
         fields.insert(
@@ -623,7 +638,7 @@ fn row_to_event(row: &turso::Row) -> Result<Event> {
         timestamp: req_ts(row, 5)?,
         file: opt_text(row, 6)?,
         line: opt_u32(row, 7)?,
-        boot_id: opt_text(row, 8)?,
+        boot_id: opt_uuid(row, 8)?,
         fields: json_map(row, 9)?,
     })
 }

@@ -65,7 +65,7 @@ pub struct LogEventResponse {
     /// Source line, if available.
     pub line: Option<u32>,
     /// Boot session this event belongs to, if known.
-    pub boot_id: Option<String>,
+    pub boot_id: Option<Uuid>,
     /// All structured fields as a JSON object. Empty when there are none.
     pub fields: Map<String, serde_json::Value>,
 }

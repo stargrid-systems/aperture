@@ -4,8 +4,7 @@ use std::fmt;
 use std::num::ParseIntError;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-use serde::de;
+use serde::{Deserialize, Serialize, de};
 
 /// Primary key of a row in the database (SQLite rowid).
 ///
