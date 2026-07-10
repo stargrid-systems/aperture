@@ -58,7 +58,7 @@ struct SpanStart {
     file: Option<String>,
     line: Option<u32>,
     started_at: Timestamp,
-    fields: Option<serde_json::Map<String, serde_json::Value>>,
+    fields: serde_json::Map<String, serde_json::Value>,
 }
 
 struct SpanEnd {
@@ -79,7 +79,7 @@ struct EventMsg {
     timestamp: Timestamp,
     file: Option<String>,
     line: Option<u32>,
-    fields: Option<serde_json::Map<String, serde_json::Value>>,
+    fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A tracing layer that persists spans and events to the database.
@@ -259,12 +259,11 @@ where
         }
         let mut visitor = FieldCollector::additional();
         values.record(&mut visitor);
-        if let Some(fields) = visitor.into_fields() {
-            self.try_send(Record::SpanFields(SpanFields {
-                tracing_id: id.into_u64(),
-                fields,
-            }));
-        }
+        let fields = visitor.into_fields();
+        self.try_send(Record::SpanFields(SpanFields {
+            tracing_id: id.into_u64(),
+            fields,
+        }));
     }
 }
 
@@ -372,7 +371,7 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         file: s.file.as_deref(),
                         line: s.line,
                         started_at: s.started_at,
-                        fields: s.fields.as_ref(),
+                        fields: &s.fields,
                     })
                     .await;
             }
@@ -394,8 +393,8 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         timestamp: e.timestamp,
                         file: e.file.as_deref(),
                         line: e.line,
-                        boot_id: Some(boot_id),
-                        fields: e.fields.as_ref(),
+                        boot_id,
+                        fields: &e.fields,
                     })
                     .await;
             }

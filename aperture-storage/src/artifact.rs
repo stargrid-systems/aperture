@@ -9,12 +9,11 @@
 use jiff::Timestamp;
 use turso::{Connection, Row, params_from_iter};
 
-use crate::columns::Columns;
-use crate::error::{Result, database};
+use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::sql::{ToSql, get};
+use crate::sql::{Columns, ToSql, get};
 
 mod col {
     pub const DIGEST: &str = "digest";
@@ -123,7 +122,7 @@ impl ArtifactRepository {
                 params,
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -141,8 +140,8 @@ impl ArtifactRepository {
             .connection
             .query(&sql, params_from_iter([key.to_sql()]))
             .await
-            .map_err(database)?;
-        match rows.next().await.map_err(database)? {
+            .map_err(StorageError::from_turso)?;
+        match rows.next().await.map_err(StorageError::from_turso)? {
             Some(row) => Ok(Some(row_to_artifact(&row)?)),
             None => Ok(None),
         }
@@ -159,8 +158,8 @@ impl ArtifactRepository {
             .connection
             .query(&sql, params_from_iter([key.to_sql(), digest.to_sql()]))
             .await
-            .map_err(database)?;
-        match rows.next().await.map_err(database)? {
+            .map_err(StorageError::from_turso)?;
+        match rows.next().await.map_err(StorageError::from_turso)? {
             Some(row) => Ok(Some(row_to_artifact(&row)?)),
             None => Ok(None),
         }
@@ -183,8 +182,8 @@ impl ArtifactRepository {
             .connection
             .query(&sql, params_from_iter([key.to_sql()]))
             .await
-            .map_err(database)?;
-        match rows.next().await.map_err(database)? {
+            .map_err(StorageError::from_turso)?;
+        match rows.next().await.map_err(StorageError::from_turso)? {
             Some(row) => Ok(Some(row_to_artifact_key(&row)?)),
             None => Ok(None),
         }
@@ -223,9 +222,9 @@ impl ArtifactRepository {
             .connection
             .query(&sql, params_from_iter(filters.into_params()))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             items.push(row_to_artifact_key(&row)?);
         }
         Ok(paginator.finish(items, |key| {
@@ -272,9 +271,9 @@ impl ArtifactRepository {
             .connection
             .query(&sql, params_from_iter(filters.into_params()))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             items.push(row_to_artifact(&row)?);
         }
         Ok(paginator.finish(items, |artifact| {
@@ -293,9 +292,13 @@ impl ArtifactRepository {
             sql!(SELECT {cols} FROM artifacts ORDER BY id),
             cols = ARTIFACT_COLUMNS
         );
-        let mut rows = self.connection.query(&sql, ()).await.map_err(database)?;
+        let mut rows = self
+            .connection
+            .query(&sql, ())
+            .await
+            .map_err(StorageError::from_turso)?;
         let mut artifacts = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             artifacts.push(row_to_artifact(&row)?);
         }
         Ok(artifacts)
@@ -310,7 +313,7 @@ impl ArtifactRepository {
                 params_from_iter([key.to_sql(), digest.to_sql()]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 }

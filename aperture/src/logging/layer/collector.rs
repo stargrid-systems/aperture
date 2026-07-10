@@ -70,12 +70,8 @@ impl FieldCollector {
         self.log_line.take()
     }
 
-    pub fn into_fields(self) -> Option<Map<String, Value>> {
-        if self.fields.is_empty() {
-            None
-        } else {
-            Some(self.fields)
-        }
+    pub fn into_fields(self) -> Map<String, Value> {
+        self.fields
     }
 
     fn collect_str<S: fmt::Display>(&mut self, name: &str, value: S) {

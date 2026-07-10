@@ -10,14 +10,12 @@ use std::time::Duration;
 use turso::{Builder, Connection, Database};
 
 pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
-use self::error::database;
 pub use self::error::{Result, StorageError};
 pub use self::id::DbId;
 pub use self::log::{
     BootInfo, Event, EventFilter, EventRecord, Level, LogBatch, LogRepository, Span, SpanFilter,
     SpanParentFilter, SpanRecord,
 };
-use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
@@ -25,7 +23,6 @@ pub use self::task::{
 };
 
 mod artifact;
-mod columns;
 mod error;
 mod id;
 mod log;
@@ -64,17 +61,19 @@ impl Storage {
             .experimental_custom_types(true)
             .build()
             .await
-            .map_err(database)?;
-        let conn = db.connect().map_err(database)?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
-        run(&conn).await?;
+            .map_err(StorageError::from_turso)?;
+        let conn = db.connect().map_err(StorageError::from_turso)?;
+        conn.busy_timeout(BUSY_TIMEOUT)
+            .map_err(StorageError::from_turso)?;
+        migration::run(&conn).await?;
         Ok(Self { db })
     }
 
     /// Creates a fresh independent connection with the busy timeout applied.
     fn connect(&self) -> Result<Connection> {
-        let conn = self.db.connect().map_err(database)?;
-        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
+        let conn = self.db.connect().map_err(StorageError::from_turso)?;
+        conn.busy_timeout(BUSY_TIMEOUT)
+            .map_err(StorageError::from_turso)?;
         Ok(conn)
     }
 

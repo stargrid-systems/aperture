@@ -59,10 +59,12 @@ pub enum StorageError {
     InvalidJson { column: usize, error: String },
 }
 
+impl StorageError {
+    /// Wraps a turso engine error as a [`StorageError::Database`].
+    pub(crate) fn from_turso(error: turso::Error) -> Self {
+        StorageError::Database(error.into())
+    }
+}
+
 /// Result alias for the storage layer.
 pub type Result<T> = StdResult<T, StorageError>;
-
-/// Wraps a turso engine error as a [`StorageError::Database`].
-pub(crate) fn database(error: turso::Error) -> StorageError {
-    StorageError::Database(error.into())
-}

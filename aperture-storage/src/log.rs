@@ -1,17 +1,15 @@
 //! Structured log storage: tracing spans and events persisted for querying.
 
 use jiff::Timestamp;
-use serde_json::Map;
 use turso::transaction::Transaction;
 use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
 
-use crate::columns::Columns;
-use crate::error::{Result, StorageError, database};
+use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
-use crate::sql::{ToSql, get};
+use crate::sql::{Columns, ToSql, get};
 
 mod col {
     pub const BOOT_ID: &str = "boot_id";
@@ -136,13 +134,14 @@ pub struct Span {
     pub line: Option<u32>,
     pub started_at: Timestamp,
     pub ended_at: Option<Timestamp>,
-    pub fields: Option<Map<String, serde_json::Value>>,
+    pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A persisted tracing event (log record).
 #[derive(Debug, Clone)]
 pub struct Event {
     pub id: DbId,
+    pub boot_id: Uuid,
     pub span_id: Option<DbId>,
     pub level: Level,
     pub target: String,
@@ -150,8 +149,7 @@ pub struct Event {
     pub timestamp: Timestamp,
     pub file: Option<String>,
     pub line: Option<u32>,
-    pub boot_id: Option<Uuid>,
-    pub fields: Option<Map<String, serde_json::Value>>,
+    pub fields: serde_json::Map<String, serde_json::Value>,
 }
 
 /// One boot session observed in the log store.
@@ -208,12 +206,13 @@ pub struct SpanRecord<'a> {
     pub file: Option<&'a str>,
     pub line: Option<u32>,
     pub started_at: Timestamp,
-    pub fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
+    pub fields: &'a serde_json::Map<String, serde_json::Value>,
 }
 
 /// Plain-data description of an event to persist via
 /// [`LogBatch::insert_event`].
 pub struct EventRecord<'a> {
+    pub boot_id: Uuid,
     pub span_tracing_id: Option<u64>,
     pub level: Level,
     pub target: &'a str,
@@ -221,8 +220,7 @@ pub struct EventRecord<'a> {
     pub timestamp: Timestamp,
     pub file: Option<&'a str>,
     pub line: Option<u32>,
-    pub boot_id: Option<Uuid>,
-    pub fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
+    pub fields: &'a serde_json::Map<String, serde_json::Value>,
 }
 
 /// Repository over the structured log tables for query operations.
@@ -244,27 +242,27 @@ impl LogRepository {
             .connection
             .unchecked_transaction()
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let insert_span = self
             .connection
             .prepare(SQL_INSERT_SPAN)
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let insert_event = self
             .connection
             .prepare(SQL_INSERT_EVENT)
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let close_span = self
             .connection
             .prepare(SQL_CLOSE_SPAN)
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let update_span_fields = self
             .connection
             .prepare(SQL_UPDATE_SPAN_FIELDS)
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(LogBatch {
             tx,
             insert_span,
@@ -316,9 +314,9 @@ impl LogRepository {
             .connection
             .query(&sql, params_from_iter(filters.into_params()))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             items.push(row_to_event(&row)?);
         }
         Ok(paginator.finish(items, |event| {
@@ -358,9 +356,9 @@ impl LogRepository {
             .connection
             .query(sql, params_from_iter(params))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut targets = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             targets.push(get(&row, 0)?);
         }
         Ok(targets)
@@ -405,9 +403,9 @@ impl LogRepository {
             .connection
             .query(&sql, params_from_iter(filters.into_params()))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             items.push(row_to_span(&row)?);
         }
         Ok(paginator.finish(items, |span| {
@@ -429,8 +427,8 @@ impl LogRepository {
             .connection
             .query(&sql, params_from_iter([Value::Integer(id.get())]))
             .await
-            .map_err(database)?;
-        match rows.next().await.map_err(database)? {
+            .map_err(StorageError::from_turso)?;
+        match rows.next().await.map_err(StorageError::from_turso)? {
             Some(row) => Ok(Some(row_to_span(&row)?)),
             None => Ok(None),
         }
@@ -447,9 +445,9 @@ impl LogRepository {
             .connection
             .query(&sql, params_from_iter([Value::Integer(span_id.get())]))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             items.push(row_to_event(&row)?);
         }
         Ok(items)
@@ -464,7 +462,7 @@ impl LogRepository {
                 params_from_iter([Value::Integer(ended_at.as_millisecond())]),
             )
             .await
-            .map_err(database)
+            .map_err(StorageError::from_turso)
     }
 
     /// Deletes events and finished spans older than `before`. Returns the
@@ -478,14 +476,14 @@ impl LogRepository {
                 params_from_iter([Value::Integer(millis)]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         self.connection
             .execute(
                 sql!(DELETE FROM log_spans WHERE ended_at IS NOT NULL AND ended_at < ?1),
                 params_from_iter([Value::Integer(millis)]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(event_count)
     }
 
@@ -507,18 +505,11 @@ impl LogRepository {
             .connection
             .query(SQL_LIST_BOOTS, params_from_iter(Vec::<Value>::new()))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut boots = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
-            let bytes = match row.get_value(0).map_err(database)? {
-                Value::Blob(bytes) => bytes,
-                _ => continue,
-            };
-            let Ok(parsed) = Uuid::from_slice(&bytes) else {
-                continue;
-            };
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             boots.push(BootInfo {
-                boot_id: parsed,
+                boot_id: get(&row, 0)?,
                 first_seen: get(&row, 1)?,
                 last_seen: get(&row, 2)?,
                 event_count: get(&row, 3)?,
@@ -556,7 +547,10 @@ impl<'conn> LogBatch<'conn> {
             record.started_at.to_sql(),
             record.fields.to_sql(),
         ]);
-        self.insert_span.execute(params).await.map_err(database)?;
+        self.insert_span
+            .execute(params)
+            .await
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -573,7 +567,10 @@ impl<'conn> LogBatch<'conn> {
             record.boot_id.to_sql(),
             record.fields.to_sql(),
         ]);
-        self.insert_event.execute(params).await.map_err(database)?;
+        self.insert_event
+            .execute(params)
+            .await
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -591,7 +588,7 @@ impl<'conn> LogBatch<'conn> {
                 boot_id.to_sql(),
             ]))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -602,16 +599,14 @@ impl<'conn> LogBatch<'conn> {
         boot_id: Uuid,
         fields: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
-        let json = serde_json::to_string(fields)
-            .expect("serializing a JSON map produced by serde_json cannot fail");
         self.update_span_fields
             .execute(params_from_iter([
-                Value::Text(json),
+                fields.to_sql(),
                 tracing_id.to_sql(),
                 boot_id.to_sql(),
             ]))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -622,7 +617,7 @@ impl<'conn> LogBatch<'conn> {
         timestamp: Timestamp,
         boot_id: Uuid,
     ) -> Result<()> {
-        let mut fields = serde_json::Map::new();
+        let mut fields = serde_json::Map::with_capacity(1);
         fields.insert(
             "dropped".to_owned(),
             serde_json::Value::Number(count.into()),
@@ -635,8 +630,8 @@ impl<'conn> LogBatch<'conn> {
             timestamp,
             file: None,
             line: None,
-            boot_id: Some(boot_id),
-            fields: Some(&fields),
+            boot_id,
+            fields: &fields,
         })
         .await?;
         Ok(())
@@ -644,7 +639,7 @@ impl<'conn> LogBatch<'conn> {
 
     /// Commits all pending operations. Consumes the batch.
     pub async fn commit(self) -> Result<()> {
-        self.tx.commit().await.map_err(database)
+        self.tx.commit().await.map_err(StorageError::from_turso)
     }
 }
 

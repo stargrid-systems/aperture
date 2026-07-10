@@ -11,12 +11,11 @@ use std::result::Result as StdResult;
 use jiff::Timestamp;
 use turso::{Connection, Row, params_from_iter};
 
-use crate::columns::Columns;
-use crate::error::{Result, StorageError, database};
+use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::sql::ToSql;
+use crate::sql::{Columns, ToSql};
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
@@ -285,7 +284,7 @@ impl TaskRepository {
                 params,
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
@@ -318,7 +317,7 @@ impl TaskRepository {
                 params,
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
@@ -335,7 +334,7 @@ impl TaskRepository {
                 ]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -370,7 +369,7 @@ impl TaskRepository {
                 ]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -385,8 +384,8 @@ impl TaskRepository {
             .connection
             .query(&sql, params_from_iter([id.to_sql()]))
             .await
-            .map_err(database)?;
-        match rows.next().await.map_err(database)? {
+            .map_err(StorageError::from_turso)?;
+        match rows.next().await.map_err(StorageError::from_turso)? {
             Some(row) => Ok(Some(row_to_task(&row)?)),
             None => Ok(None),
         }
@@ -444,9 +443,9 @@ impl TaskRepository {
             .connection
             .query(&sql, params_from_iter(filters.into_params()))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             items.push(row_to_task(&row)?);
         }
         Ok(paginator.finish(items, |task| {
@@ -465,9 +464,9 @@ impl TaskRepository {
             .connection
             .query(&sql, params_from_iter([parent_id.to_sql()]))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             tasks.push(row_to_task(&row)?);
         }
         Ok(tasks)
@@ -488,9 +487,9 @@ impl TaskRepository {
                 params_from_iter([TaskStatus::Pending.to_sql(), TaskStatus::Running.to_sql()]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             tasks.push(row_to_task(&row)?);
         }
         Ok(tasks)
