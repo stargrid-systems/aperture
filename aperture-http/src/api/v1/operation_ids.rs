@@ -37,3 +37,18 @@ pub const CANCEL_TASK: &str = "cancelTask";
 
 /// `GET /api/v1/task-definitions`
 pub const LIST_TASK_DEFINITIONS: &str = "listTaskDefinitions";
+
+/// `GET /api/v1/logs`
+pub const LIST_LOGS: &str = "listLogs";
+
+/// `GET /api/v1/logs/targets`
+pub const LIST_LOG_TARGETS: &str = "listLogTargets";
+
+/// `GET /api/v1/logs/spans`
+pub const LIST_SPANS: &str = "listSpans";
+
+/// `GET /api/v1/logs/spans/{id}`
+pub const GET_SPAN: &str = "getSpan";
+
+/// `GET /api/v1/logs/boots`
+pub const LIST_LOG_BOOTS: &str = "listLogBoots";

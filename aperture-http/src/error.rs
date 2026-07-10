@@ -1,8 +1,9 @@
-//! Maps artifact-manager errors onto HTTP status codes.
+//! Maps storage, artifact-manager, and task errors onto HTTP status codes.
 
 use std::error::Error;
 
-use aperture_artifacts::{ArtifactError, StorageError};
+use aperture_artifacts::ArtifactError;
+use aperture_storage::StorageError;
 use aperture_tasks::TaskError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -21,9 +22,8 @@ impl ApiError {
 
 impl From<ArtifactError> for ApiError {
     fn from(err: ArtifactError) -> Self {
-        // A decode error means bad client input, most likely a malformed cursor.
         let status = match &err {
-            ArtifactError::Storage(StorageError::Decode(_)) => StatusCode::BAD_REQUEST,
+            ArtifactError::Storage(StorageError::InvalidCursor(_)) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
@@ -33,11 +33,24 @@ impl From<ArtifactError> for ApiError {
     }
 }
 
+impl From<StorageError> for ApiError {
+    fn from(err: StorageError) -> Self {
+        let status = match &err {
+            StorageError::InvalidCursor(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(error = &err as &dyn Error, "log request failed");
+        }
+        Self(status)
+    }
+}
+
 impl From<TaskError> for ApiError {
     fn from(err: TaskError) -> Self {
         let status = match &err {
             TaskError::NotRegistered(_) | TaskError::DecodeInput(_) => StatusCode::BAD_REQUEST,
-            TaskError::Storage(StorageError::Decode(_)) => StatusCode::BAD_REQUEST,
+            TaskError::Storage(StorageError::InvalidCursor(_)) => StatusCode::BAD_REQUEST,
             TaskError::NotFound(_) => StatusCode::NOT_FOUND,
             TaskError::AlreadySettled(_) => StatusCode::GONE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

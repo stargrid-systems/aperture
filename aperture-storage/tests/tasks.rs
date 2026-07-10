@@ -1,5 +1,6 @@
 use aperture_storage::{
-    JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage, TaskStatus,
+    DbId, JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage,
+    TaskStatus,
 };
 use jiff::Timestamp;
 
@@ -10,7 +11,7 @@ fn at(millis: i64) -> Timestamp {
 #[tokio::test]
 async fn create_then_finish_records_lifecycle() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let id = repo
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
@@ -45,7 +46,7 @@ async fn create_then_finish_records_lifecycle() {
 #[tokio::test]
 async fn create_running_starts_in_running_state() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let id = repo
         .create_running("download", None, r#"{"key":"spectra"}"#, at(1_000))
@@ -61,7 +62,7 @@ async fn create_running_starts_in_running_state() {
 #[tokio::test]
 async fn finish_does_not_overwrite_a_finished_row() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let id = repo
         .create_running("download", None, "{}", at(1_000))
@@ -99,7 +100,7 @@ async fn finish_does_not_overwrite_a_finished_row() {
 #[tokio::test]
 async fn list_filters_by_status_kind_and_parent() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let parent = repo.create("update", None, "{}", at(1_000)).await.unwrap();
     let download = repo
@@ -124,7 +125,7 @@ async fn list_filters_by_status_kind_and_parent() {
         )
         .await
         .unwrap();
-    let active_ids: Vec<i64> = active.items.iter().map(|task| task.id).collect();
+    let active_ids: Vec<DbId> = active.items.iter().map(|task| task.id).collect();
     assert_eq!(active_ids, vec![download, parent]);
 
     let finished = repo
@@ -161,14 +162,14 @@ async fn list_filters_by_status_kind_and_parent() {
     assert_eq!(roots.items[0].id, parent);
 
     let children = repo.children(parent).await.unwrap();
-    let child_ids: Vec<i64> = children.iter().map(|task| task.id).collect();
+    let child_ids: Vec<DbId> = children.iter().map(|task| task.id).collect();
     assert_eq!(child_ids, vec![download, install]);
 }
 
 #[tokio::test]
 async fn list_filters_by_json_input_and_output() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let spectra = repo
         .create_running(
@@ -279,7 +280,7 @@ async fn list_filters_by_json_input_and_output() {
 #[tokio::test]
 async fn list_active_finds_unfinished_invocations() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let pending = repo
         .create("download", None, "{}", at(1_000))
@@ -299,6 +300,6 @@ async fn list_active_finds_unfinished_invocations() {
         .unwrap();
 
     let active = repo.list_active().await.unwrap();
-    let ids: Vec<i64> = active.iter().map(|task| task.id).collect();
+    let ids: Vec<DbId> = active.iter().map(|task| task.id).collect();
     assert_eq!(ids, vec![pending, running]);
 }

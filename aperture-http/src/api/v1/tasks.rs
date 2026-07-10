@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use aperture_storage::DbId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -39,17 +40,18 @@ async fn list_tasks(
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
     let tasks = state.tasks();
     let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
+    let parent = params.parent_filter();
     let page = tasks
         .list(
             params.status.map(Into::into),
             params.kind.as_deref(),
-            params.parent_filter(),
+            parent,
             &json,
             &params.to_query(),
         )
         .await?;
 
-    let live: HashMap<i64, _> = tasks
+    let live: HashMap<DbId, _> = tasks
         .active()
         .into_iter()
         .map(|task| (task.id, task.progress))
@@ -83,7 +85,7 @@ async fn create_task(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK,
-    params(("id" = i64, Path, description = "Task id")),
+    params(("id" = DbId, Path, description = "Task id")),
     responses(
         (status = 200, description = "Task", body = TaskResponse),
         (status = 404, description = "Unknown task"),
@@ -91,7 +93,7 @@ async fn create_task(
 )]
 async fn get_task(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<DbId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     let progress = state.tasks().progress(id);
@@ -103,7 +105,7 @@ async fn get_task(
     post,
     path = "/{id}/cancel",
     operation_id = operation_ids::CANCEL_TASK,
-    params(("id" = i64, Path, description = "Task id")),
+    params(("id" = DbId, Path, description = "Task id")),
     responses(
         (status = 202, description = "Cancellation requested"),
         (status = 404, description = "Unknown task"),
@@ -113,7 +115,7 @@ async fn get_task(
 )]
 async fn cancel_task(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<DbId>,
 ) -> Result<StatusCode, ApiError> {
     if state.tasks().cancel(id).await? {
         Ok(StatusCode::ACCEPTED)

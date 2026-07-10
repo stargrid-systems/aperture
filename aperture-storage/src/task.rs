@@ -9,18 +9,40 @@
 use std::result::Result as StdResult;
 
 use jiff::Timestamp;
-use turso::{Connection, Row, Value, params_from_iter};
+use turso::{Connection, Row, params_from_iter};
 
-use crate::error::{Result, StorageError, database};
+use crate::error::{Result, StorageError};
+use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
-use crate::row::{
-    int_or_null, opt_int, opt_text, opt_ts, req_int, req_text, req_ts, text_ref_or_null,
-};
+use crate::sql::{Columns, ToSql};
+
+mod col {
+    pub const CREATED_AT: &str = "created_at";
+    pub const ERROR: &str = "error";
+    pub const FINISHED_AT: &str = "finished_at";
+    pub const ID: &str = "id";
+    pub const INPUT: &str = "input";
+    pub const KIND: &str = "kind";
+    pub const OUTPUT: &str = "output";
+    pub const PARENT_ID: &str = "parent_id";
+    pub const STARTED_AT: &str = "started_at";
+    pub const STATUS: &str = "status";
+}
 
 /// Columns selected for a [`TaskInvocation`], in [`row_to_task`] order.
-const TASK_COLUMNS: &str =
-    "id, kind, parent_id, status, input, output, error, created_at, started_at, finished_at";
+const TASK_COLUMNS: Columns = Columns::new(&[
+    col::ID,
+    col::KIND,
+    col::PARENT_ID,
+    col::STATUS,
+    col::INPUT,
+    col::OUTPUT,
+    col::ERROR,
+    col::CREATED_AT,
+    col::STARTED_AT,
+    col::FINISHED_AT,
+]);
 
 /// Lifecycle state of a single task invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +72,7 @@ impl TaskStatus {
         Self::Interrupted,
     ];
 
-    fn as_db(self) -> &'static str {
+    pub(crate) fn as_db(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Running => "running",
@@ -61,7 +83,7 @@ impl TaskStatus {
         }
     }
 
-    fn from_db(value: &str) -> Result<Self> {
+    pub(crate) fn from_db(value: &str) -> Result<Self> {
         match value {
             "pending" => Ok(Self::Pending),
             "running" => Ok(Self::Running),
@@ -69,9 +91,7 @@ impl TaskStatus {
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
             "interrupted" => Ok(Self::Interrupted),
-            other => Err(StorageError::Decode(format!(
-                "unknown task status {other:?}"
-            ))),
+            other => Err(StorageError::UnknownTaskStatus(other.to_owned())),
         }
     }
 }
@@ -80,11 +100,11 @@ impl TaskStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskInvocation {
     /// Store-assigned id.
-    pub id: i64,
+    pub id: DbId,
     /// The kind of task, matching a registered definition.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<i64>,
+    pub parent_id: Option<DbId>,
     /// The lifecycle state.
     pub status: TaskStatus,
     /// JSON-encoded input the task was created with.
@@ -126,8 +146,8 @@ impl JsonField {
     /// interpolate.
     fn column(self) -> &'static str {
         match self {
-            Self::Input => "input",
-            Self::Output => "output",
+            Self::Input => col::INPUT,
+            Self::Output => col::OUTPUT,
         }
     }
 }
@@ -225,7 +245,7 @@ pub enum ParentFilter {
     /// Only top-level invocations, with no parent.
     Root,
     /// Only the children of one invocation.
-    Of(i64),
+    Of(DbId),
 }
 
 /// Repository over the task catalog.
@@ -240,19 +260,20 @@ impl TaskRepository {
 
     /// Records a new invocation in the [`TaskStatus::Pending`] state and
     /// returns its assigned id. `input` is the JSON-encoded task input.
+    #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create(
         &self,
         kind: &str,
-        parent_id: Option<i64>,
+        parent_id: Option<DbId>,
         input: &str,
         created_at: Timestamp,
-    ) -> Result<i64> {
+    ) -> Result<DbId> {
         let params = params_from_iter([
-            Value::Text(kind.to_owned()),
-            int_or_null(parent_id),
-            Value::Text(TaskStatus::Pending.as_db().to_owned()),
-            Value::Text(input.to_owned()),
-            Value::Integer(created_at.as_millisecond()),
+            kind.to_sql(),
+            parent_id.to_sql(),
+            TaskStatus::Pending.to_sql(),
+            input.to_sql(),
+            created_at.to_sql(),
         ]);
         self.connection
             .execute(
@@ -263,28 +284,29 @@ impl TaskRepository {
                 params,
             )
             .await
-            .map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+            .map_err(StorageError::from_turso)?;
+        Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
     /// Records a new invocation already in the [`TaskStatus::Running`] state
     /// and returns its assigned id. Used when a task starts running the
     /// moment it is created, so no observable [`TaskStatus::Pending`] step
     /// exists.
+    #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create_running(
         &self,
         kind: &str,
-        parent_id: Option<i64>,
+        parent_id: Option<DbId>,
         input: &str,
         started_at: Timestamp,
-    ) -> Result<i64> {
+    ) -> Result<DbId> {
         let params = params_from_iter([
-            Value::Text(kind.to_owned()),
-            int_or_null(parent_id),
-            Value::Text(TaskStatus::Running.as_db().to_owned()),
-            Value::Text(input.to_owned()),
-            Value::Integer(started_at.as_millisecond()),
-            Value::Integer(started_at.as_millisecond()),
+            kind.to_sql(),
+            parent_id.to_sql(),
+            TaskStatus::Running.to_sql(),
+            input.to_sql(),
+            started_at.to_sql(),
+            started_at.to_sql(),
         ]);
         self.connection
             .execute(
@@ -295,23 +317,24 @@ impl TaskRepository {
                 params,
             )
             .await
-            .map_err(database)?;
-        Ok(self.connection.last_insert_rowid())
+            .map_err(StorageError::from_turso)?;
+        Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
     /// Marks the invocation with `id` as running.
-    pub async fn mark_running(&self, id: i64, started_at: Timestamp) -> Result<()> {
+    #[tracing::instrument(level = "info", skip(self))]
+    pub async fn mark_running(&self, id: DbId, started_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
                 sql!(UPDATE tasks SET status = ?1, started_at = ?2 WHERE id = ?3),
                 params_from_iter([
-                    Value::Text(TaskStatus::Running.as_db().to_owned()),
-                    Value::Integer(started_at.as_millisecond()),
-                    Value::Integer(id),
+                    TaskStatus::Running.to_sql(),
+                    started_at.to_sql(),
+                    id.to_sql(),
                 ]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
@@ -321,9 +344,10 @@ impl TaskRepository {
     /// Only an unfinished row is updated. A row that already reached a terminal
     /// state keeps it, so a late interrupt during shutdown cannot clobber a
     /// task that just succeeded.
+    #[tracing::instrument(level = "info", skip(self, output, error))]
     pub async fn finish(
         &self,
-        id: i64,
+        id: DbId,
         status: TaskStatus,
         finished_at: Timestamp,
         output: Option<&str>,
@@ -337,30 +361,31 @@ impl TaskRepository {
                     WHERE id = ?5 AND finished_at IS NULL
                 ),
                 params_from_iter([
-                    Value::Text(status.as_db().to_owned()),
-                    Value::Integer(finished_at.as_millisecond()),
-                    text_ref_or_null(output),
-                    text_ref_or_null(error),
-                    Value::Integer(id),
+                    status.to_sql(),
+                    finished_at.to_sql(),
+                    output.to_sql(),
+                    error.to_sql(),
+                    id.to_sql(),
                 ]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         Ok(())
     }
 
     /// Returns the invocation with `id`, if it exists.
-    pub async fn get(&self, id: i64) -> Result<Option<TaskInvocation>> {
+    #[tracing::instrument(level = "info", skip(self))]
+    pub async fn get(&self, id: DbId) -> Result<Option<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE id = ?1),
             cols = TASK_COLUMNS
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Integer(id)]))
+            .query(&sql, params_from_iter([id.to_sql()]))
             .await
-            .map_err(database)?;
-        match rows.next().await.map_err(database)? {
+            .map_err(StorageError::from_turso)?;
+        match rows.next().await.map_err(StorageError::from_turso)? {
             Some(row) => Ok(Some(row_to_task(&row)?)),
             None => Ok(None),
         }
@@ -369,6 +394,7 @@ impl TaskRepository {
     /// Lists invocations, newest first, optionally filtered by `status`,
     /// `kind`, `parent`, and any number of `json` field matches over the
     /// input/output payloads. All filters combine with `AND`.
+    #[tracing::instrument(level = "info", skip(self, json, query))]
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
@@ -378,21 +404,26 @@ impl TaskRepository {
         query: &ListQuery,
     ) -> Result<Page<TaskInvocation>> {
         let paginator = Paginator::new(query, Order::Desc)?;
-        let keyset = Keyset::unique("id", paginator.query_order());
+        let keyset = Keyset::unique(col::ID, paginator.query_order());
 
         let mut filters = Filters::new();
         match status {
-            Some(StatusFilter::Exact(status)) => filters.eq_text("status", Some(status.as_db())),
-            Some(StatusFilter::Active) => filters.one_of("status", &db_values(&TaskStatus::ACTIVE)),
+            Some(StatusFilter::Exact(status)) => filters.eq_text(col::STATUS, Some(status.as_db())),
+            Some(StatusFilter::Active) => {
+                filters.one_of(col::STATUS, db_values(&TaskStatus::ACTIVE).iter().copied())
+            }
             Some(StatusFilter::Finished) => {
-                filters.one_of("status", &db_values(&TaskStatus::FINISHED));
+                filters.one_of(
+                    col::STATUS,
+                    db_values(&TaskStatus::FINISHED).iter().copied(),
+                );
             }
             None => {}
         }
-        filters.eq_text("kind", kind);
+        filters.eq_text(col::KIND, kind);
         match parent {
             Some(ParentFilter::Root) => filters.raw("parent_id IS NULL"),
-            Some(ParentFilter::Of(id)) => filters.eq_int("parent_id", Some(id)),
+            Some(ParentFilter::Of(id)) => filters.eq_int(col::PARENT_ID, Some(id.get())),
             None => {}
         }
         for filter in json {
@@ -412,27 +443,30 @@ impl TaskRepository {
             .connection
             .query(&sql, params_from_iter(filters.into_params()))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             items.push(row_to_task(&row)?);
         }
-        Ok(paginator.finish(items, |task| (CursorValue::Int(task.id), task.id)))
+        Ok(paginator.finish(items, |task| {
+            (CursorValue::Int(task.id.get()), task.id.get())
+        }))
     }
 
     /// Lists the children of `parent_id`, oldest first.
-    pub async fn children(&self, parent_id: i64) -> Result<Vec<TaskInvocation>> {
+    #[tracing::instrument(level = "info", skip(self))]
+    pub async fn children(&self, parent_id: DbId) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE parent_id = ?1 ORDER BY id),
             cols = TASK_COLUMNS,
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([Value::Integer(parent_id)]))
+            .query(&sql, params_from_iter([parent_id.to_sql()]))
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             tasks.push(row_to_task(&row)?);
         }
         Ok(tasks)
@@ -440,6 +474,7 @@ impl TaskRepository {
 
     /// Lists invocations still in an active state. After a clean start these
     /// are leftovers from a process that stopped mid-run.
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_active(&self) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE status IN (?1, ?2) ORDER BY id),
@@ -449,15 +484,12 @@ impl TaskRepository {
             .connection
             .query(
                 &sql,
-                params_from_iter([
-                    Value::Text(TaskStatus::Pending.as_db().to_owned()),
-                    Value::Text(TaskStatus::Running.as_db().to_owned()),
-                ]),
+                params_from_iter([TaskStatus::Pending.to_sql(), TaskStatus::Running.to_sql()]),
             )
             .await
-            .map_err(database)?;
+            .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database)? {
+        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             tasks.push(row_to_task(&row)?);
         }
         Ok(tasks)
@@ -470,16 +502,16 @@ fn db_values(statuses: &[TaskStatus]) -> Vec<&'static str> {
 
 fn row_to_task(row: &Row) -> Result<TaskInvocation> {
     Ok(TaskInvocation {
-        id: req_int(row, 0)?,
-        kind: req_text(row, 1)?,
-        parent_id: opt_int(row, 2)?,
-        status: TaskStatus::from_db(&req_text(row, 3)?)?,
-        input: req_text(row, 4)?,
-        output: opt_text(row, 5)?,
-        error: opt_text(row, 6)?,
-        created_at: req_ts(row, 7)?,
-        started_at: opt_ts(row, 8)?,
-        finished_at: opt_ts(row, 9)?,
+        id: TASK_COLUMNS.extract(row, col::ID)?,
+        kind: TASK_COLUMNS.extract(row, col::KIND)?,
+        parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
+        status: TASK_COLUMNS.extract(row, col::STATUS)?,
+        input: TASK_COLUMNS.extract(row, col::INPUT)?,
+        output: TASK_COLUMNS.extract(row, col::OUTPUT)?,
+        error: TASK_COLUMNS.extract(row, col::ERROR)?,
+        created_at: TASK_COLUMNS.extract(row, col::CREATED_AT)?,
+        started_at: TASK_COLUMNS.extract(row, col::STARTED_AT)?,
+        finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT)?,
     })
 }
 

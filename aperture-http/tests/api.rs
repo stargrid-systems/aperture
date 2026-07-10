@@ -3,6 +3,7 @@ use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
+use aperture_storage::DbId;
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -11,6 +12,7 @@ use axum::response::Response;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 fn at(millis: i64) -> Timestamp {
     Timestamp::from_millisecond(millis).unwrap()
@@ -18,7 +20,7 @@ fn at(millis: i64) -> Timestamp {
 
 fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
     Artifact {
-        id: 0,
+        id: DbId::from(0),
         key: key.to_owned(),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
         digest: digest.to_owned(),
@@ -36,7 +38,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Arc::new(Artifacts::new(storage, root));
 
-    let repo = artifacts.storage().artifacts();
+    let repo = artifacts.storage().artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:fff", 1_000))
         .await
         .unwrap();
@@ -56,7 +58,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
         tasks.clone(),
         SpectraConfig::default(),
     );
-    let state = AppState::new("test", spectra, tasks);
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks);
     (app(state), artifacts)
 }
 
@@ -210,7 +212,7 @@ async fn lists_task_definitions_with_schemas() {
 #[tokio::test]
 async fn reads_recorded_tasks() {
     let (app, artifacts) = seeded_app().await;
-    let repo = artifacts.storage().tasks();
+    let repo = artifacts.storage().tasks().unwrap();
     let id = repo
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
         .await
@@ -240,7 +242,7 @@ async fn reads_recorded_tasks() {
 #[tokio::test]
 async fn filters_tasks_by_json_field() {
     let (app, artifacts) = seeded_app().await;
-    let repo = artifacts.storage().tasks();
+    let repo = artifacts.storage().tasks().unwrap();
     let spectra = repo
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
         .await

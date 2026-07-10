@@ -123,7 +123,7 @@ impl Cursor {
     }
 
     fn decode(encoded: &str) -> Result<Self> {
-        let invalid = || StorageError::Decode(format!("invalid cursor {encoded:?}"));
+        let invalid = || StorageError::InvalidCursor(encoded.to_owned());
         let buf = from_hex(encoded).ok_or_else(invalid)?;
         if buf.len() < 9 {
             return Err(invalid());
@@ -267,16 +267,20 @@ impl Filters {
     }
 
     /// Adds `column IN (?, ?, ...)` bound to `values`, or nothing when empty.
-    pub(crate) fn one_of(&mut self, column: &str, values: &[&str]) {
-        if values.is_empty() {
-            return;
-        }
-        self.separator();
-        let first = self.params.len() + 1;
+    pub(crate) fn one_of<'a>(&mut self, column: &str, mut values: impl Iterator<Item = &'a str>) {
+        let first = match values.next() {
+            None => return,
+            Some(v) => {
+                self.separator();
+                self.params.push(Value::Text(v.to_owned()));
+                self.params.len()
+            }
+        };
         for value in values {
-            self.params.push(Value::Text((*value).to_owned()));
+            self.params.push(Value::Text(value.to_owned()));
         }
-        let placeholders = (first..first + values.len())
+        let last = self.params.len();
+        let placeholders = (first..=last)
             .map(|n| format!("?{n}"))
             .collect::<Vec<_>>()
             .join(", ");
@@ -308,6 +312,48 @@ impl Filters {
                 .push(Value::Text(format!("%{}%", escape_like(value))));
             self.separator();
             let _ = write!(self.sql, "{column} LIKE ?{} ESCAPE '\\'", self.params.len());
+        }
+    }
+
+    /// Adds `(c1 LIKE ? ESCAPE '\' OR c2 LIKE ? ESCAPE '\' ...)` where each
+    /// column references the same reused param value, or nothing when `value`
+    /// is `None`. Wildcards in `value` are escaped, so it matches as a literal
+    /// substring.
+    pub(crate) fn like_any(&mut self, columns: &[&str], value: Option<&str>) {
+        let Some(value) = value else {
+            return;
+        };
+        self.params
+            .push(Value::Text(format!("%{}%", escape_like(value))));
+        self.separator();
+        let placeholder = self.params.len();
+        let mut first = true;
+        self.sql.push('(');
+        for col in columns {
+            if !first {
+                self.sql.push_str(" OR ");
+            }
+            first = false;
+            let _ = write!(self.sql, "{col} LIKE ?{placeholder} ESCAPE '\\'");
+        }
+        self.sql.push(')');
+    }
+
+    /// Adds `column >= ?` bound to the integer `value`, or nothing when `None`.
+    pub(crate) fn gte_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} >= ?{}", self.params.len());
+        }
+    }
+
+    /// Adds `column <= ?` bound to the integer `value`, or nothing when `None`.
+    pub(crate) fn lte_int(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.params.push(Value::Integer(value));
+            self.separator();
+            let _ = write!(self.sql, "{column} <= ?{}", self.params.len());
         }
     }
 
@@ -442,7 +488,7 @@ impl Paginator {
 /// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
 /// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the
 /// SQL.
-fn escape_like(value: &str) -> String {
+pub(crate) fn escape_like(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         if matches!(ch, '\\' | '%' | '_') {

@@ -3,16 +3,20 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
+use aperture_storage::LogRepository;
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::routing::get;
 use axum::{Json, Router};
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
 use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::{Discriminator, ObjectBuilder, OneOfBuilder, Ref, Schema, Type};
 use utoipa_axum::router::OpenApiRouter;
+use uuid::Uuid;
 
 use self::api::router as api_routes;
+use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
 
@@ -25,17 +29,18 @@ mod spectra;
 #[derive(Clone)]
 pub struct AppState {
     version: &'static str,
+    boot_id: Uuid,
     spectra: Spectra,
     tasks: Tasks,
 }
 
 impl AppState {
-    /// Wraps the gateway version, the Spectra frontend, and the task manager
-    /// for use as request state. `version` is reported by `GET
-    /// /api/v1/version`.
-    pub fn new(version: &'static str, spectra: Spectra, tasks: Tasks) -> Self {
+    /// Wraps the gateway version, boot id, Spectra frontend, and task manager
+    /// for use as request state.
+    pub fn new(version: &'static str, boot_id: Uuid, spectra: Spectra, tasks: Tasks) -> Self {
         Self {
             version,
+            boot_id,
             spectra,
             tasks,
         }
@@ -45,6 +50,10 @@ impl AppState {
         self.version
     }
 
+    pub(crate) fn boot_id(&self) -> Uuid {
+        self.boot_id
+    }
+
     pub(crate) fn spectra(&self) -> &Spectra {
         &self.spectra
     }
@@ -52,10 +61,21 @@ impl AppState {
     pub(crate) fn tasks(&self) -> &Tasks {
         &self.tasks
     }
+
+    /// Returns the repository over the structured log tables for this request.
+    pub(crate) fn logs(&self) -> Result<LogRepository, aperture_storage::StorageError> {
+        self.spectra.artifacts().storage().logs()
+    }
 }
 
 #[derive(OpenApi)]
-#[openapi(info(title = "Aperture API"))]
+#[openapi(
+    info(title = "Aperture API"),
+    // TODO(utoipa): These types are only referenced indirectly as field types
+    // of IntoParams structs. utoipa does not discover their schemas
+    // automatically. See: <https://github.com/stargrid-systems/aperture/issues/110>.
+    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam))
+)]
 struct ApiDoc;
 
 fn api_router() -> OpenApiRouter<AppState> {
@@ -74,6 +94,8 @@ pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
 ///
 /// The JSON API lives under `/api`. Everything else falls back to the Spectra
 /// frontend, which the state's [`Spectra`] serves and fetches on demand.
+/// A [`TraceLayer`] creates a span for each request so per-request tracing
+/// shows up in the log viewer.
 pub fn app(state: AppState) -> Router {
     let (api, mut doc) = self::api_router().split_for_parts();
     project_tasks(&mut doc, &state.tasks().registry().descriptors());
@@ -81,6 +103,7 @@ pub fn app(state: AppState) -> Router {
         .merge(api)
         .route("/api/openapi.json", get(move || openapi_doc(doc.clone())))
         .fallback(spectra_fallback)
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 

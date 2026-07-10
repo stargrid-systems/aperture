@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use aperture_storage::{Storage, TaskStatus};
+use aperture_storage::{DbId, Storage, TaskStatus};
 use aperture_tasks::{
     Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry,
     Tasks,
@@ -82,7 +82,7 @@ impl TaskDefinition for Probe {
 /// A task that spawns a [`Probe`] child, publishes the child's id, then awaits
 /// it. When the parent is cancelled the child is too, so the await unwinds.
 struct Parent {
-    child_id: Arc<Mutex<Option<i64>>>,
+    child_id: Arc<Mutex<Option<DbId>>>,
     spawned: Arc<Notify>,
 }
 
@@ -168,7 +168,7 @@ async fn spawn_and_wait_returns_decoded_output() {
     let output = handle.wait().await.unwrap();
     assert_eq!(output.result, 42);
 
-    let recorded = storage.tasks().get(id).await.unwrap().unwrap();
+    let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Succeeded);
     assert_eq!(recorded.output.as_deref(), Some(r#"{"result":42}"#));
 }
@@ -212,7 +212,7 @@ async fn cancellable_task_records_cancelled() {
     let result = handle.wait().await;
     assert!(matches!(result, Err(TaskError::Run(RunError::Cancelled))));
 
-    let recorded = storage.tasks().get(id).await.unwrap().unwrap();
+    let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Cancelled);
 }
 
@@ -262,7 +262,7 @@ async fn child_inherits_parent_cancellation() {
         Err(TaskError::Run(RunError::Cancelled))
     ));
 
-    let recorded = storage.tasks().get(child).await.unwrap().unwrap();
+    let recorded = storage.tasks().unwrap().get(child).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Cancelled);
     assert_eq!(recorded.parent_id, Some(parent_id));
 }
@@ -283,7 +283,7 @@ async fn panicking_task_settles_as_failed() {
         Err(TaskError::Run(RunError::Failed(_)))
     ));
 
-    let recorded = storage.tasks().get(id).await.unwrap().unwrap();
+    let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Failed);
 
     // A panicked task settles, so shutdown finds nothing to wait on.
@@ -304,7 +304,7 @@ async fn failed_task_records_full_error_chain() {
         Err(TaskError::Run(RunError::Failed(_)))
     ));
 
-    let recorded = storage.tasks().get(id).await.unwrap().unwrap();
+    let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     let error = recorded.error.expect("failed task records an error");
     assert!(error.contains("outer failure"), "{error:?}");
     assert!(error.contains("root cause"), "{error:?}");
@@ -318,9 +318,10 @@ async fn cancel_distinguishes_unknown_from_settled() {
     let tasks = Tasks::new(storage.clone(), registry);
 
     // An unknown id is not found.
+    let unknown = DbId::from(999);
     assert!(matches!(
-        tasks.cancel(999).await,
-        Err(TaskError::NotFound(999))
+        tasks.cancel(unknown).await,
+        Err(TaskError::NotFound(id)) if id == unknown
     ));
 
     // A task that already finished is reported as settled, not unknown.
@@ -337,14 +338,20 @@ async fn reconcile_marks_orphaned_invocations() {
     let storage = Storage::open(":memory:").await.unwrap();
     let id = storage
         .tasks()
+        .unwrap()
         .create("double", None, "{}", at(1_000))
         .await
         .unwrap();
-    storage.tasks().mark_running(id, at(1_000)).await.unwrap();
+    storage
+        .tasks()
+        .unwrap()
+        .mark_running(id, at(1_000))
+        .await
+        .unwrap();
 
     let tasks = Tasks::new(storage.clone(), TaskRegistry::new());
     assert_eq!(tasks.reconcile().await.unwrap(), 1);
 
-    let recorded = storage.tasks().get(id).await.unwrap().unwrap();
+    let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Interrupted);
 }

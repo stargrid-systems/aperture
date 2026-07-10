@@ -10,6 +10,10 @@ use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
+use tokio::signal::ctrl_c;
+use uuid::Uuid;
+
+mod logging;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -17,6 +21,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let artifacts = open_artifacts(&data_dir).await?;
+    let boot_id = Uuid::new_v4();
+    let log_repo = artifacts.storage().logs().into_diagnostic()?;
+    let log_worker = logging::init(log_repo, boot_id);
+
     artifacts.sync().await.into_diagnostic()?;
 
     // Register the task kinds and mark any invocations a previous run left
@@ -38,27 +46,32 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(VERSION, spectra, tasks.clone());
+    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
-    axum::serve(listener, app)
+    let result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .into_diagnostic()?;
+        .into_diagnostic();
 
-    // The server has stopped accepting requests. Resolve the running tasks:
-    // resumable ones are interrupted, unresumable ones are awaited.
-    tracing::info!("draining tasks before exit");
+    // The server has stopped accepting requests.
+    tracing::info!("aperture shutdown starting");
     tasks.shutdown().await;
+    tracing::info!("aperture shutdown complete");
+
+    // The log worker drains pending records, commits them, and closes any
+    // spans left open. close_open_spans runs inside the worker so it sees the
+    // final flush.
+    log_worker.shutdown().await;
+
+    result?;
     Ok(())
 }
 
 /// Resolves when the process is asked to stop, via Ctrl+C or SIGTERM.
 async fn shutdown_signal() {
-    use tokio::signal::ctrl_c;
-
     let interrupt = async {
         ctrl_c().await.expect("failed to install Ctrl+C handler");
     };

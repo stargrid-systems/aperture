@@ -14,7 +14,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::{
-    JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, Storage, TaskInvocation, TaskStatus,
+    DbId, JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, Storage, TaskInvocation,
+    TaskStatus,
 };
 use jiff::Timestamp;
 use serde::de::DeserializeOwned;
@@ -48,7 +49,7 @@ struct TaskShared {
 struct RunningTask {
     shared: Arc<TaskShared>,
     kind: String,
-    parent_id: Option<i64>,
+    parent_id: Option<DbId>,
     capabilities: Capabilities,
     started_at: Timestamp,
     abort: AbortHandle,
@@ -58,11 +59,11 @@ struct RunningTask {
 #[derive(Debug, Clone)]
 pub struct ActiveTask {
     /// The invocation id.
-    pub id: i64,
+    pub id: DbId,
     /// The kind of task.
     pub kind: String,
     /// The parent invocation, if any.
-    pub parent_id: Option<i64>,
+    pub parent_id: Option<DbId>,
     /// What the kind supports.
     pub capabilities: Capabilities,
     /// Live progress.
@@ -74,7 +75,7 @@ pub struct ActiveTask {
 pub(crate) struct TasksInner {
     storage: Storage,
     registry: TaskRegistry,
-    running: Mutex<HashMap<i64, RunningTask>>,
+    running: Mutex<HashMap<DbId, RunningTask>>,
     joinset: Mutex<JoinSet<()>>,
 }
 
@@ -139,14 +140,14 @@ impl Tasks {
         Ok(self
             .inner
             .storage
-            .tasks()
+            .tasks()?
             .list(status, kind, parent, json, query)
             .await?)
     }
 
     /// Returns the recorded invocation `id`, if it exists.
-    pub async fn get(&self, id: i64) -> Result<Option<TaskInvocation>, TaskError> {
-        Ok(self.inner.storage.tasks().get(id).await?)
+    pub async fn get(&self, id: DbId) -> Result<Option<TaskInvocation>, TaskError> {
+        Ok(self.inner.storage.tasks()?.get(id).await?)
     }
 
     /// Requests cooperative cancellation of the running task `id`. Returns
@@ -154,7 +155,7 @@ impl Tasks {
     /// cancellable. Returns [`TaskError::AlreadySettled`] if the task
     /// exists but has finished, and [`TaskError::NotFound`] if no such task
     /// exists.
-    pub async fn cancel(&self, id: i64) -> Result<bool, TaskError> {
+    pub async fn cancel(&self, id: DbId) -> Result<bool, TaskError> {
         {
             let running = self.inner.running.lock().expect("running poisoned");
             if let Some(task) = running.get(&id) {
@@ -166,7 +167,7 @@ impl Tasks {
             }
         }
         // Not running: tell an unknown id apart from one that already finished.
-        match self.inner.storage.tasks().get(id).await? {
+        match self.inner.storage.tasks()?.get(id).await? {
             Some(_) => Err(TaskError::AlreadySettled(id)),
             None => Err(TaskError::NotFound(id)),
         }
@@ -189,7 +190,7 @@ impl Tasks {
     }
 
     /// Live progress of the running task `id`, or `None` if it is not running.
-    pub fn progress(&self, id: i64) -> Option<Progress> {
+    pub fn progress(&self, id: DbId) -> Option<Progress> {
         let running = self.inner.running.lock().expect("running poisoned");
         running.get(&id).map(|task| task.shared.progress.snapshot())
     }
@@ -200,10 +201,10 @@ impl Tasks {
     pub async fn reconcile(&self) -> Result<usize, TaskError> {
         let now = Timestamp::now();
         let mut count = 0;
-        for task in self.inner.storage.tasks().list_active().await? {
+        for task in self.inner.storage.tasks()?.list_active().await? {
             self.inner
                 .storage
-                .tasks()
+                .tasks()?
                 .finish(
                     task.id,
                     TaskStatus::Interrupted,
@@ -221,7 +222,7 @@ impl Tasks {
     /// shutdown: resumable tasks are aborted and recorded as interrupted, while
     /// unresumable tasks are awaited so they finish cleanly.
     pub async fn shutdown(&self) {
-        let entries: Vec<(i64, bool, AbortHandle, Arc<TaskShared>)> = {
+        let entries: Vec<(DbId, bool, AbortHandle, Arc<TaskShared>)> = {
             let running = self.inner.running.lock().expect("running poisoned");
             running
                 .iter()
@@ -241,18 +242,26 @@ impl Tasks {
             if resumable {
                 abort.abort();
                 let now = Timestamp::now();
-                if let Err(err) = self
-                    .inner
-                    .storage
-                    .tasks()
-                    .finish(id, TaskStatus::Interrupted, now, None, Some("interrupted"))
-                    .await
-                {
-                    tracing::error!(
-                        task = id,
-                        error = &err as &dyn Error,
-                        "failed to record interrupted task"
-                    );
+                match self.inner.storage.tasks() {
+                    Ok(repo) => {
+                        if let Err(err) = repo
+                            .finish(id, TaskStatus::Interrupted, now, None, Some("interrupted"))
+                            .await
+                        {
+                            tracing::error!(
+                                task = id.get(),
+                                error = &err as &dyn Error,
+                                "failed to record interrupted task"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            task = id.get(),
+                            error = &err as &dyn Error,
+                            "failed to access tasks repository"
+                        );
+                    }
                 }
                 self.inner.settle(id);
             } else {
@@ -280,7 +289,7 @@ impl TasksInner {
         self: &Arc<Self>,
         kind: &str,
         input: Value,
-        parent_id: Option<i64>,
+        parent_id: Option<DbId>,
     ) -> Result<(TaskInvocation, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
             self.registry
@@ -293,7 +302,7 @@ impl TasksInner {
         let input_json = input.to_string();
         let id = self
             .storage
-            .tasks()
+            .tasks()?
             .create_running(kind, parent_id, &input_json, now)
             .await?;
 
@@ -353,7 +362,7 @@ impl TasksInner {
         self: &Arc<Self>,
         kind: &str,
         input: Value,
-        parent_id: Option<i64>,
+        parent_id: Option<DbId>,
     ) -> Result<TaskHandle<O>, TaskError> {
         let (invocation, phase) = self.start(kind, input, parent_id).await?;
         Ok(TaskHandle {
@@ -364,7 +373,7 @@ impl TasksInner {
         })
     }
 
-    fn parent_token(&self, parent: i64) -> Option<CancellationToken> {
+    fn parent_token(&self, parent: DbId) -> Option<CancellationToken> {
         self.running
             .lock()
             .expect("running poisoned")
@@ -373,7 +382,7 @@ impl TasksInner {
     }
 
     /// Records the terminal outcome of `id` and wakes anyone awaiting it.
-    pub(crate) async fn finish(&self, id: i64, outcome: Result<Value, TaskError>) {
+    pub(crate) async fn finish(&self, id: DbId, outcome: Result<Value, TaskError>) {
         let now = Timestamp::now();
         let (status, output, error) = match outcome {
             Ok(value) => (TaskStatus::Succeeded, Some(value.to_string()), None),
@@ -381,23 +390,32 @@ impl TasksInner {
             // `{:#}` keeps the full source chain, not just the outermost message.
             Err(err) => (TaskStatus::Failed, None, Some(format!("{err:#}"))),
         };
-        if let Err(err) = self
-            .storage
-            .tasks()
-            .finish(id, status, now, output.as_deref(), error.as_deref())
-            .await
-        {
-            tracing::error!(
-                task = id,
-                error = &err as &dyn Error,
-                "failed to record task outcome"
-            );
+        match self.storage.tasks() {
+            Ok(repo) => {
+                if let Err(err) = repo
+                    .finish(id, status, now, output.as_deref(), error.as_deref())
+                    .await
+                {
+                    tracing::error!(
+                        task = id.get(),
+                        error = &err as &dyn Error,
+                        "failed to record task outcome"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    task = id.get(),
+                    error = &err as &dyn Error,
+                    "failed to access tasks repository"
+                );
+            }
         }
         self.settle(id);
     }
 
     /// Removes `id` from the live registry and signals its completion.
-    fn settle(&self, id: i64) {
+    fn settle(&self, id: DbId) {
         if let Some(task) = self.running.lock().expect("running poisoned").remove(&id) {
             let _ = task.shared.phase.send(Phase::Settled);
         }
@@ -407,7 +425,7 @@ impl TasksInner {
 /// A typed handle to a spawned task. Await it for the output, or read live
 /// [`TaskHandle::progress`] while it runs.
 pub struct TaskHandle<O> {
-    id: i64,
+    id: DbId,
     inner: Arc<TasksInner>,
     phase: watch::Receiver<Phase>,
     _output: PhantomData<fn() -> O>,
@@ -415,7 +433,7 @@ pub struct TaskHandle<O> {
 
 impl<O> TaskHandle<O> {
     /// The invocation id.
-    pub fn id(&self) -> i64 {
+    pub fn id(&self) -> DbId {
         self.id
     }
 
@@ -442,7 +460,7 @@ impl<O: DeserializeOwned> TaskHandle<O> {
         let task = self
             .inner
             .storage
-            .tasks()
+            .tasks()?
             .get(self.id)
             .await?
             .ok_or(TaskError::NotFound(self.id))?;
