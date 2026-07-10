@@ -267,16 +267,20 @@ impl Filters {
     }
 
     /// Adds `column IN (?, ?, ...)` bound to `values`, or nothing when empty.
-    pub(crate) fn one_of(&mut self, column: &str, values: &[&str]) {
-        if values.is_empty() {
-            return;
-        }
-        self.separator();
-        let first = self.params.len() + 1;
+    pub(crate) fn one_of<'a>(&mut self, column: &str, mut values: impl Iterator<Item = &'a str>) {
+        let first = match values.next() {
+            None => return,
+            Some(v) => {
+                self.separator();
+                self.params.push(Value::Text(v.to_owned()));
+                self.params.len()
+            }
+        };
         for value in values {
-            self.params.push(Value::Text((*value).to_owned()));
+            self.params.push(Value::Text(value.to_owned()));
         }
-        let placeholders = (first..first + values.len())
+        let last = self.params.len();
+        let placeholders = (first..=last)
             .map(|n| format!("?{n}"))
             .collect::<Vec<_>>()
             .join(", ");

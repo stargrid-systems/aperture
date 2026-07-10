@@ -8,7 +8,7 @@ use serde_json::Map;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::dto::{FieldFilter, OrderParam, Page, deserialize_single_or_vec_string};
+use crate::dto::{JsonQueryString, OrderParam, Page, deserialize_single_or_vec_string};
 
 /// Severity level of a log event or span.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
@@ -49,9 +49,9 @@ impl From<LevelResponse> for Level {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogEventResponse {
     /// Event id.
-    pub id: i64,
+    pub id: String,
     /// Span this event belongs to, if any.
-    pub span_id: Option<i64>,
+    pub span_id: Option<String>,
     /// Severity level.
     pub level: LevelResponse,
     /// Module path that emitted the event.
@@ -64,27 +64,25 @@ pub struct LogEventResponse {
     pub file: Option<String>,
     /// Source line, if available.
     pub line: Option<u32>,
+    /// Boot session this event belongs to, if known.
+    pub boot_id: Option<String>,
     /// All structured fields as a JSON object. Empty when there are none.
     pub fields: Map<String, serde_json::Value>,
 }
 
 impl From<Event> for LogEventResponse {
     fn from(event: Event) -> Self {
-        let fields = event
-            .fields
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
         Self {
-            id: event.id,
-            span_id: event.span_id,
+            id: event.id.to_string(),
+            span_id: event.span_id.map(|id| id.to_string()),
             level: event.level.into(),
             target: event.target,
             message: event.message,
             timestamp: event.timestamp,
             file: event.file,
             line: event.line,
-            fields,
+            boot_id: event.boot_id,
+            fields: event.fields,
         }
     }
 }
@@ -93,9 +91,9 @@ impl From<Event> for LogEventResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogSpanResponse {
     /// Span id.
-    pub id: i64,
+    pub id: String,
     /// Parent span id, if any.
-    pub parent_id: Option<i64>,
+    pub parent_id: Option<String>,
     /// Span name.
     pub name: String,
     /// Severity level.
@@ -116,14 +114,9 @@ pub struct LogSpanResponse {
 
 impl From<Span> for LogSpanResponse {
     fn from(span: Span) -> Self {
-        let fields = span
-            .fields
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
         Self {
-            id: span.id,
-            parent_id: span.parent_id,
+            id: span.id.to_string(),
+            parent_id: span.parent_id.map(|id| id.to_string()),
             name: span.name,
             level: span.level.into(),
             target: span.target,
@@ -131,7 +124,7 @@ impl From<Span> for LogSpanResponse {
             line: span.line,
             started_at: span.started_at,
             ended_at: span.ended_at,
-            fields,
+            fields: span.fields,
         }
     }
 }
@@ -166,14 +159,13 @@ pub struct LogListParams {
     /// Substring search across message and target.
     pub q: Option<String>,
     /// Only events belonging to this span.
-    pub span_id: Option<i64>,
+    pub span_id: Option<String>,
     /// Only events at or after this time (RFC 3339).
     pub since: Option<Timestamp>,
     /// Only events at or before this time (RFC 3339).
     pub until: Option<Timestamp>,
     /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.
-    #[param(value_type = Option<String>)]
-    pub fields: Option<FieldFilter>,
+    pub fields: Option<JsonQueryString>,
 }
 
 impl LogListParams {
@@ -209,12 +201,11 @@ pub struct LogSpanListParams {
     /// Only spans started at or before this time (RFC 3339).
     pub until: Option<Timestamp>,
     /// Only direct children of this span id.
-    pub parent_id: Option<i64>,
+    pub parent_id: Option<String>,
     /// When true, only root spans (no parent) are returned.
     pub parent_null: Option<bool>,
     /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.
-    #[param(value_type = Option<String>)]
-    pub fields: Option<FieldFilter>,
+    pub fields: Option<JsonQueryString>,
 }
 
 impl LogSpanListParams {

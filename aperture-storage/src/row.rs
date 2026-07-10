@@ -4,6 +4,7 @@
 //! these, so the `NULL` handling and the decode error messages stay consistent.
 
 use jiff::Timestamp;
+use serde_json::Map;
 use turso::{Row, Value};
 
 use crate::error::{Result, StorageError, database};
@@ -66,6 +67,20 @@ pub(crate) fn opt_text(row: &Row, idx: usize) -> Result<Option<String>> {
             actual,
         }),
     }
+}
+
+pub(crate) fn json_map(row: &Row, idx: usize) -> Result<Map<String, serde_json::Value>> {
+    let Some(text) = opt_text(row, idx)? else {
+        return Ok(Map::new());
+    };
+    Ok(serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|err| StorageError::InvalidJson {
+            column: idx,
+            error: err.to_string(),
+        })?
+        .as_object()
+        .cloned()
+        .unwrap_or_default())
 }
 
 pub(crate) fn req_int(row: &Row, idx: usize) -> Result<i64> {

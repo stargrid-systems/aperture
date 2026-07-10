@@ -1,6 +1,7 @@
 //! Structured log storage: tracing spans and events persisted for querying.
 
 use jiff::Timestamp;
+use serde_json::Map;
 use turso::transaction::Transaction;
 use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
@@ -9,8 +10,8 @@ use crate::error::{Result, StorageError, database};
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
 use crate::row::{
-    int_or_null, map_ref_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text, req_ts,
-    req_u64, text_ref_or_null,
+    int_or_null, json_map, map_ref_or_null, opt_int, opt_text, opt_ts, opt_u32, req_int, req_text,
+    req_ts, req_u64, text_ref_or_null,
 };
 
 /// Columns selected for an [`Event`], in [`row_to_event`] order.
@@ -43,6 +44,17 @@ const SQL_CLOSE_SPAN: &str = sql!(UPDATE log_spans SET ended_at = ?1 WHERE id = 
 
 /// SQL for updating span fields after late-recorded values arrive.
 const SQL_UPDATE_SPAN_FIELDS: &str = sql!(UPDATE log_spans SET fields = jsonb(?1) WHERE id = ?2);
+
+mod col {
+    pub(super) const FIELDS: &str = "fields";
+    pub(super) const LEVEL: &str = "level";
+    pub(super) const MESSAGE: &str = "message";
+    pub(super) const PARENT_ID: &str = "parent_id";
+    pub(super) const SPAN_ID: &str = "span_id";
+    pub(super) const STARTED_AT: &str = "started_at";
+    pub(super) const TARGET: &str = "target";
+    pub(super) const TIMESTAMP: &str = "timestamp";
+}
 
 /// Severity level of a tracing event or span.
 ///
@@ -94,7 +106,7 @@ pub struct Span {
     pub line: Option<u32>,
     pub started_at: Timestamp,
     pub ended_at: Option<Timestamp>,
-    pub fields: Option<String>,
+    pub fields: Map<String, serde_json::Value>,
 }
 
 /// A persisted tracing event (log record).
@@ -109,7 +121,7 @@ pub struct Event {
     pub file: Option<String>,
     pub line: Option<u32>,
     pub boot_id: Option<String>,
-    pub fields: Option<String>,
+    pub fields: Map<String, serde_json::Value>,
 }
 
 /// One boot session observed in the log store.
@@ -191,51 +203,6 @@ impl LogRepository {
         Self { connection }
     }
 
-    /// Starts building a span insert. Required fields are passed here; optional
-    /// fields are set via builder methods. Call `execute().await` to persist.
-    pub fn insert_span<'a>(
-        &'a self,
-        name: &'a str,
-        level: Level,
-        target: &'a str,
-        started_at: Timestamp,
-    ) -> SpanInsertBuilder<'a> {
-        SpanInsertBuilder {
-            repo: self,
-            parent_id: None,
-            name,
-            level,
-            target,
-            file: None,
-            line: None,
-            started_at,
-            fields: None,
-        }
-    }
-
-    /// Starts building an event insert. Required fields are passed here;
-    /// optional fields are set via builder methods. Call `execute().await` to
-    /// persist.
-    pub fn insert_event<'a>(
-        &'a self,
-        level: Level,
-        target: &'a str,
-        timestamp: Timestamp,
-    ) -> EventInsertBuilder<'a> {
-        EventInsertBuilder {
-            repo: self,
-            span_id: None,
-            level,
-            target,
-            timestamp,
-            message: None,
-            file: None,
-            line: None,
-            boot_id: None,
-            fields: None,
-        }
-    }
-
     /// Opens a batched write transaction over the log tables. All operations
     /// on the returned [`LogBatch`] are atomic: they commit together when
     /// [`LogBatch::commit`] is called, or roll back if the batch is dropped
@@ -292,32 +259,31 @@ impl LogRepository {
 
     /// Lists log events matching the given filters, ordered by timestamp
     /// descending by default.
-    #[tracing::instrument(level = "info", skip(self, filter, query))]
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn list_events(
         &self,
         filter: &EventFilter,
         query: &ListQuery,
     ) -> Result<Page<Event>> {
         let paginator = Paginator::new(query, Order::Desc)?;
-        let keyset = Keyset::with_id("timestamp", paginator.query_order());
+        let keyset = Keyset::with_id(col::TIMESTAMP, paginator.query_order());
 
         let mut filters = Filters::new();
 
         if let Some(min_level) = filter.min_level {
-            filters.gte_int("level", Some(min_level.as_db()));
+            filters.gte_int(col::LEVEL, Some(min_level.as_db()));
         }
 
-        let targets: Vec<&str> = filter.target.iter().map(String::as_str).collect();
-        filters.one_of("target", &targets);
-        filters.eq_int("span_id", filter.span_id);
-        filters.gte_int("timestamp", filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int("timestamp", filter.until.map(|ts| ts.as_millisecond()));
+        filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
+        filters.eq_int(col::SPAN_ID, filter.span_id);
+        filters.gte_int(col::TIMESTAMP, filter.since.map(|ts| ts.as_millisecond()));
+        filters.lte_int(col::TIMESTAMP, filter.until.map(|ts| ts.as_millisecond()));
 
         for (key, value) in &filter.fields {
-            filters.json_path_eq("fields", key, value);
+            filters.json_path_eq(col::FIELDS, key, value);
         }
 
-        filters.like_any(&["message", "target"], filter.query.as_deref());
+        filters.like_any(&[col::MESSAGE, col::TARGET], filter.query.as_deref());
 
         filters.keyset(&keyset, &paginator);
 
@@ -382,29 +348,28 @@ impl LogRepository {
 
     /// Lists spans matching the given filters, ordered by started_at descending
     /// by default.
-    #[tracing::instrument(level = "info", skip(self, filter, query))]
+    #[tracing::instrument(level = "info", skip_all)]
     pub async fn list_spans(&self, filter: &SpanFilter, query: &ListQuery) -> Result<Page<Span>> {
         let paginator = Paginator::new(query, Order::Desc)?;
-        let keyset = Keyset::with_id("started_at", paginator.query_order());
+        let keyset = Keyset::with_id(col::STARTED_AT, paginator.query_order());
 
         let mut filters = Filters::new();
 
         if let Some(min_level) = filter.min_level {
-            filters.gte_int("level", Some(min_level.as_db()));
+            filters.gte_int(col::LEVEL, Some(min_level.as_db()));
         }
 
         match filter.parent {
             SpanParentFilter::Any => {}
             SpanParentFilter::RootOnly => filters.raw("parent_id IS NULL"),
-            SpanParentFilter::ChildrenOf(id) => filters.eq_int("parent_id", Some(id)),
+            SpanParentFilter::ChildrenOf(id) => filters.eq_int(col::PARENT_ID, Some(id)),
         }
 
-        let targets: Vec<&str> = filter.target.iter().map(String::as_str).collect();
-        filters.one_of("target", &targets);
-        filters.gte_int("started_at", filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int("started_at", filter.until.map(|ts| ts.as_millisecond()));
+        filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
+        filters.gte_int(col::STARTED_AT, filter.since.map(|ts| ts.as_millisecond()));
+        filters.lte_int(col::STARTED_AT, filter.until.map(|ts| ts.as_millisecond()));
         for (key, value) in &filter.fields {
-            filters.json_path_eq("fields", key, value);
+            filters.json_path_eq(col::FIELDS, key, value);
         }
         filters.keyset(&keyset, &paginator);
 
@@ -540,132 +505,6 @@ impl LogRepository {
     }
 }
 
-/// Builder for a span insert. Created by [`LogRepository::insert_span`].
-pub struct SpanInsertBuilder<'a> {
-    repo: &'a LogRepository,
-    parent_id: Option<i64>,
-    name: &'a str,
-    level: Level,
-    target: &'a str,
-    file: Option<&'a str>,
-    line: Option<u32>,
-    started_at: Timestamp,
-    fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
-}
-
-impl<'a> SpanInsertBuilder<'a> {
-    pub fn parent_id(mut self, id: Option<i64>) -> Self {
-        self.parent_id = id;
-        self
-    }
-
-    pub fn file(mut self, file: Option<&'a str>) -> Self {
-        self.file = file;
-        self
-    }
-
-    pub fn line(mut self, line: Option<u32>) -> Self {
-        self.line = line;
-        self
-    }
-
-    pub fn fields(
-        mut self,
-        fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
-    ) -> Self {
-        self.fields = fields;
-        self
-    }
-
-    pub async fn execute(self) -> Result<i64> {
-        let params = params_from_iter([
-            int_or_null(self.parent_id),
-            Value::Text(self.name.to_owned()),
-            Value::Integer(self.level.as_db()),
-            Value::Text(self.target.to_owned()),
-            text_ref_or_null(self.file),
-            int_or_null(self.line),
-            Value::Integer(self.started_at.as_millisecond()),
-            map_ref_or_null(self.fields),
-        ]);
-        self.repo
-            .connection
-            .execute(SQL_INSERT_SPAN, params)
-            .await
-            .map_err(database)?;
-        Ok(self.repo.connection.last_insert_rowid())
-    }
-}
-
-/// Builder for an event insert. Created by [`LogRepository::insert_event`].
-pub struct EventInsertBuilder<'a> {
-    repo: &'a LogRepository,
-    span_id: Option<i64>,
-    level: Level,
-    target: &'a str,
-    timestamp: Timestamp,
-    message: Option<&'a str>,
-    file: Option<&'a str>,
-    line: Option<u32>,
-    boot_id: Option<&'a str>,
-    fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
-}
-
-impl<'a> EventInsertBuilder<'a> {
-    pub fn span_id(mut self, id: Option<i64>) -> Self {
-        self.span_id = id;
-        self
-    }
-
-    pub fn message(mut self, message: Option<&'a str>) -> Self {
-        self.message = message;
-        self
-    }
-
-    pub fn file(mut self, file: Option<&'a str>) -> Self {
-        self.file = file;
-        self
-    }
-
-    pub fn line(mut self, line: Option<u32>) -> Self {
-        self.line = line;
-        self
-    }
-
-    pub fn boot_id(mut self, boot_id: Option<&'a str>) -> Self {
-        self.boot_id = boot_id;
-        self
-    }
-
-    pub fn fields(
-        mut self,
-        fields: Option<&'a serde_json::Map<String, serde_json::Value>>,
-    ) -> Self {
-        self.fields = fields;
-        self
-    }
-
-    pub async fn execute(self) -> Result<i64> {
-        let params = params_from_iter([
-            int_or_null(self.span_id),
-            Value::Integer(self.level.as_db()),
-            Value::Text(self.target.to_owned()),
-            text_ref_or_null(self.message),
-            Value::Integer(self.timestamp.as_millisecond()),
-            text_ref_or_null(self.file),
-            int_or_null(self.line),
-            text_ref_or_null(self.boot_id),
-            map_ref_or_null(self.fields),
-        ]);
-        self.repo
-            .connection
-            .execute(SQL_INSERT_EVENT, params)
-            .await
-            .map_err(database)?;
-        Ok(self.repo.connection.last_insert_rowid())
-    }
-}
-
 /// Batched write transaction over the log tables.
 ///
 /// Wraps a database transaction with cached prepared statements so a batch of
@@ -785,7 +624,7 @@ fn row_to_event(row: &turso::Row) -> Result<Event> {
         file: opt_text(row, 6)?,
         line: opt_u32(row, 7)?,
         boot_id: opt_text(row, 8)?,
-        fields: opt_text(row, 9)?,
+        fields: json_map(row, 9)?,
     })
 }
 
@@ -800,6 +639,6 @@ fn row_to_span(row: &turso::Row) -> Result<Span> {
         line: opt_u32(row, 6)?,
         started_at: req_ts(row, 7)?,
         ended_at: opt_ts(row, 8)?,
-        fields: opt_text(row, 9)?,
+        fields: json_map(row, 9)?,
     })
 }

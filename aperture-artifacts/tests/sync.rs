@@ -15,7 +15,7 @@ async fn sync_removes_versions_without_blobs() {
     let root = temp_root("orphan-version");
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Artifacts::new(storage, root.clone());
-    let repo = artifacts.storage().artifacts();
+    let repo = artifacts.storage().artifacts().unwrap();
 
     // A catalog version whose blob never made it to disk.
     repo.record_version(&Artifact {

@@ -13,8 +13,8 @@ pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort}
 use self::error::database;
 pub use self::error::{Result, StorageError};
 pub use self::log::{
-    BootInfo, Event, EventFilter, EventInsertBuilder, EventRecord, Level, LogBatch, LogRepository,
-    Span, SpanFilter, SpanInsertBuilder, SpanParentFilter, SpanRecord,
+    BootInfo, Event, EventFilter, EventRecord, Level, LogBatch, LogRepository, Span, SpanFilter,
+    SpanParentFilter, SpanRecord,
 };
 use self::migration::run;
 pub use self::page::{ListQuery, Order, Page};
@@ -68,30 +68,24 @@ impl Storage {
     }
 
     /// Creates a fresh independent connection with the busy timeout applied.
-    /// For a local database that was already opened successfully, `connect`
-    /// does not fail under normal circumstances.
-    fn connect(&self) -> Connection {
-        let conn = self
-            .db
-            .connect()
-            .expect("connection to an open local database should not fail");
-        conn.busy_timeout(BUSY_TIMEOUT)
-            .expect("busy_timeout should not fail on a fresh connection");
-        conn
+    fn connect(&self) -> Result<Connection> {
+        let conn = self.db.connect().map_err(database)?;
+        conn.busy_timeout(BUSY_TIMEOUT).map_err(database)?;
+        Ok(conn)
     }
 
     /// Returns the repository over the artifact catalog.
-    pub fn artifacts(&self) -> ArtifactRepository {
-        ArtifactRepository::new(self.connect())
+    pub fn artifacts(&self) -> Result<ArtifactRepository> {
+        Ok(ArtifactRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the task catalog.
-    pub fn tasks(&self) -> TaskRepository {
-        TaskRepository::new(self.connect())
+    pub fn tasks(&self) -> Result<TaskRepository> {
+        Ok(TaskRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the structured log tables.
-    pub fn logs(&self) -> LogRepository {
-        LogRepository::new(self.connect())
+    pub fn logs(&self) -> Result<LogRepository> {
+        Ok(LogRepository::new(self.connect()?))
     }
 }

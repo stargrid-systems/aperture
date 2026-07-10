@@ -16,7 +16,7 @@ use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
-use self::dto::{LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
+use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
 
@@ -63,7 +63,7 @@ impl AppState {
     }
 
     /// Returns the repository over the structured log tables for this request.
-    pub(crate) fn logs(&self) -> LogRepository {
+    pub(crate) fn logs(&self) -> Result<LogRepository, aperture_storage::StorageError> {
         self.spectra.artifacts().storage().logs()
     }
 }
@@ -74,7 +74,7 @@ impl AppState {
     // TODO(utoipa): These types are only referenced indirectly as field types
     // of IntoParams structs. utoipa does not discover their schemas
     // automatically. See: <https://github.com/stargrid-systems/aperture/issues/110>.
-    components(schemas(OrderParam, VersionSortParam, LevelResponse, TaskStatusParam))
+    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam))
 )]
 struct ApiDoc;
 

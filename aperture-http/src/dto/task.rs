@@ -13,6 +13,7 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::dto::{OrderParam, Page};
+use crate::error::ApiError;
 
 /// Lifecycle state of a task invocation.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
@@ -88,11 +89,11 @@ impl From<Progress> for ProgressResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TaskResponse {
     /// Invocation id.
-    pub id: i64,
+    pub id: String,
     /// The kind of task.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<i64>,
+    pub parent_id: Option<String>,
     /// Lifecycle state.
     pub status: TaskStatusResponse,
     /// The input the task was created with.
@@ -116,9 +117,9 @@ impl TaskResponse {
     pub fn new(task: TaskInvocation, progress: Option<Progress>) -> Self {
         let running = matches!(task.status, TaskStatus::Pending | TaskStatus::Running);
         Self {
-            id: task.id,
+            id: task.id.to_string(),
             kind: task.kind,
-            parent_id: task.parent_id,
+            parent_id: task.parent_id.map(|id| id.to_string()),
             status: task.status.into(),
             input: parse_json(&task.input),
             output: task.output.as_deref().map(parse_json),
@@ -224,7 +225,7 @@ pub struct TaskListParams {
     /// Only tasks of this kind.
     pub kind: Option<String>,
     /// Only children of this task.
-    pub parent: Option<i64>,
+    pub parent: Option<String>,
     /// Only top-level tasks (no parent). Ignored when `parent` is set.
     pub root: Option<bool>,
     /// Only tasks whose input JSON has `input_value` at this path, for example
@@ -248,11 +249,14 @@ impl TaskListParams {
         }
     }
 
-    pub fn parent_filter(&self) -> Option<ParentFilter> {
-        match (self.parent, self.root) {
-            (Some(id), _) => Some(ParentFilter::Of(id)),
-            (None, Some(true)) => Some(ParentFilter::Root),
-            _ => None,
+    pub fn parent_filter(&self) -> Result<Option<ParentFilter>, ApiError> {
+        match (&self.parent, self.root) {
+            (Some(id), _) => {
+                let id = id.parse().map_err(|_| ApiError::BAD_REQUEST)?;
+                Ok(Some(ParentFilter::Of(id)))
+            }
+            (None, Some(true)) => Ok(Some(ParentFilter::Root)),
+            _ => Ok(None),
         }
     }
 

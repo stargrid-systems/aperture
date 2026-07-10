@@ -53,6 +53,10 @@ pub enum StorageError {
     /// A timestamp stored as milliseconds could not be converted.
     #[error("invalid timestamp {millis} ms")]
     InvalidTimestamp { millis: i64 },
+
+    /// A JSON column value could not be deserialized.
+    #[error("invalid JSON at column {column}: {error}")]
+    InvalidJson { column: usize, error: String },
 }
 
 /// Result alias for the storage layer.

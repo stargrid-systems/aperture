@@ -139,14 +139,14 @@ impl Tasks {
         Ok(self
             .inner
             .storage
-            .tasks()
+            .tasks()?
             .list(status, kind, parent, json, query)
             .await?)
     }
 
     /// Returns the recorded invocation `id`, if it exists.
     pub async fn get(&self, id: i64) -> Result<Option<TaskInvocation>, TaskError> {
-        Ok(self.inner.storage.tasks().get(id).await?)
+        Ok(self.inner.storage.tasks()?.get(id).await?)
     }
 
     /// Requests cooperative cancellation of the running task `id`. Returns
@@ -166,7 +166,7 @@ impl Tasks {
             }
         }
         // Not running: tell an unknown id apart from one that already finished.
-        match self.inner.storage.tasks().get(id).await? {
+        match self.inner.storage.tasks()?.get(id).await? {
             Some(_) => Err(TaskError::AlreadySettled(id)),
             None => Err(TaskError::NotFound(id)),
         }
@@ -200,10 +200,10 @@ impl Tasks {
     pub async fn reconcile(&self) -> Result<usize, TaskError> {
         let now = Timestamp::now();
         let mut count = 0;
-        for task in self.inner.storage.tasks().list_active().await? {
+        for task in self.inner.storage.tasks()?.list_active().await? {
             self.inner
                 .storage
-                .tasks()
+                .tasks()?
                 .finish(
                     task.id,
                     TaskStatus::Interrupted,
@@ -241,18 +241,26 @@ impl Tasks {
             if resumable {
                 abort.abort();
                 let now = Timestamp::now();
-                if let Err(err) = self
-                    .inner
-                    .storage
-                    .tasks()
-                    .finish(id, TaskStatus::Interrupted, now, None, Some("interrupted"))
-                    .await
-                {
-                    tracing::error!(
-                        task = id,
-                        error = &err as &dyn Error,
-                        "failed to record interrupted task"
-                    );
+                match self.inner.storage.tasks() {
+                    Ok(repo) => {
+                        if let Err(err) = repo
+                            .finish(id, TaskStatus::Interrupted, now, None, Some("interrupted"))
+                            .await
+                        {
+                            tracing::error!(
+                                task = id,
+                                error = &err as &dyn Error,
+                                "failed to record interrupted task"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            task = id,
+                            error = &err as &dyn Error,
+                            "failed to access tasks repository"
+                        );
+                    }
                 }
                 self.inner.settle(id);
             } else {
@@ -293,7 +301,7 @@ impl TasksInner {
         let input_json = input.to_string();
         let id = self
             .storage
-            .tasks()
+            .tasks()?
             .create_running(kind, parent_id, &input_json, now)
             .await?;
 
@@ -381,17 +389,26 @@ impl TasksInner {
             // `{:#}` keeps the full source chain, not just the outermost message.
             Err(err) => (TaskStatus::Failed, None, Some(format!("{err:#}"))),
         };
-        if let Err(err) = self
-            .storage
-            .tasks()
-            .finish(id, status, now, output.as_deref(), error.as_deref())
-            .await
-        {
-            tracing::error!(
-                task = id,
-                error = &err as &dyn Error,
-                "failed to record task outcome"
-            );
+        match self.storage.tasks() {
+            Ok(repo) => {
+                if let Err(err) = repo
+                    .finish(id, status, now, output.as_deref(), error.as_deref())
+                    .await
+                {
+                    tracing::error!(
+                        task = id,
+                        error = &err as &dyn Error,
+                        "failed to record task outcome"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    task = id,
+                    error = &err as &dyn Error,
+                    "failed to access tasks repository"
+                );
+            }
         }
         self.settle(id);
     }
@@ -442,7 +459,7 @@ impl<O: DeserializeOwned> TaskHandle<O> {
         let task = self
             .inner
             .storage
-            .tasks()
+            .tasks()?
             .get(self.id)
             .await?
             .ok_or(TaskError::NotFound(self.id))?;

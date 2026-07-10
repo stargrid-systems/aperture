@@ -158,12 +158,12 @@ impl Artifacts {
         q: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<ArtifactKey>> {
-        Ok(self.inner.storage.artifacts().list_keys(q, query).await?)
+        Ok(self.inner.storage.artifacts()?.list_keys(q, query).await?)
     }
 
     /// Returns one artifact key with its newest version and version count.
     pub async fn artifact(&self, key: &str) -> Result<Option<ArtifactKey>> {
-        Ok(self.inner.storage.artifacts().get_key(key).await?)
+        Ok(self.inner.storage.artifacts()?.get_key(key).await?)
     }
 
     /// Lists the stored versions of `key`, optionally filtered by exact
@@ -179,7 +179,7 @@ impl Artifacts {
         Ok(self
             .inner
             .storage
-            .artifacts()
+            .artifacts()?
             .list_versions(key, sort, media_type, version, query)
             .await?)
     }
@@ -189,7 +189,7 @@ impl Artifacts {
         Ok(self
             .inner
             .storage
-            .artifacts()
+            .artifacts()?
             .get_version(key, digest)
             .await?)
     }
@@ -222,14 +222,14 @@ impl Artifacts {
 
 impl Inner {
     async fn locate(&self, key: &str) -> Result<Option<Located>> {
-        match self.storage.artifacts().latest(key).await? {
+        match self.storage.artifacts()?.latest(key).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,
             None => Ok(None),
         }
     }
 
     async fn locate_version(&self, key: &str, digest: &str) -> Result<Option<Located>> {
-        match self.storage.artifacts().get_version(key, digest).await? {
+        match self.storage.artifacts()?.get_version(key, digest).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,
             None => Ok(None),
         }
@@ -249,7 +249,7 @@ impl Inner {
     /// Removes a stored version, and its blob when no other version still
     /// references that digest. Returns whether the version existed.
     async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
-        let repository = self.storage.artifacts();
+        let repository = self.storage.artifacts()?;
         let Some(artifact) = repository.get_version(key, digest).await? else {
             return Ok(false);
         };
@@ -277,7 +277,7 @@ impl Inner {
         request: &FetchRequest,
         progress: &ProgressHandle,
     ) -> Result<Artifact> {
-        let repository = self.storage.artifacts();
+        let repository = self.storage.artifacts()?;
         let now = Timestamp::now();
         let resolved = self.resolve(request, now).await?;
         let digest_str = resolved.digest.to_string();
@@ -447,7 +447,7 @@ impl Inner {
     async fn sync(&self) -> Result<SyncReport> {
         self.blobs.clear_temp().await?;
 
-        let repository = self.storage.artifacts();
+        let repository = self.storage.artifacts()?;
         let mut report = SyncReport::default();
         let mut tracked: HashSet<Digest> = HashSet::new();
 

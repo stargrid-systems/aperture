@@ -387,9 +387,11 @@ impl TaskRepository {
         let mut filters = Filters::new();
         match status {
             Some(StatusFilter::Exact(status)) => filters.eq_text("status", Some(status.as_db())),
-            Some(StatusFilter::Active) => filters.one_of("status", &db_values(&TaskStatus::ACTIVE)),
+            Some(StatusFilter::Active) => {
+                filters.one_of("status", db_values(&TaskStatus::ACTIVE).iter().copied())
+            }
             Some(StatusFilter::Finished) => {
-                filters.one_of("status", &db_values(&TaskStatus::FINISHED));
+                filters.one_of("status", db_values(&TaskStatus::FINISHED).iter().copied());
             }
             None => {}
         }

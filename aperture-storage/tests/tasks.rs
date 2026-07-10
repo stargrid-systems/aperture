@@ -10,7 +10,7 @@ fn at(millis: i64) -> Timestamp {
 #[tokio::test]
 async fn create_then_finish_records_lifecycle() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let id = repo
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
@@ -45,7 +45,7 @@ async fn create_then_finish_records_lifecycle() {
 #[tokio::test]
 async fn create_running_starts_in_running_state() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let id = repo
         .create_running("download", None, r#"{"key":"spectra"}"#, at(1_000))
@@ -61,7 +61,7 @@ async fn create_running_starts_in_running_state() {
 #[tokio::test]
 async fn finish_does_not_overwrite_a_finished_row() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let id = repo
         .create_running("download", None, "{}", at(1_000))
@@ -99,7 +99,7 @@ async fn finish_does_not_overwrite_a_finished_row() {
 #[tokio::test]
 async fn list_filters_by_status_kind_and_parent() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let parent = repo.create("update", None, "{}", at(1_000)).await.unwrap();
     let download = repo
@@ -168,7 +168,7 @@ async fn list_filters_by_status_kind_and_parent() {
 #[tokio::test]
 async fn list_filters_by_json_input_and_output() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let spectra = repo
         .create_running(
@@ -279,7 +279,7 @@ async fn list_filters_by_json_input_and_output() {
 #[tokio::test]
 async fn list_active_finds_unfinished_invocations() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.tasks();
+    let repo = storage.tasks().unwrap();
 
     let pending = repo
         .create("download", None, "{}", at(1_000))

@@ -37,7 +37,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Arc::new(Artifacts::new(storage, root));
 
-    let repo = artifacts.storage().artifacts();
+    let repo = artifacts.storage().artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:fff", 1_000))
         .await
         .unwrap();
@@ -211,7 +211,7 @@ async fn lists_task_definitions_with_schemas() {
 #[tokio::test]
 async fn reads_recorded_tasks() {
     let (app, artifacts) = seeded_app().await;
-    let repo = artifacts.storage().tasks();
+    let repo = artifacts.storage().tasks().unwrap();
     let id = repo
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
         .await
@@ -241,7 +241,7 @@ async fn reads_recorded_tasks() {
 #[tokio::test]
 async fn filters_tasks_by_json_field() {
     let (app, artifacts) = seeded_app().await;
-    let repo = artifacts.storage().tasks();
+    let repo = artifacts.storage().tasks().unwrap();
     let spectra = repo
         .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
         .await

@@ -1,6 +1,6 @@
 //! Response and query types for the JSON API.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use aperture_artifacts::Page as StoragePage;
 use serde::de::Error as _;
@@ -54,16 +54,17 @@ where
 /// A structured field filter passed as a string-encoded JSON object in a
 /// query parameter, e.g. `{"key":"value"}`. The raw string is parsed into
 /// key-value pairs during deserialization.
-#[derive(Debug, Clone, Default)]
-pub struct FieldFilter(pub Vec<(String, String)>);
+#[derive(Debug, Clone, Default, ToSchema)]
+#[schema(value_type = String, example = "{\"status\":\"ok\"}")]
+pub struct JsonQueryString(pub BTreeMap<String, String>);
 
-impl FieldFilter {
+impl JsonQueryString {
     pub fn into_pairs(self) -> Vec<(String, String)> {
-        self.0
+        self.0.into_iter().collect()
     }
 }
 
-impl<'de> Deserialize<'de> for FieldFilter {
+impl<'de> Deserialize<'de> for JsonQueryString {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,

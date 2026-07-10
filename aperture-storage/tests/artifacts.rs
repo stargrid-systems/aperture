@@ -24,7 +24,7 @@ fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
 #[tokio::test]
 async fn record_latest_and_get_version() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
+    let repo = storage.artifacts().unwrap();
 
     assert!(repo.latest("spectra").await.unwrap().is_none());
 
@@ -56,7 +56,7 @@ async fn record_latest_and_get_version() {
 #[tokio::test]
 async fn record_version_is_idempotent_per_digest() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
+    let repo = storage.artifacts().unwrap();
 
     repo.record_version(&version("spectra", "sha256:aaa", 1_000))
         .await
@@ -83,7 +83,7 @@ async fn record_version_is_idempotent_per_digest() {
 #[tokio::test]
 async fn list_keys_returns_latest_and_count() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
+    let repo = storage.artifacts().unwrap();
 
     repo.record_version(&version("spectra", "sha256:aaa", 1_000))
         .await
@@ -108,7 +108,7 @@ async fn list_keys_returns_latest_and_count() {
 #[tokio::test]
 async fn list_keys_paginates_with_cursor() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
+    let repo = storage.artifacts().unwrap();
 
     for key in ["a", "b", "c"] {
         repo.record_version(&version(key, &format!("sha256:{key}"), 1_000))
@@ -183,7 +183,7 @@ async fn list_keys_paginates_with_cursor() {
 #[tokio::test]
 async fn list_keys_q_treats_wildcards_literally() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
+    let repo = storage.artifacts().unwrap();
 
     repo.record_version(&version("a_b", "sha256:1", 1_000))
         .await
@@ -209,7 +209,7 @@ async fn list_keys_q_treats_wildcards_literally() {
 #[tokio::test]
 async fn list_versions_sorts_and_paginates() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
+    let repo = storage.artifacts().unwrap();
 
     for (digest, ts) in [
         ("sha256:a", 1_000),
@@ -272,7 +272,7 @@ async fn list_versions_sorts_and_paginates() {
 #[tokio::test]
 async fn delete_version_removes_only_that_version() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let repo = storage.artifacts();
+    let repo = storage.artifacts().unwrap();
 
     repo.record_version(&version("spectra", "sha256:aaa", 1_000))
         .await
@@ -312,6 +312,7 @@ async fn persists_and_migrations_are_idempotent() {
         let storage = Storage::open(path).await.unwrap();
         storage
             .artifacts()
+            .unwrap()
             .record_version(&version("spectra", "sha256:aaa", 1_000))
             .await
             .unwrap();
@@ -322,6 +323,7 @@ async fn persists_and_migrations_are_idempotent() {
         assert!(
             storage
                 .artifacts()
+                .unwrap()
                 .latest("spectra")
                 .await
                 .unwrap()

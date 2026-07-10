@@ -1,4 +1,6 @@
-use aperture_storage::{EventFilter, Level, ListQuery, SpanFilter, SpanParentFilter, Storage};
+use aperture_storage::{
+    EventFilter, EventRecord, Level, ListQuery, SpanFilter, SpanParentFilter, SpanRecord, Storage,
+};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -15,55 +17,75 @@ fn json_map(s: &str) -> serde_json::Map<String, serde_json::Value> {
 
 async fn seeded_storage() -> Storage {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let span_fields = json_map(r#"{"key":"spectra"}"#);
-    let span_id = logs
-        .insert_span(
-            "download",
-            Level::Info,
-            "aperture_artifacts::fetch",
-            at(1_000),
-        )
-        .parent_id(None)
-        .file(Some("src/fetch.rs"))
-        .line(Some(42))
-        .fields(Some(&span_fields))
-        .execute()
-        .await
-        .unwrap();
-
     let event_fields = json_map(r#"{"key":"spectra","source":"ghcr.io"}"#);
-    logs.insert_event(Level::Info, "aperture_artifacts::fetch", at(1_100))
-        .span_id(Some(span_id))
-        .message(Some("starting download"))
-        .file(Some("src/fetch.rs"))
-        .line(Some(10))
-        .fields(Some(&event_fields))
-        .execute()
-        .await
-        .unwrap();
-
     let retry_fields = json_map(r#"{"key":"spectra","attempt":2}"#);
-    logs.insert_event(Level::Warn, "aperture_artifacts::fetch", at(1_200))
-        .span_id(Some(span_id))
-        .message(Some("retrying download after timeout"))
-        .file(Some("src/fetch.rs"))
-        .line(Some(25))
-        .fields(Some(&retry_fields))
-        .execute()
-        .await
-        .unwrap();
-
     let error_fields = json_map(r#"{"status":500}"#);
-    logs.insert_event(Level::Error, "aperture_http::error", at(1_300))
-        .message(Some("artifact request failed"))
-        .fields(Some(&error_fields))
-        .execute()
+
+    let mut batch = logs.batch().await.unwrap();
+    let span_id = batch
+        .insert_span(SpanRecord {
+            parent_id: None,
+            name: "download",
+            level: Level::Info,
+            target: "aperture_artifacts::fetch",
+            file: Some("src/fetch.rs"),
+            line: Some(42),
+            started_at: at(1_000),
+            fields: Some(&span_fields),
+        })
         .await
         .unwrap();
 
-    logs.close_span(span_id, at(1_400)).await.unwrap();
+    batch
+        .insert_event(EventRecord {
+            span_id: Some(span_id),
+            level: Level::Info,
+            target: "aperture_artifacts::fetch",
+            message: Some("starting download"),
+            timestamp: at(1_100),
+            file: Some("src/fetch.rs"),
+            line: Some(10),
+            boot_id: None,
+            fields: Some(&event_fields),
+        })
+        .await
+        .unwrap();
+
+    batch
+        .insert_event(EventRecord {
+            span_id: Some(span_id),
+            level: Level::Warn,
+            target: "aperture_artifacts::fetch",
+            message: Some("retrying download after timeout"),
+            timestamp: at(1_200),
+            file: Some("src/fetch.rs"),
+            line: Some(25),
+            boot_id: None,
+            fields: Some(&retry_fields),
+        })
+        .await
+        .unwrap();
+
+    batch
+        .insert_event(EventRecord {
+            span_id: None,
+            level: Level::Error,
+            target: "aperture_http::error",
+            message: Some("artifact request failed"),
+            timestamp: at(1_300),
+            file: None,
+            line: None,
+            boot_id: None,
+            fields: Some(&error_fields),
+        })
+        .await
+        .unwrap();
+
+    batch.close_span(span_id, at(1_400)).await.unwrap();
+    batch.commit().await.unwrap();
 
     storage
 }
@@ -71,7 +93,7 @@ async fn seeded_storage() -> Storage {
 #[tokio::test]
 async fn list_events_newest_first() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_events(
@@ -105,7 +127,7 @@ async fn list_events_newest_first() {
 #[tokio::test]
 async fn filter_by_min_level() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_events(
@@ -131,7 +153,7 @@ async fn filter_by_min_level() {
 #[tokio::test]
 async fn filter_by_target() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_events(
@@ -160,9 +182,8 @@ async fn filter_by_target() {
 #[tokio::test]
 async fn filter_by_span_id() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
-    // First get all events to find the span_id
     let all = logs
         .list_events(
             &EventFilter {
@@ -203,7 +224,7 @@ async fn filter_by_span_id() {
 #[tokio::test]
 async fn filter_by_time_range() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_events(
@@ -231,7 +252,7 @@ async fn filter_by_time_range() {
 #[tokio::test]
 async fn filter_by_structured_fields() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_events(
@@ -260,7 +281,7 @@ async fn filter_by_structured_fields() {
 #[tokio::test]
 async fn query_matches_message() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_events(
@@ -289,7 +310,7 @@ async fn query_matches_message() {
 #[tokio::test]
 async fn query_matches_target() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_events(
@@ -314,7 +335,7 @@ async fn query_matches_target() {
 #[tokio::test]
 async fn list_targets() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let all = logs.list_targets(None).await.unwrap();
     assert_eq!(all.len(), 2);
@@ -329,7 +350,7 @@ async fn list_targets() {
 #[tokio::test]
 async fn list_and_get_spans() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let page = logs
         .list_spans(&SpanFilter::default(), &ListQuery::default())
@@ -356,7 +377,7 @@ async fn list_and_get_spans() {
 #[tokio::test]
 async fn prune_before_deletes_old_events() {
     let storage = seeded_storage().await;
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let deleted = logs.prune_before(at(1_250)).await.unwrap();
     assert_eq!(deleted, 2);
@@ -382,7 +403,7 @@ async fn prune_before_deletes_old_events() {
 #[tokio::test]
 async fn record_dropped_inserts_synthetic_event() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
     let mut batch = logs.batch().await.unwrap();
     batch
@@ -414,21 +435,35 @@ async fn record_dropped_inserts_synthetic_event() {
         page.items[0].message.as_deref().unwrap(),
         "dropped log records due to full buffer"
     );
-    assert!(page.items[0].fields.as_deref().unwrap().contains("42"));
+    assert_eq!(
+        page.items[0].fields.get("dropped"),
+        Some(&serde_json::json!(42))
+    );
 }
 
 #[tokio::test]
 async fn paginate_events() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
+    let mut batch = logs.batch().await.unwrap();
     for i in 0..5 {
-        logs.insert_event(Level::Info, "test", at(i * 100))
-            .message(Some(&format!("event {i}")))
-            .execute()
+        batch
+            .insert_event(EventRecord {
+                span_id: None,
+                level: Level::Info,
+                target: "test",
+                message: Some(&format!("event {i}")),
+                timestamp: at(i * 100),
+                file: None,
+                line: None,
+                boot_id: None,
+                fields: None,
+            })
             .await
             .unwrap();
     }
+    batch.commit().await.unwrap();
 
     let first = logs
         .list_events(
@@ -482,27 +517,51 @@ async fn paginate_events() {
 #[tokio::test]
 async fn nested_spans_preserve_parent_child() {
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
-    let parent_id = logs
-        .insert_span("parent", Level::Info, "aperture::test", at(1_000))
-        .execute()
+    let mut batch = logs.batch().await.unwrap();
+    let parent_id = batch
+        .insert_span(SpanRecord {
+            parent_id: None,
+            name: "parent",
+            level: Level::Info,
+            target: "aperture::test",
+            file: None,
+            line: None,
+            started_at: at(1_000),
+            fields: None,
+        })
         .await
         .unwrap();
 
-    let child_id = logs
-        .insert_span("child", Level::Debug, "aperture::test", at(1_100))
-        .parent_id(Some(parent_id))
-        .execute()
+    let child_id = batch
+        .insert_span(SpanRecord {
+            parent_id: Some(parent_id),
+            name: "child",
+            level: Level::Debug,
+            target: "aperture::test",
+            file: None,
+            line: None,
+            started_at: at(1_100),
+            fields: None,
+        })
         .await
         .unwrap();
 
-    let grandchild_id = logs
-        .insert_span("grandchild", Level::Trace, "aperture::test", at(1_200))
-        .parent_id(Some(child_id))
-        .execute()
+    let grandchild_id = batch
+        .insert_span(SpanRecord {
+            parent_id: Some(child_id),
+            name: "grandchild",
+            level: Level::Trace,
+            target: "aperture::test",
+            file: None,
+            line: None,
+            started_at: at(1_200),
+            fields: None,
+        })
         .await
         .unwrap();
+    batch.commit().await.unwrap();
 
     assert_eq!(grandchild_id, child_id + 1);
 
@@ -558,31 +617,55 @@ async fn list_boots_groups_by_boot_id() {
     let a = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
     let b = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
     let storage = Storage::open(":memory:").await.unwrap();
-    let logs = storage.logs();
+    let logs = storage.logs().unwrap();
 
-    // Two distinct boot ids, with events interleaved in time but grouped apart.
-    logs.insert_event(Level::Info, "aperture", at(1_000))
-        .message(Some("first boot start"))
-        .boot_id(Some("00000000-0000-0000-0000-000000000001"))
-        .execute()
+    let mut batch = logs.batch().await.unwrap();
+    batch
+        .insert_event(EventRecord {
+            span_id: None,
+            level: Level::Info,
+            target: "aperture",
+            message: Some("first boot start"),
+            timestamp: at(1_000),
+            file: None,
+            line: None,
+            boot_id: Some("00000000-0000-0000-0000-000000000001"),
+            fields: None,
+        })
         .await
         .unwrap();
-    logs.insert_event(Level::Info, "aperture", at(2_000))
-        .message(Some("first boot end"))
-        .boot_id(Some("00000000-0000-0000-0000-000000000001"))
-        .execute()
+    batch
+        .insert_event(EventRecord {
+            span_id: None,
+            level: Level::Info,
+            target: "aperture",
+            message: Some("first boot end"),
+            timestamp: at(2_000),
+            file: None,
+            line: None,
+            boot_id: Some("00000000-0000-0000-0000-000000000001"),
+            fields: None,
+        })
         .await
         .unwrap();
-    logs.insert_event(Level::Info, "aperture", at(3_000))
-        .message(Some("second boot start"))
-        .boot_id(Some("00000000-0000-0000-0000-000000000002"))
-        .execute()
+    batch
+        .insert_event(EventRecord {
+            span_id: None,
+            level: Level::Info,
+            target: "aperture",
+            message: Some("second boot start"),
+            timestamp: at(3_000),
+            file: None,
+            line: None,
+            boot_id: Some("00000000-0000-0000-0000-000000000002"),
+            fields: None,
+        })
         .await
         .unwrap();
+    batch.commit().await.unwrap();
 
     let boots: Vec<BootInfo> = logs.list_boots().await.unwrap();
 
-    // Newest first.
     assert_eq!(boots.len(), 2);
     assert_eq!(boots[0].boot_id, b);
     assert_eq!(boots[0].event_count, 1);

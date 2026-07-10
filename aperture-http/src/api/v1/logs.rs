@@ -21,6 +21,10 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_span))
 }
 
+fn parse_id(s: &str) -> Result<i64, ApiError> {
+    s.parse().map_err(|_| ApiError::BAD_REQUEST)
+}
+
 /// Lists log events with optional filtering.
 #[utoipa::path(
     get,
@@ -35,16 +39,17 @@ async fn list_logs(
 ) -> Result<Json<Page<LogEventResponse>>, ApiError> {
     let query = params.to_query();
     let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
+    let span_id = params.span_id.as_deref().map(parse_id).transpose()?;
     let filter = EventFilter {
         min_level: params.min_level.map(Into::into),
         target: params.target,
         query: params.q,
-        span_id: params.span_id,
+        span_id,
         since: params.since,
         until: params.until,
         fields,
     };
-    let logs = state.logs();
+    let logs = state.logs()?;
     let page = logs.list_events(&filter, &query).await?;
     Ok(Json(event_page(page)))
 }
@@ -61,7 +66,7 @@ async fn list_log_targets(
     State(state): State<AppState>,
     Query(params): Query<LogTargetListParams>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    let logs = state.logs();
+    let logs = state.logs()?;
     let targets = logs.list_targets(params.q.as_deref()).await?;
     Ok(Json(targets))
 }
@@ -76,7 +81,7 @@ async fn list_log_targets(
 async fn list_log_boots(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BootResponse>>, ApiError> {
-    let logs = state.logs();
+    let logs = state.logs()?;
     let boots = logs.list_boots().await?;
     Ok(Json(boots_response(boots, state.boot_id())))
 }
@@ -96,7 +101,7 @@ async fn list_spans(
     let query = params.to_query();
     let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
     let parent = match (params.parent_id, params.parent_null) {
-        (Some(id), _) => SpanParentFilter::ChildrenOf(id),
+        (Some(id), _) => SpanParentFilter::ChildrenOf(parse_id(&id)?),
         (None, Some(true)) => SpanParentFilter::RootOnly,
         (None, _) => SpanParentFilter::default(),
     };
@@ -108,7 +113,7 @@ async fn list_spans(
         parent,
         fields,
     };
-    let logs = state.logs();
+    let logs = state.logs()?;
     let page = logs.list_spans(&filter, &query).await?;
     Ok(Json(span_page(page)))
 }
@@ -118,7 +123,7 @@ async fn list_spans(
     get,
     path = "/spans/{id}",
     operation_id = operation_ids::GET_SPAN,
-    params(("id" = i64, Path, description = "Span id")),
+    params(("id" = String, Path, description = "Span id")),
     responses(
         (status = 200, description = "Span with events", body = LogSpanDetailResponse),
         (status = 404, description = "Unknown span"),
@@ -126,9 +131,10 @@ async fn list_spans(
 )]
 async fn get_span(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
-    let logs = state.logs();
+    let id = parse_id(&id)?;
+    let logs = state.logs()?;
     let span = logs.get_span(id).await?;
     let span = span.ok_or(ApiError::NOT_FOUND)?;
     let events = logs.events_for_span(id).await?;
