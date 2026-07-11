@@ -19,7 +19,8 @@ schema = ["dep:utoipa"]
 aperture-storage = { workspace = true }
 argon2 = { workspace = true, features = ["alloc", "password-hash"] }
 async-trait = { workspace = true }
-casbin = { workspace = true, features = ["runtime-tokio", "globset"] }
+axum = { workspace = true, features = ["json"] }
+casbin = { workspace = true, features = ["runtime-tokio", "glob"] }
 cookie = { workspace = true, features = ["percent-encode"] }
 jiff = { workspace = true, features = ["std"] }
 rand = { workspace = true, features = ["std", "thread_rng"] }

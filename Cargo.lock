@@ -124,6 +124,7 @@ name = "aperture"
 version = "0.1.0"
 dependencies = [
  "aperture-artifacts",
+ "aperture-auth",
  "aperture-http",
  "aperture-storage",
  "aperture-tasks",
@@ -163,6 +164,7 @@ dependencies = [
  "aperture-storage",
  "argon2",
  "async-trait",
+ "axum",
  "casbin",
  "cookie",
  "jiff",
@@ -183,11 +185,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aperture-artifacts",
+ "aperture-auth",
  "aperture-storage",
  "aperture-tasks",
  "axum",
  "backhand",
  "bytes",
+ "cookie",
  "jiff",
  "mime_guess",
  "serde",

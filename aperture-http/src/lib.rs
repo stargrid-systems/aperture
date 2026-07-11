@@ -3,8 +3,13 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
-use aperture_storage::{DbId, LogRepository};
+use aperture_auth::AuthenticatedActor;
+use aperture_storage::LogRepository;
 use aperture_tasks::{TaskDescriptor, Tasks};
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{Next, from_fn_with_state};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::trace::TraceLayer;
@@ -16,6 +21,7 @@ use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
+use self::api::v1::auth::extract_session_token;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
@@ -32,25 +38,23 @@ pub struct AppState {
     boot_id: Uuid,
     spectra: Spectra,
     tasks: Tasks,
-    system_actor: DbId,
+    auth: aperture_auth::AuthHandle,
 }
 
 impl AppState {
-    /// Wraps the gateway version, boot id, Spectra frontend, and task manager
-    /// for use as request state.
     pub fn new(
         version: &'static str,
         boot_id: Uuid,
         spectra: Spectra,
         tasks: Tasks,
-        system_actor: DbId,
+        auth: aperture_auth::AuthHandle,
     ) -> Self {
         Self {
             version,
             boot_id,
             spectra,
             tasks,
-            system_actor,
+            auth,
         }
     }
 
@@ -70,8 +74,8 @@ impl AppState {
         &self.tasks
     }
 
-    pub(crate) fn system_actor(&self) -> DbId {
-        self.system_actor
+    pub(crate) fn auth(&self) -> &aperture_auth::AuthHandle {
+        &self.auth
     }
 
     /// Returns the repository over the structured log tables for this request.
@@ -102,12 +106,71 @@ pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
     spec
 }
 
+/// Paths that do not require authentication.
+fn is_public_path(path: &str) -> bool {
+    path == "/api/v1/auth/login"
+        || path == "/api/openapi.json"
+        || !path.starts_with("/api/")
+}
+
+/// Paths accessible when the user must change their password.
+fn is_password_change_path(path: &str) -> bool {
+    path == "/api/v1/auth/change-password" || path == "/api/v1/auth/logout"
+}
+
+/// Auth middleware: resolves the actor from a session cookie or API key bearer
+/// token and stores it in request extensions. Public paths bypass auth.
+async fn auth_middleware(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path().to_owned();
+
+    if is_public_path(&path) {
+        return next.run(request).await;
+    }
+
+    let actor = match resolve_actor(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+
+    if actor.must_change_password && !is_password_change_path(&path) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    request.extensions_mut().insert(actor);
+    next.run(request).await
+}
+
+/// Tries session cookie first, then API key bearer.
+async fn resolve_actor(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedActor, Response> {
+    if let Some(token) = extract_session_token(headers) {
+        if let Ok(Some(actor)) = state.auth().resolve_session(&token).await {
+            return Ok(actor);
+        }
+    }
+    if let Some(key) = extract_bearer_token(headers) {
+        if let Ok(Some(actor)) = state.auth().resolve_api_key(&key).await {
+            return Ok(actor);
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED.into_response())
+}
+
+/// Extracts the bearer token from the `Authorization` header.
+fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
+    let header = headers.get(header::AUTHORIZATION)?;
+    let value = header.to_str().ok()?;
+    value.strip_prefix("Bearer ").map(|t| t.to_owned())
+}
+
 /// Builds the full axum application.
-///
-/// The JSON API lives under `/api`. Everything else falls back to the Spectra
-/// frontend, which the state's [`Spectra`] serves and fetches on demand.
-/// A [`TraceLayer`] creates a span for each request so per-request tracing
-/// shows up in the log viewer.
 pub fn app(state: AppState) -> Router {
     let (api, mut doc) = self::api_router().split_for_parts();
     project_tasks(&mut doc, &state.tasks().registry().descriptors());
@@ -115,6 +178,7 @@ pub fn app(state: AppState) -> Router {
         .merge(api)
         .route("/api/openapi.json", get(move || openapi_doc(doc.clone())))
         .fallback(spectra_fallback)
+        .layer(from_fn_with_state(state.clone(), auth_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

@@ -32,7 +32,7 @@ fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
     }
 }
 
-async fn seeded_app() -> (Router, Arc<Artifacts>) {
+async fn seeded_app() -> (Router, Arc<Artifacts>, String) {
     let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
@@ -53,26 +53,45 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
     registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
     let tasks = Tasks::new(artifacts.storage().clone(), registry);
 
+    let auth = aperture_auth::AuthHandle::new(artifacts.storage().clone())
+        .await
+        .unwrap();
+    let system_actor = auth.ensure_system_actor().await.unwrap();
+
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
-        DbId::from(1),
+        system_actor,
     );
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks, DbId::from(1));
-    (app(state), artifacts)
+
+    let actor = auth.create_user("test", "test", false).await.unwrap();
+    let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
+    let subject = aperture_auth::apikey_subject(api_key.id);
+    auth.assign_role(&subject, aperture_auth::roles::ADMIN)
+        .await
+        .unwrap();
+
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks, auth);
+    (app(state), artifacts, raw_key)
 }
 
-async fn get_json(app: &Router, uri: &str) -> (StatusCode, Value) {
+async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
     let response = app
         .clone()
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     read_json(response).await
 }
 
-async fn post_json(app: &Router, uri: &str, body: Value) -> (StatusCode, Value) {
+async fn post_json(app: &Router, token: &str, uri: &str, body: Value) -> (StatusCode, Value) {
     let response = app
         .clone()
         .oneshot(
@@ -80,6 +99,7 @@ async fn post_json(app: &Router, uri: &str, body: Value) -> (StatusCode, Value) 
                 .method("POST")
                 .uri(uri)
                 .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),
         )
@@ -101,9 +121,9 @@ async fn read_json(response: Response) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn lists_artifacts_with_summary() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
-    let (status, json) = get_json(&app, "/api/v1/artifacts").await;
+    let (status, json) = get_json(&app, &token, "/api/v1/artifacts").await;
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
@@ -117,16 +137,17 @@ async fn lists_artifacts_with_summary() {
 
 #[tokio::test]
 async fn paginates_artifacts_with_cursor() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
-    let (status, first) = get_json(&app, "/api/v1/artifacts?limit=1").await;
+    let (status, first) = get_json(&app, &token, "/api/v1/artifacts?limit=1").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
     assert_eq!(first["items"][0]["key"], "firmware");
     assert!(first["prev_cursor"].is_null());
     let cursor = first["next_cursor"].as_str().unwrap();
 
-    let (_, second) = get_json(&app, &format!("/api/v1/artifacts?limit=1&cursor={cursor}")).await;
+    let (_, second) =
+        get_json(&app, &token, &format!("/api/v1/artifacts?limit=1&cursor={cursor}")).await;
     assert_eq!(second["items"][0]["key"], "spectra");
     assert!(second["next_cursor"].is_null());
 
@@ -134,6 +155,7 @@ async fn paginates_artifacts_with_cursor() {
     let back_cursor = second["prev_cursor"].as_str().expect("a previous page");
     let (_, back) = get_json(
         &app,
+        &token,
         &format!("/api/v1/artifacts?limit=1&cursor={back_cursor}"),
     )
     .await;
@@ -142,29 +164,29 @@ async fn paginates_artifacts_with_cursor() {
 
 #[tokio::test]
 async fn rejects_bad_cursor() {
-    let (app, _artifacts) = seeded_app().await;
-    let (status, _) = get_json(&app, "/api/v1/artifacts?cursor=nothex").await;
+    let (app, _artifacts, token) = seeded_app().await;
+    let (status, _) = get_json(&app, &token, "/api/v1/artifacts?cursor=nothex").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn gets_artifact_and_404s_unknown() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
-    let (status, json) = get_json(&app, "/api/v1/artifacts/spectra").await;
+    let (status, json) = get_json(&app, &token, "/api/v1/artifacts/spectra").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["key"], "spectra");
     assert_eq!(json["version_count"], 2);
 
-    let (status, _) = get_json(&app, "/api/v1/artifacts/missing").await;
+    let (status, _) = get_json(&app, &token, "/api/v1/artifacts/missing").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn lists_versions_newest_first() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
-    let (status, json) = get_json(&app, "/api/v1/artifacts/spectra/versions").await;
+    let (status, json) = get_json(&app, &token, "/api/v1/artifacts/spectra/versions").await;
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
@@ -174,7 +196,7 @@ async fn lists_versions_newest_first() {
 
 #[tokio::test]
 async fn evicts_a_version() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
     let response = app
         .clone()
@@ -182,6 +204,7 @@ async fn evicts_a_version() {
             Request::builder()
                 .method("DELETE")
                 .uri("/api/v1/artifacts/spectra/versions/sha256:aaa")
+                .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -189,15 +212,20 @@ async fn evicts_a_version() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    let (status, _) = get_json(&app, "/api/v1/artifacts/spectra/versions/sha256:aaa").await;
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/artifacts/spectra/versions/sha256:aaa",
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn lists_task_definitions_with_schemas() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
-    let (status, json) = get_json(&app, "/api/v1/task-definitions").await;
+    let (status, json) = get_json(&app, &token, "/api/v1/task-definitions").await;
     assert_eq!(status, StatusCode::OK);
     let download = json
         .as_array()
@@ -212,7 +240,7 @@ async fn lists_task_definitions_with_schemas() {
 
 #[tokio::test]
 async fn reads_recorded_tasks() {
-    let (app, artifacts) = seeded_app().await;
+    let (app, artifacts, token) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let id = repo
         .create("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
@@ -228,12 +256,12 @@ async fn reads_recorded_tasks() {
     .await
     .unwrap();
 
-    let (status, list) = get_json(&app, "/api/v1/tasks").await;
+    let (status, list) = get_json(&app, &token, "/api/v1/tasks").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["items"].as_array().unwrap().len(), 1);
     assert_eq!(list["items"][0]["kind"], "download");
 
-    let (status, task) = get_json(&app, &format!("/api/v1/tasks/{id}")).await;
+    let (status, task) = get_json(&app, &token, &format!("/api/v1/tasks/{id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(task["status"], "succeeded");
     assert_eq!(task["input"]["key"], "spectra");
@@ -242,7 +270,7 @@ async fn reads_recorded_tasks() {
 
 #[tokio::test]
 async fn filters_tasks_by_json_field() {
-    let (app, artifacts) = seeded_app().await;
+    let (app, artifacts, token) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let spectra = repo
         .create("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
@@ -268,6 +296,7 @@ async fn filters_tasks_by_json_field() {
     // Download history for one artifact key.
     let (status, list) = get_json(
         &app,
+        &token,
         "/api/v1/tasks?kind=download&input_path=key&input_value=spectra",
     )
     .await;
@@ -277,55 +306,71 @@ async fn filters_tasks_by_json_field() {
     assert_eq!(items[0]["input"]["key"], "spectra");
 
     // Filter by an output field.
-    let (status, list) = get_json(&app, "/api/v1/tasks?output_path=version&output_value=1.0").await;
+    let (status, list) = get_json(
+        &app,
+        &token,
+        "/api/v1/tasks?output_path=version&output_value=1.0",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["items"].as_array().unwrap().len(), 1);
 
     // A path without its value is a bad request.
-    let (status, _) = get_json(&app, "/api/v1/tasks?input_path=key").await;
+    let (status, _) = get_json(&app, &token, "/api/v1/tasks?input_path=key").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // A malformed path is a bad request.
-    let (status, _) = get_json(&app, "/api/v1/tasks?input_path=key;drop&input_value=x").await;
+    let (status, _) =
+        get_json(&app, &token, "/api/v1/tasks?input_path=key;drop&input_value=x").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // A structurally invalid path (empty segment) is a bad request, not a 500.
-    let (status, _) = get_json(&app, "/api/v1/tasks?input_path=a..b&input_value=x").await;
+    let (status, _) = get_json(&app, &token, "/api/v1/tasks?input_path=a..b&input_value=x").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn create_rejects_unknown_kind() {
-    let (app, _artifacts) = seeded_app().await;
-    let (status, _) = post_json(&app, "/api/v1/tasks", json!({"kind": "nope", "input": {}})).await;
+    let (app, _artifacts, token) = seeded_app().await;
+    let (status, _) = post_json(&app, &token, "/api/v1/tasks", json!({"kind": "nope", "input": {}})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn get_and_cancel_unknown_task_404() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
-    let (status, _) = get_json(&app, "/api/v1/tasks/999").await;
+    let (status, _) = get_json(&app, &token, "/api/v1/tasks/999").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, _) = post_json(&app, "/api/v1/tasks/999/cancel", Value::Null).await;
+    let (status, _) = post_json(&app, &token, "/api/v1/tasks/999/cancel", Value::Null).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn filters_artifacts_and_versions() {
-    let (app, _artifacts) = seeded_app().await;
+    let (app, _artifacts, token) = seeded_app().await;
 
     // Substring match on key.
-    let (status, json) = get_json(&app, "/api/v1/artifacts?q=spec").await;
+    let (status, json) = get_json(&app, &token, "/api/v1/artifacts?q=spec").await;
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["key"], "spectra");
 
     // Exact version filter on versions.
-    let (_, hit) = get_json(&app, "/api/v1/artifacts/spectra/versions?version=0.2.0").await;
+    let (_, hit) = get_json(
+        &app,
+        &token,
+        "/api/v1/artifacts/spectra/versions?version=0.2.0",
+    )
+    .await;
     assert_eq!(hit["items"].as_array().unwrap().len(), 2);
-    let (_, miss) = get_json(&app, "/api/v1/artifacts/spectra/versions?version=9.9.9").await;
+    let (_, miss) = get_json(
+        &app,
+        &token,
+        "/api/v1/artifacts/spectra/versions?version=9.9.9",
+    )
+    .await;
     assert!(miss["items"].as_array().unwrap().is_empty());
 }

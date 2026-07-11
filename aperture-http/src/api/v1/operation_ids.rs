@@ -52,3 +52,33 @@ pub const GET_SPAN: &str = "getSpan";
 
 /// `GET /api/v1/logs/boots`
 pub const LIST_LOG_BOOTS: &str = "listLogBoots";
+
+/// `POST /api/v1/auth/login`
+pub const LOGIN: &str = "login";
+
+/// `POST /api/v1/auth/logout`
+pub const LOGOUT: &str = "logout";
+
+/// `POST /api/v1/auth/change-password`
+pub const CHANGE_PASSWORD: &str = "changePassword";
+
+/// `GET /api/v1/users`
+pub const LIST_USERS: &str = "listUsers";
+
+/// `POST /api/v1/users`
+pub const CREATE_USER: &str = "createUser";
+
+/// `GET /api/v1/users/{id}`
+pub const GET_USER: &str = "getUser";
+
+/// `DELETE /api/v1/users/{id}`
+pub const DELETE_USER: &str = "deleteUser";
+
+/// `GET /api/v1/api-keys`
+pub const LIST_API_KEYS: &str = "listApiKeys";
+
+/// `POST /api/v1/api-keys`
+pub const CREATE_API_KEY: &str = "createApiKey";
+
+/// `DELETE /api/v1/api-keys/{id}`
+pub const DELETE_API_KEY: &str = "deleteApiKey";

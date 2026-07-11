@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use aperture_auth::AuthenticatedActor;
 use aperture_storage::DbId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -73,12 +74,17 @@ async fn list_tasks(
     ),
 )]
 async fn create_task(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Json(request): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
+    state
+        .auth()
+        .enforce(auth.subject(), "task", "create")
+        .await?;
     let task = state
         .tasks()
-        .create(&request.kind, request.input, state.system_actor())
+        .create(&request.kind, request.input, auth.actor_id())
         .await?;
     Ok((StatusCode::ACCEPTED, Json(TaskResponse::new(task, None))))
 }

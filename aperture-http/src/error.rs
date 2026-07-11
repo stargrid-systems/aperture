@@ -1,8 +1,9 @@
-//! Maps storage, artifact-manager, and task errors onto HTTP status codes.
+//! Maps storage, artifact-manager, task, and auth errors onto HTTP status codes.
 
 use std::error::Error;
 
 use aperture_artifacts::ArtifactError;
+use aperture_auth::AuthError;
 use aperture_storage::StorageError;
 use aperture_tasks::TaskError;
 use axum::http::StatusCode;
@@ -14,6 +15,10 @@ pub(crate) struct ApiError(StatusCode);
 impl ApiError {
     /// The request was malformed.
     pub(crate) const BAD_REQUEST: Self = Self(StatusCode::BAD_REQUEST);
+    /// Authentication is required but was not provided.
+    pub(crate) const UNAUTHORIZED: Self = Self(StatusCode::UNAUTHORIZED);
+    /// The authenticated actor lacks permission.
+    pub(crate) const FORBIDDEN: Self = Self(StatusCode::FORBIDDEN);
     /// The requested resource does not exist.
     pub(crate) const NOT_FOUND: Self = Self(StatusCode::NOT_FOUND);
     /// The request conflicts with the resource's current state.
@@ -57,6 +62,23 @@ impl From<TaskError> for ApiError {
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = &err as &dyn Error, "task request failed");
+        }
+        Self(status)
+    }
+}
+
+impl From<AuthError> for ApiError {
+    fn from(err: AuthError) -> Self {
+        let status = match &err {
+            AuthError::InvalidCredentials | AuthError::SessionNotFound | AuthError::ApiKeyNotFound => {
+                StatusCode::UNAUTHORIZED
+            }
+            AuthError::ActorDisabled => StatusCode::FORBIDDEN,
+            AuthError::MustChangePassword => StatusCode::FORBIDDEN,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(error = &err as &dyn Error, "auth request failed");
         }
         Self(status)
     }

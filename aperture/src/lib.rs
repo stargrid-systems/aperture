@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
+use aperture_auth::AuthHandle;
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
-use aperture_storage::ActorKind;
 use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
@@ -28,9 +28,27 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
 
     artifacts.sync().await.into_diagnostic()?;
 
-    // Ensure a system actor exists for internally spawned tasks.
     let storage = artifacts.storage().clone();
-    let system_actor = ensure_system_actor(&storage).await?;
+
+    // Auth: build enforcer, seed policies, ensure system actor, bootstrap
+    // admin.
+    let auth = AuthHandle::new(storage.clone())
+        .await
+        .map_err(|e| miette::miette!("{e:#}"))?;
+    let system_actor = auth
+        .ensure_system_actor()
+        .await
+        .map_err(|e| miette::miette!("{e:#}"))?;
+    match auth.bootstrap_admin().await {
+        Ok(Some(password)) => {
+            eprintln!("--- Admin bootstrap ---");
+            eprintln!("Username: admin");
+            eprintln!("Password: {password}");
+            eprintln!("------------------------");
+        }
+        Ok(None) => {}
+        Err(e) => return Err(miette::miette!("{e:#}")),
+    }
 
     // Register the task kinds and mark any invocations a previous run left
     // active as interrupted.
@@ -52,7 +70,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone(), system_actor);
+    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone(), auth);
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
@@ -110,27 +128,34 @@ pub async fn openapi() -> miette::Result<OpenApiSpec> {
     Ok(aperture_http::openapi(&registry.descriptors()))
 }
 
+/// Resets the password for `username`. Prints the new password to stdout.
+pub async fn reset_password(username: &str, data_dir: &Path) -> miette::Result<()> {
+    let db_path = data_dir.join("aperture.db");
+    let db_path = db_path
+        .to_str()
+        .ok_or_else(|| miette::miette!("data dir is not valid UTF-8: {}", data_dir.display()))?;
+    let storage = aperture_storage::Storage::open(db_path)
+        .await
+        .into_diagnostic()?;
+    let users = storage.users().into_diagnostic()?;
+    let user = users
+        .find_by_username(username)
+        .await
+        .into_diagnostic()?
+        .ok_or_else(|| miette::miette!("user {username:?} not found"))?;
+    let password = aperture_auth::generate_session_token();
+    let hash = aperture_auth::hash_password(&password).into_diagnostic()?;
+    users
+        .update_password(user.id, &hash, true)
+        .await
+        .into_diagnostic()?;
+    println!("{password}");
+    Ok(())
+}
+
 /// Registers every task kind the gateway supports.
 fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
     registry.register(DownloadDefinition::new(artifacts));
-}
-
-/// Creates the system actor if it does not exist yet, and returns its id.
-async fn ensure_system_actor(
-    storage: &aperture_storage::Storage,
-) -> miette::Result<aperture_storage::DbId> {
-    let actors = storage.actors().into_diagnostic()?;
-    let existing = actors.list_by_kind(ActorKind::System).await.into_diagnostic()?;
-    if let Some(actor) = existing.into_iter().next() {
-        return Ok(actor.id);
-    }
-    let now = jiff::Timestamp::now();
-    let actor = actors
-        .create(ActorKind::System, "system", now)
-        .await
-        .into_diagnostic()?;
-    tracing::info!(actor = actor.id.get(), "created system actor");
-    Ok(actor.id)
 }
 
 /// Opens the storage database and blob store under `data_dir`.

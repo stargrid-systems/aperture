@@ -69,6 +69,23 @@ impl AuthenticatedActor {
     }
 }
 
+/// Axum extractor that reads the actor from request extensions (populated by
+/// the auth middleware).
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AuthenticatedActor {
+    type Rejection = axum::http::StatusCode;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> std::result::Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<AuthenticatedActor>()
+            .cloned()
+            .ok_or(axum::http::StatusCode::UNAUTHORIZED)
+    }
+}
+
 /// The single auth entry point: casbin enforcer plus storage.
 #[derive(Clone)]
 pub struct AuthHandle {

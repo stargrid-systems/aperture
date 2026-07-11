@@ -22,6 +22,8 @@ enum Command {
     Run(RunArgs),
     /// Print the OpenAPI specification as JSON.
     Openapi,
+    /// Reset the password for a user. Prints the new password to stdout.
+    ResetPassword(ResetPasswordArgs),
 }
 
 #[derive(Debug, Args)]
@@ -30,6 +32,16 @@ struct RunArgs {
     #[arg(long, env = "APERTURE_ADDR", default_value = "[::1]:8000")]
     addr: SocketAddr,
     /// Directory for runtime data and cached components.
+    #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
+    data_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ResetPasswordArgs {
+    /// Username whose password to reset. Defaults to "admin".
+    #[arg(long, default_value = "admin")]
+    user: String,
+    /// Directory for runtime data.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
 }
@@ -43,6 +55,7 @@ fn main() -> miette::Result<()> {
         }
         Command::Openapi => block_on(emit_openapi()),
         Command::Run(args) => block_on(aperture::serve(args.addr, args.data_dir)),
+        Command::ResetPassword(args) => block_on(aperture::reset_password(&args.user, &args.data_dir)),
     }
 }
 

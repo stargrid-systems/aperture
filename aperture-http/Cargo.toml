@@ -13,12 +13,14 @@ workspace = true
 
 [dependencies]
 aperture-artifacts = { workspace = true }
+aperture-auth = { workspace = true }
 aperture-storage = { workspace = true, features = ["schema"] }
 aperture-tasks = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 axum = { workspace = true, features = ["json", "query"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
 bytes = { workspace = true }
+cookie = { workspace = true, features = ["percent-encode"] }
 jiff = { workspace = true, features = ["std", "serde"] }
 mime_guess = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
@@ -35,6 +37,7 @@ uuid = { workspace = true, features = ["std", "serde"] }
 
 [dev-dependencies]
 aperture-artifacts = { workspace = true }
+aperture-auth = { workspace = true }
 jiff = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["full"] }
