@@ -1,7 +1,8 @@
 //! Errors returned by the auth layer.
 
-use argon2::password_hash;
 use std::result::Result as StdResult;
+
+use argon2::password_hash;
 
 /// Errors from the auth layer.
 #[derive(Debug, thiserror::Error)]

@@ -1,4 +1,5 @@
-//! Maps storage, artifact-manager, task, and auth errors onto HTTP status codes.
+//! Maps storage, artifact-manager, task, and auth errors onto HTTP status
+//! codes.
 
 use std::error::Error;
 
@@ -70,9 +71,9 @@ impl From<TaskError> for ApiError {
 impl From<AuthError> for ApiError {
     fn from(err: AuthError) -> Self {
         let status = match &err {
-            AuthError::InvalidCredentials | AuthError::SessionNotFound | AuthError::ApiKeyNotFound => {
-                StatusCode::UNAUTHORIZED
-            }
+            AuthError::InvalidCredentials
+            | AuthError::SessionNotFound
+            | AuthError::ApiKeyNotFound => StatusCode::UNAUTHORIZED,
             AuthError::ActorDisabled => StatusCode::FORBIDDEN,
             AuthError::MustChangePassword => StatusCode::FORBIDDEN,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

@@ -30,23 +30,20 @@ pub fn api_key_lookup_prefix(key: &str) -> Option<String> {
     Some(rest[..len].to_owned())
 }
 
-/// SHA-256 hash of a token or key, hex-encoded. The raw value is never stored.
-pub fn hash_token(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    hex_encode(&digest)
+/// SHA-256 hash of a token or key. The raw value is never stored.
+pub fn hash_token(token: &str) -> Vec<u8> {
+    Sha256::digest(token.as_bytes()).to_vec()
 }
 
-/// Constant-time comparison of two hex strings.
-pub fn constant_time_eq(a: &str, b: &str) -> bool {
-    subtle::ConstantTimeEq::ct_eq(a.as_bytes(), b.as_bytes()).into()
+/// Constant-time comparison of two byte slices.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    subtle::ConstantTimeEq::ct_eq(a, b).into()
 }
 
 fn random_bytes(len: usize) -> Vec<u8> {
     use rand::TryRngCore;
     let mut buf = vec![0u8; len];
-    OsRng
-        .try_fill_bytes(&mut buf)
-        .expect("OsRng failed");
+    OsRng.try_fill_bytes(&mut buf).expect("OsRng failed");
     buf
 }
 
@@ -93,5 +90,10 @@ mod tests {
     fn hash_is_deterministic() {
         assert_eq!(hash_token("abc"), hash_token("abc"));
         assert_ne!(hash_token("abc"), hash_token("abd"));
+    }
+
+    #[test]
+    fn hash_produces_32_bytes() {
+        assert_eq!(hash_token("abc").len(), 32);
     }
 }

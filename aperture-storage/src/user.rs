@@ -12,7 +12,7 @@ mod col {
     pub const ACTOR_ID: &str = "actor_id";
     pub const CREATED_AT: &str = "created_at";
     pub const ID: &str = "id";
-    pub const MUST_CHANGE_PASSWORD: &str = "must_change_password";
+    pub const PASSWORD_CHANGE_REQUIRED_AT: &str = "password_change_required_at";
     pub const PASSWORD_HASH: &str = "password_hash";
     pub const USERNAME: &str = "username";
 }
@@ -22,7 +22,7 @@ const USER_COLUMNS: Columns = Columns::new(&[
     col::ACTOR_ID,
     col::USERNAME,
     col::PASSWORD_HASH,
-    col::MUST_CHANGE_PASSWORD,
+    col::PASSWORD_CHANGE_REQUIRED_AT,
     col::CREATED_AT,
 ]);
 
@@ -37,8 +37,8 @@ pub struct User {
     pub username: String,
     /// Argon2 password hash.
     pub password_hash: String,
-    /// Whether the user must change their password before doing anything else.
-    pub must_change_password: bool,
+    /// When a password change was required, if applicable.
+    pub password_change_required_at: Option<Timestamp>,
     /// When the user was created.
     pub created_at: Timestamp,
 }
@@ -60,20 +60,20 @@ impl UserRepository {
         actor_id: DbId,
         username: &str,
         password_hash: &str,
-        must_change_password: bool,
+        password_change_required_at: Option<Timestamp>,
         created_at: Timestamp,
     ) -> Result<User> {
         let params = params_from_iter([
             actor_id.to_sql(),
             username.to_sql(),
             password_hash.to_sql(),
-            must_change_password.to_sql(),
+            password_change_required_at.to_sql(),
             created_at.to_sql(),
         ]);
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO users (actor_id, username, password_hash, must_change_password, created_at)
+                    INSERT INTO users (actor_id, username, password_hash, password_change_required_at, created_at)
                     VALUES (?1, ?2, ?3, ?4, ?5)
                 ),
                 params,
@@ -86,7 +86,7 @@ impl UserRepository {
             actor_id,
             username: username.to_owned(),
             password_hash: password_hash.to_owned(),
-            must_change_password,
+            password_change_required_at,
             created_at,
         })
     }
@@ -164,22 +164,26 @@ impl UserRepository {
         Ok(users)
     }
 
-    /// Updates the password hash and the must-change flag.
+    /// Updates the password hash and the password-change-required timestamp.
     #[tracing::instrument(level = "info", skip(self, password_hash))]
     pub async fn update_password(
         &self,
         id: DbId,
         password_hash: &str,
-        must_change_password: bool,
+        password_change_required_at: Option<Timestamp>,
     ) -> Result<()> {
         self.connection
             .execute(
                 sql!(
                     UPDATE users
-                    SET password_hash = ?1, must_change_password = ?2
+                    SET password_hash = ?1, password_change_required_at = ?2
                     WHERE id = ?3
                 ),
-                params_from_iter([password_hash.to_sql(), must_change_password.to_sql(), id.to_sql()]),
+                params_from_iter([
+                    password_hash.to_sql(),
+                    password_change_required_at.to_sql(),
+                    id.to_sql(),
+                ]),
             )
             .await
             .map_err(StorageError::from_turso)?;
@@ -220,7 +224,7 @@ fn row_to_user(row: &Row) -> Result<User> {
         actor_id: USER_COLUMNS.extract(row, col::ACTOR_ID)?,
         username: USER_COLUMNS.extract(row, col::USERNAME)?,
         password_hash: USER_COLUMNS.extract(row, col::PASSWORD_HASH)?,
-        must_change_password: USER_COLUMNS.extract(row, col::MUST_CHANGE_PASSWORD)?,
+        password_change_required_at: USER_COLUMNS.extract(row, col::PASSWORD_CHANGE_REQUIRED_AT)?,
         created_at: USER_COLUMNS.extract(row, col::CREATED_AT)?,
     })
 }

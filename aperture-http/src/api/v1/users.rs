@@ -33,7 +33,7 @@ impl From<aperture_storage::User> for UserResponse {
             id: user.id.to_string(),
             actor_id: user.actor_id.to_string(),
             username: user.username,
-            must_change_password: user.must_change_password,
+            must_change_password: user.password_change_required_at.is_some(),
         }
     }
 }
@@ -77,10 +77,13 @@ async fn create_user(
     State(state): State<AppState>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
-    state.auth().enforce(auth.subject(), "user", "create").await?;
+    state
+        .auth()
+        .enforce(auth.subject(), "user", "create")
+        .await?;
     let actor = state
         .auth()
-        .create_user(&request.username, &request.password, false)
+        .create_user(&request.username, &request.password, None)
         .await?;
     if let Some(role) = &request.role {
         let subject = aperture_auth::actor_subject(actor.id);
@@ -139,7 +142,10 @@ async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<DbId>,
 ) -> Result<StatusCode, ApiError> {
-    state.auth().enforce(auth.subject(), "user", "delete").await?;
+    state
+        .auth()
+        .enforce(auth.subject(), "user", "delete")
+        .await?;
     let user = state
         .auth()
         .storage()

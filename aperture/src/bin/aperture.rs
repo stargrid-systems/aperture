@@ -55,7 +55,9 @@ fn main() -> miette::Result<()> {
         }
         Command::Openapi => block_on(emit_openapi()),
         Command::Run(args) => block_on(aperture::serve(args.addr, args.data_dir)),
-        Command::ResetPassword(args) => block_on(aperture::reset_password(&args.user, &args.data_dir)),
+        Command::ResetPassword(args) => {
+            block_on(aperture::reset_password(&args.user, &args.data_dir))
+        }
     }
 }
 

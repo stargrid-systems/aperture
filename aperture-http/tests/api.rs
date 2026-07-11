@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::{env, fs, process};
 
+use aperture_auth::roles;
 use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
 use aperture_storage::DbId;
@@ -65,10 +66,10 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, String) {
         system_actor,
     );
 
-    let actor = auth.create_user("test", "test", false).await.unwrap();
+    let actor = auth.create_user("test", "test", None).await.unwrap();
     let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
     let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, aperture_auth::roles::ADMIN)
+    auth.assign_role(&subject, roles::ADMIN)
         .await
         .unwrap();
 
@@ -146,8 +147,12 @@ async fn paginates_artifacts_with_cursor() {
     assert!(first["prev_cursor"].is_null());
     let cursor = first["next_cursor"].as_str().unwrap();
 
-    let (_, second) =
-        get_json(&app, &token, &format!("/api/v1/artifacts?limit=1&cursor={cursor}")).await;
+    let (_, second) = get_json(
+        &app,
+        &token,
+        &format!("/api/v1/artifacts?limit=1&cursor={cursor}"),
+    )
+    .await;
     assert_eq!(second["items"][0]["key"], "spectra");
     assert!(second["next_cursor"].is_null());
 
@@ -320,8 +325,12 @@ async fn filters_tasks_by_json_field() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // A malformed path is a bad request.
-    let (status, _) =
-        get_json(&app, &token, "/api/v1/tasks?input_path=key;drop&input_value=x").await;
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/tasks?input_path=key;drop&input_value=x",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // A structurally invalid path (empty segment) is a bad request, not a 500.
@@ -332,7 +341,13 @@ async fn filters_tasks_by_json_field() {
 #[tokio::test]
 async fn create_rejects_unknown_kind() {
     let (app, _artifacts, token) = seeded_app().await;
-    let (status, _) = post_json(&app, &token, "/api/v1/tasks", json!({"kind": "nope", "input": {}})).await;
+    let (status, _) = post_json(
+        &app,
+        &token,
+        "/api/v1/tasks",
+        json!({"kind": "nope", "input": {}}),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 

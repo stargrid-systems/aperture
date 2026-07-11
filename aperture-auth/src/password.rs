@@ -1,8 +1,7 @@
 //! Argon2 password hashing and verification.
 
-use argon2::password_hash::{
-    Error, PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
-};
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::{Error, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Algorithm, Argon2, Params, Version};
 
 use crate::error::AuthError;

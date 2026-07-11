@@ -32,7 +32,7 @@ pub struct Session {
     /// The authenticated actor.
     pub actor_id: DbId,
     /// SHA-256 hash of the session token.
-    pub token_hash: String,
+    pub token_hash: Vec<u8>,
     /// When the session expires.
     pub expires_at: Timestamp,
     /// When the session was created.
@@ -54,7 +54,7 @@ impl SessionRepository {
     pub async fn create(
         &self,
         actor_id: DbId,
-        token_hash: &str,
+        token_hash: &[u8],
         expires_at: Timestamp,
         created_at: Timestamp,
     ) -> Result<DbId> {
@@ -79,7 +79,7 @@ impl SessionRepository {
 
     /// Returns the session with `token_hash`, if one exists.
     #[tracing::instrument(level = "info", skip(self, token_hash))]
-    pub async fn find_by_token_hash(&self, token_hash: &str) -> Result<Option<Session>> {
+    pub async fn find_by_token_hash(&self, token_hash: &[u8]) -> Result<Option<Session>> {
         let sql_str = format!(
             sql!(SELECT {cols} FROM sessions WHERE token_hash = ?1),
             cols = SESSION_COLUMNS

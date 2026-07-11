@@ -38,7 +38,7 @@ pub struct ApiKey {
     /// Human-readable name.
     pub name: String,
     /// SHA-256 hash of the full key string.
-    pub key_hash: String,
+    pub key_hash: Vec<u8>,
     /// First characters of the key, for display and lookup.
     pub prefix: String,
     /// When the key was last used, if ever.
@@ -63,7 +63,7 @@ impl ApiKeyRepository {
         &self,
         actor_id: DbId,
         name: &str,
-        key_hash: &str,
+        key_hash: &[u8],
         prefix: &str,
         created_at: Timestamp,
     ) -> Result<ApiKey> {
@@ -89,7 +89,7 @@ impl ApiKeyRepository {
             id,
             actor_id,
             name: name.to_owned(),
-            key_hash: key_hash.to_owned(),
+            key_hash: key_hash.to_vec(),
             prefix: prefix.to_owned(),
             last_used_at: None,
             created_at,

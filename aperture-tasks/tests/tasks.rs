@@ -184,10 +184,7 @@ async fn live_progress_is_visible_while_running() {
     registry.register(probe);
     let tasks = Tasks::new(storage, registry);
 
-    let handle = tasks
-        .spawn::<Probe>(Empty {}, DbId::from(1))
-        .await
-        .unwrap();
+    let handle = tasks.spawn::<Probe>(Empty {}, DbId::from(1)).await.unwrap();
     ready.notified().await;
 
     let progress = handle.progress().expect("running task has progress");
@@ -210,10 +207,7 @@ async fn cancellable_task_records_cancelled() {
     registry.register(probe);
     let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = tasks
-        .spawn::<Probe>(Empty {}, DbId::from(1))
-        .await
-        .unwrap();
+    let handle = tasks.spawn::<Probe>(Empty {}, DbId::from(1)).await.unwrap();
     let id = handle.id();
     ready.notified().await;
 
@@ -233,10 +227,7 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     registry.register(probe);
     let tasks = Tasks::new(storage, registry);
 
-    let handle = tasks
-        .spawn::<Probe>(Empty {}, DbId::from(1))
-        .await
-        .unwrap();
+    let handle = tasks.spawn::<Probe>(Empty {}, DbId::from(1)).await.unwrap();
     let id = handle.id();
     ready.notified().await;
 
@@ -289,10 +280,7 @@ async fn panicking_task_settles_as_failed() {
     registry.register(Boom);
     let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = tasks
-        .spawn::<Boom>(Empty {}, DbId::from(1))
-        .await
-        .unwrap();
+    let handle = tasks.spawn::<Boom>(Empty {}, DbId::from(1)).await.unwrap();
     let id = handle.id();
 
     // The body panics, but wait() must still return rather than hang forever.
@@ -315,10 +303,7 @@ async fn failed_task_records_full_error_chain() {
     registry.register(Fail);
     let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = tasks
-        .spawn::<Fail>(Empty {}, DbId::from(1))
-        .await
-        .unwrap();
+    let handle = tasks.spawn::<Fail>(Empty {}, DbId::from(1)).await.unwrap();
     let id = handle.id();
     assert!(matches!(
         handle.wait().await,

@@ -108,9 +108,7 @@ pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
 
 /// Paths that do not require authentication.
 fn is_public_path(path: &str) -> bool {
-    path == "/api/v1/auth/login"
-        || path == "/api/openapi.json"
-        || !path.starts_with("/api/")
+    path == "/api/v1/auth/login" || path == "/api/openapi.json" || !path.starts_with("/api/")
 }
 
 /// Paths accessible when the user must change their password.

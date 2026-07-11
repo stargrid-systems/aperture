@@ -78,10 +78,7 @@ async fn login(
     operation_id = operation_ids::LOGOUT,
     responses((status = 204, description = "Logged out")),
 )]
-async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
+async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     if let Some(token) = extract_session_token(&headers) {
         state.auth().delete_session(&token).await?;
     }
@@ -123,7 +120,10 @@ async fn change_password(
     if !aperture_auth::verify_password(&request.current_password, &user.password_hash)? {
         return Err(ApiError::UNAUTHORIZED);
     }
-    state.auth().change_password(user.id, &request.new_password).await?;
+    state
+        .auth()
+        .change_password(user.id, &request.new_password)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

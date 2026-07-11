@@ -146,7 +146,7 @@ pub async fn reset_password(username: &str, data_dir: &Path) -> miette::Result<(
     let password = aperture_auth::generate_session_token();
     let hash = aperture_auth::hash_password(&password).into_diagnostic()?;
     users
-        .update_password(user.id, &hash, true)
+        .update_password(user.id, &hash, Some(jiff::Timestamp::now()))
         .await
         .into_diagnostic()?;
     println!("{password}");

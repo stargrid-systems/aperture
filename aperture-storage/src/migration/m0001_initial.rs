@@ -36,7 +36,7 @@ pub(super) const SQL: &str = sql!(
         actor_id INTEGER NOT NULL REFERENCES actors (id),
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
-        must_change_password INTEGER NOT NULL DEFAULT 0,
+        password_change_required_at INTEGER,
         created_at INTEGER NOT NULL
     ) STRICT;
 
@@ -44,7 +44,7 @@ pub(super) const SQL: &str = sql!(
         id INTEGER PRIMARY KEY,
         actor_id INTEGER NOT NULL REFERENCES actors (id),
         name TEXT NOT NULL,
-        key_hash TEXT NOT NULL,
+        key_hash BLOB NOT NULL,
         prefix TEXT NOT NULL,
         last_used_at INTEGER,
         created_at INTEGER NOT NULL
@@ -55,7 +55,7 @@ pub(super) const SQL: &str = sql!(
     CREATE TABLE sessions (
         id INTEGER PRIMARY KEY,
         actor_id INTEGER NOT NULL REFERENCES actors (id),
-        token_hash TEXT NOT NULL UNIQUE,
+        token_hash BLOB NOT NULL UNIQUE,
         expires_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL
     ) STRICT;

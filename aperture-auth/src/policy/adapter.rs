@@ -1,10 +1,9 @@
 //! Casbin adapter backed by turso (libsql) via aperture-storage.
 
+use aperture_storage::Storage;
 use async_trait::async_trait;
 use casbin::error::AdapterError;
 use casbin::{Adapter, Filter, Model};
-
-use aperture_storage::Storage;
 
 /// Converts a storage error into a casbin error.
 pub(super) fn map_storage_err(err: aperture_storage::StorageError) -> casbin::Error {
@@ -48,9 +47,7 @@ impl Adapter for TursoAdapter {
         repo.clear().await.map_err(map_storage_err)?;
         for (sec, ptype) in [("p", "p"), ("g", "g")] {
             for policy in m.get_policy(sec, ptype) {
-                repo.insert(ptype, &policy)
-                    .await
-                    .map_err(map_storage_err)?;
+                repo.insert(ptype, &policy).await.map_err(map_storage_err)?;
             }
         }
         Ok(())

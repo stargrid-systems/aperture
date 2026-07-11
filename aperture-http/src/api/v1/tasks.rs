@@ -135,7 +135,11 @@ async fn cancel_task(
     State(state): State<AppState>,
     Path(id): Path<DbId>,
 ) -> Result<StatusCode, ApiError> {
-    if !state.auth().enforce(auth.subject(), "task", "cancel").await? {
+    if !state
+        .auth()
+        .enforce(auth.subject(), "task", "cancel")
+        .await?
+    {
         return Err(ApiError::FORBIDDEN);
     }
     if state.tasks().cancel(id).await? {

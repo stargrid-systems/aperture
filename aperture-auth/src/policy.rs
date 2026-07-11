@@ -1,8 +1,7 @@
 //! Casbin model definition and built-in policy seeding.
 
-use casbin::{CoreApi, DefaultModel, Enforcer};
-
 use aperture_storage::Storage;
+use casbin::{CoreApi, DefaultModel, Enforcer};
 
 use self::adapter::{TursoAdapter, map_storage_err};
 

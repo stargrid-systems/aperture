@@ -14,19 +14,17 @@ use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aperture_storage::{
-    Actor, ActorKind, DbId, Storage,
-};
+use aperture_storage::{Actor, ActorKind, DbId, Storage};
 use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use casbin::{CoreApi, Enforcer, MgmtApi, RbacApi};
 use jiff::Timestamp;
 use tokio::sync::RwLock;
 
-pub use self::policy::{actor_subject, apikey_subject, roles};
 pub use self::error::{AuthError, Result};
 pub use self::password::{hash_password, verify_password};
+pub use self::policy::{actor_subject, apikey_subject, roles};
 pub use self::token::{
     api_key_lookup_prefix, constant_time_eq, generate_api_key, generate_session_token, hash_token,
 };
@@ -79,10 +77,7 @@ impl AuthenticatedActor {
 impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedActor {
     type Rejection = StatusCode;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> StdResult<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> StdResult<Self, Self::Rejection> {
         parts
             .extensions
             .get::<AuthenticatedActor>()
@@ -196,11 +191,13 @@ impl AuthHandle {
         let now = Timestamp::now();
         let expires_at = now + SESSION_TTL;
         let sessions = self.storage.sessions()?;
-        sessions.create(user.actor_id, &token_hash, expires_at, now).await?;
+        sessions
+            .create(user.actor_id, &token_hash, expires_at, now)
+            .await?;
         Ok(LoginResult {
             token,
             actor,
-            must_change_password: user.must_change_password,
+            must_change_password: user.password_change_required_at.is_some(),
         })
     }
 
@@ -227,7 +224,7 @@ impl AuthHandle {
             users
                 .find_by_actor_id(actor.id)
                 .await?
-                .map(|u| u.must_change_password)
+                .map(|u| u.password_change_required_at.is_some())
                 .unwrap_or(false)
         } else {
             false
@@ -268,14 +265,11 @@ impl AuthHandle {
         name: &str,
     ) -> Result<(String, aperture_storage::ApiKey)> {
         let raw_key = generate_api_key();
-        let prefix = api_key_lookup_prefix(&raw_key)
-            .ok_or(AuthError::InvalidCredentials)?;
+        let prefix = api_key_lookup_prefix(&raw_key).ok_or(AuthError::InvalidCredentials)?;
         let key_hash = hash_token(&raw_key);
         let now = Timestamp::now();
         let repo = self.storage.api_keys()?;
-        let api_key = repo
-            .create(actor_id, name, &key_hash, &prefix, now)
-            .await?;
+        let api_key = repo.create(actor_id, name, &key_hash, &prefix, now).await?;
         Ok((raw_key, api_key))
     }
 
@@ -310,22 +304,22 @@ impl AuthHandle {
 
     // ── User management ──────────────────────────────────────────────────
 
-    /// Creates a new user actor and user record. Returns the actor id.
+    /// Creates a new user actor and user record. Returns the actor.
+    /// If `password_change_required_at` is `Some`, the user must change their
+    /// password before accessing any other endpoint.
     pub async fn create_user(
         &self,
         username: &str,
         password: &str,
-        must_change_password: bool,
+        password_change_required_at: Option<Timestamp>,
     ) -> Result<Actor> {
         let now = Timestamp::now();
         let hash = hash_password(password)?;
         let actors = self.storage.actors()?;
-        let actor = actors
-            .create(ActorKind::User, username, now)
-            .await?;
+        let actor = actors.create(ActorKind::User, username, now).await?;
         let users = self.storage.users()?;
         users
-            .create(actor.id, username, &hash, must_change_password, now)
+            .create(actor.id, username, &hash, password_change_required_at, now)
             .await?;
         Ok(actor)
     }
@@ -334,7 +328,7 @@ impl AuthHandle {
     pub async fn change_password(&self, user_id: DbId, new_password: &str) -> Result<()> {
         let hash = hash_password(new_password)?;
         let users = self.storage.users()?;
-        users.update_password(user_id, &hash, false).await?;
+        users.update_password(user_id, &hash, None).await?;
         Ok(())
     }
 
@@ -354,9 +348,12 @@ impl AuthHandle {
         let sessions = self.storage.sessions()?;
         sessions.delete_for_actor(actor_id).await?;
         self.revoke_permissions(&actor_subject(actor_id)).await?;
-        self.revoke_role(&actor_subject(actor_id), roles::ADMIN).await?;
-        self.revoke_role(&actor_subject(actor_id), roles::OPERATOR).await?;
-        self.revoke_role(&actor_subject(actor_id), roles::VIEWER).await?;
+        self.revoke_role(&actor_subject(actor_id), roles::ADMIN)
+            .await?;
+        self.revoke_role(&actor_subject(actor_id), roles::OPERATOR)
+            .await?;
+        self.revoke_role(&actor_subject(actor_id), roles::VIEWER)
+            .await?;
         Ok(())
     }
 
@@ -383,7 +380,8 @@ impl AuthHandle {
             return Ok(None);
         }
         let password = generate_session_token();
-        let actor = self.create_user("admin", &password, true).await?;
+        let now = Timestamp::now();
+        let actor = self.create_user("admin", &password, Some(now)).await?;
         let subject = actor_subject(actor.id);
         self.assign_role(&subject, roles::ADMIN).await?;
         tracing::info!(actor = actor.id.get(), "bootstrapped admin user");
