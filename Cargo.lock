@@ -161,6 +161,7 @@ dependencies = [
 name = "aperture-auth"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "aperture-storage",
  "argon2",
  "async-trait",

@@ -17,6 +17,7 @@ schema = ["dep:utoipa"]
 
 [dependencies]
 aperture-storage = { workspace = true }
+anyhow = { workspace = true, features = ["std"] }
 argon2 = { workspace = true, features = ["alloc", "password-hash"] }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["json"] }

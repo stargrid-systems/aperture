@@ -1,5 +1,6 @@
 //! Errors returned by the auth layer.
 
+use std::error::Error as StdError;
 use std::result::Result as StdResult;
 
 use argon2::password_hash;
@@ -10,8 +11,8 @@ pub enum AuthError {
     #[error("database error: {0}")]
     Storage(#[from] aperture_storage::StorageError),
 
-    #[error("casbin error: {0}")]
-    Casbin(#[from] casbin::Error),
+    #[error("policy error: {0}")]
+    Policy(anyhow::Error),
 
     #[error("password hash error: {0}")]
     PasswordHash(String),
@@ -30,6 +31,24 @@ pub enum AuthError {
 
     #[error("password must be changed before continuing")]
     MustChangePassword,
+}
+
+impl AuthError {
+    /// Converts a casbin error into an [`AuthError`]. If the casbin error
+    /// wraps a [`StorageError`] (the common case, since our adapter boxes
+    /// storage errors into casbin's `AdapterError`), the original storage
+    /// error is recovered so callers see the real cause. Everything else is
+    /// wrapped opaquely as [`AuthError::Policy`].
+    pub(crate) fn from_casbin(err: casbin::Error) -> Self {
+        if let casbin::Error::AdapterError(adapter_err) = err {
+            let boxed: Box<dyn StdError + Send + Sync> = adapter_err.0;
+            return match boxed.downcast::<aperture_storage::StorageError>() {
+                Ok(storage_err) => AuthError::Storage(*storage_err),
+                Err(other) => AuthError::Policy(anyhow::Error::from_boxed(other)),
+            };
+        }
+        AuthError::Policy(err.into())
+    }
 }
 
 impl From<password_hash::Error> for AuthError {

@@ -99,10 +99,10 @@ impl AuthHandle {
     pub async fn new(storage: Storage) -> Result<Self> {
         let mut enforcer = policy::create_enforcer(&storage)
             .await
-            .map_err(AuthError::Casbin)?;
+            .map_err(AuthError::from_casbin)?;
         policy::seed_builtin_policies(&mut enforcer, &storage)
             .await
-            .map_err(AuthError::Casbin)?;
+            .map_err(AuthError::from_casbin)?;
         Ok(Self {
             storage,
             enforcer: Arc::new(RwLock::new(enforcer)),
@@ -119,7 +119,8 @@ impl AuthHandle {
     /// Checks whether `subject` may perform `action` on `object`.
     pub async fn enforce(&self, subject: &str, obj: &str, act: &str) -> Result<bool> {
         let e = self.enforcer.read().await;
-        e.enforce((subject, obj, act)).map_err(AuthError::Casbin)
+        e.enforce((subject, obj, act))
+            .map_err(AuthError::from_casbin)
     }
 
     // ── Policy management ────────────────────────────────────────────────
@@ -129,7 +130,7 @@ impl AuthHandle {
         let mut e = self.enforcer.write().await;
         e.add_role_for_user(subject, role, None)
             .await
-            .map_err(AuthError::Casbin)?;
+            .map_err(AuthError::from_casbin)?;
         Ok(())
     }
 
@@ -138,7 +139,7 @@ impl AuthHandle {
         let mut e = self.enforcer.write().await;
         e.delete_role_for_user(subject, role, None)
             .await
-            .map_err(AuthError::Casbin)?;
+            .map_err(AuthError::from_casbin)?;
         Ok(())
     }
 
@@ -153,7 +154,7 @@ impl AuthHandle {
         let mut e = self.enforcer.write().await;
         e.add_policy(vec![subject.to_owned(), obj.to_owned(), act.to_owned()])
             .await
-            .map_err(AuthError::Casbin)?;
+            .map_err(AuthError::from_casbin)?;
         Ok(())
     }
 
@@ -162,7 +163,7 @@ impl AuthHandle {
         let mut e = self.enforcer.write().await;
         e.remove_filtered_policy(0, vec![subject.to_owned()])
             .await
-            .map_err(AuthError::Casbin)?;
+            .map_err(AuthError::from_casbin)?;
         Ok(())
     }
     // ── Authentication: sessions ─────────────────────────────────────────
