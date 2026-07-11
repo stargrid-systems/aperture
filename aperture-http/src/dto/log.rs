@@ -160,6 +160,8 @@ pub struct LogListParams {
     pub q: Option<String>,
     /// Only events belonging to this span.
     pub span_id: Option<DbId>,
+    /// Only events from this boot session.
+    pub boot_id: Option<Uuid>,
     /// Only events at or after this time (RFC 3339).
     pub since: Option<Timestamp>,
     /// Only events at or before this time (RFC 3339).
@@ -196,6 +198,8 @@ pub struct LogSpanListParams {
     /// `aperture,aperture_storage`.
     #[serde(default, deserialize_with = "deserialize_single_or_vec_string")]
     pub target: Vec<String>,
+    /// Only spans from this boot session.
+    pub boot_id: Option<Uuid>,
     /// Only spans started at or after this time (RFC 3339).
     pub since: Option<Timestamp>,
     /// Only spans started at or before this time (RFC 3339).
