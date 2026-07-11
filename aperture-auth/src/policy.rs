@@ -48,7 +48,7 @@ pub(crate) async fn seed_builtin_policies(
     storage: &Storage,
 ) -> casbin::Result<bool> {
     let count = storage
-        .casbin()
+        .policy()
         .map_err(map_storage_err)?
         .count()
         .await

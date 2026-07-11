@@ -1,8 +1,8 @@
-//! Storage for casbin policy rules.
+//! Storage for policy rules.
 //!
-//! The table holds casbin's standard `(ptype, v0..v5)` row format. This
-//! repository provides the CRUD operations the casbin adapter needs, without
-//! coupling the storage layer to casbin itself.
+//! The `casbin_rule` table holds casbin's standard `(ptype, v0..v5)` row
+//! format. This repository provides the CRUD operations the casbin adapter
+//! needs, without coupling the storage layer to casbin itself.
 
 use turso::{Connection, Value, params_from_iter};
 
@@ -12,7 +12,7 @@ use crate::sql::{ToSql, get};
 
 /// One policy or grouping rule, in casbin's flat string format.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CasbinRule {
+pub struct PolicyRule {
     /// Policy type: `"p"` for policy rules, `"g"` for grouping (role) rules.
     pub ptype: String,
     /// The rule values (v0 through v5). Unused trailing values are empty
@@ -21,18 +21,18 @@ pub struct CasbinRule {
 }
 
 /// Repository over the casbin_rule table.
-pub struct CasbinRuleRepository {
+pub struct PolicyRuleRepository {
     connection: Connection,
 }
 
-impl CasbinRuleRepository {
+impl PolicyRuleRepository {
     pub(crate) fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
     /// Loads every rule, ordered by id for deterministic loading.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn load_all(&self) -> Result<Vec<CasbinRule>> {
+    pub async fn load_all(&self) -> Result<Vec<PolicyRule>> {
         let mut rows = self
             .connection
             .query(
@@ -48,7 +48,7 @@ impl CasbinRuleRepository {
             for i in 1..=6 {
                 values.push(get::<String>(&row, i)?);
             }
-            rules.push(CasbinRule { ptype, values });
+            rules.push(PolicyRule { ptype, values });
         }
         Ok(rules)
     }

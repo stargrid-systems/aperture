@@ -12,7 +12,6 @@ use turso::{Builder, Connection, Database};
 pub use self::actor::{Actor, ActorKind, ActorRepository};
 pub use self::api_key::{ApiKey, ApiKeyRepository};
 pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
-pub use self::casbin::{CasbinRule, CasbinRuleRepository};
 pub use self::error::{Result, StorageError};
 pub use self::id::DbId;
 pub use self::log::{
@@ -20,6 +19,7 @@ pub use self::log::{
     SpanParentFilter, SpanRecord,
 };
 pub use self::page::{ListQuery, Order, Page};
+pub use self::policy::{PolicyRule, PolicyRuleRepository};
 pub use self::session::{Session, SessionRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
@@ -30,13 +30,13 @@ pub use self::user::{User, UserRepository};
 mod actor;
 mod api_key;
 mod artifact;
-mod casbin;
 mod error;
 mod id;
 mod log;
 mod macros;
 mod migration;
 mod page;
+mod policy;
 mod session;
 mod sql;
 mod task;
@@ -122,8 +122,8 @@ impl Storage {
         Ok(ApiKeyRepository::new(self.connect()?))
     }
 
-    /// Returns the repository over the casbin_rule table.
-    pub fn casbin(&self) -> Result<CasbinRuleRepository> {
-        Ok(CasbinRuleRepository::new(self.connect()?))
+    /// Returns the repository over the policy rules table.
+    pub fn policy(&self) -> Result<PolicyRuleRepository> {
+        Ok(PolicyRuleRepository::new(self.connect()?))
     }
 }

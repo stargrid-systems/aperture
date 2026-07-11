@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::{env, fs, process};
 
-use aperture_auth::roles;
 use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
+use aperture_auth::roles;
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
 use aperture_storage::DbId;
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
@@ -66,12 +66,11 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, String) {
         system_actor,
     );
 
-    let actor = auth.create_user("test", "test", None).await.unwrap();
+    let password = aperture_auth::generate_session_token();
+    let actor = auth.create_user("test", &password, None).await.unwrap();
     let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
     let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, roles::ADMIN)
-        .await
-        .unwrap();
+    auth.assign_role(&subject, roles::ADMIN).await.unwrap();
 
     let state = AppState::new("test", Uuid::nil(), spectra, tasks, auth);
     (app(state), artifacts, raw_key)
