@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition, DownloadInput, DownloadSource};
+use aperture_storage::DbId;
 use aperture_tasks::Tasks;
 use tokio::time;
 
@@ -18,18 +19,26 @@ pub struct Spectra {
     artifacts: Arc<Artifacts>,
     tasks: Tasks,
     config: SpectraConfig,
+    system_actor: DbId,
     current: Arc<RwLock<Option<Arc<SpectraImage>>>>,
     preparing: Arc<AtomicBool>,
 }
 
 impl Spectra {
     /// Creates a frontend backed by `artifacts`, fetched via `tasks`, pulling
-    /// from `config`.
-    pub fn new(artifacts: Arc<Artifacts>, tasks: Tasks, config: SpectraConfig) -> Self {
+    /// from `config`. `system_actor` is the actor used for internally spawned
+    /// download tasks.
+    pub fn new(
+        artifacts: Arc<Artifacts>,
+        tasks: Tasks,
+        config: SpectraConfig,
+        system_actor: DbId,
+    ) -> Self {
         Self {
             artifacts,
             tasks,
             config,
+            system_actor,
             current: Arc::new(RwLock::new(None)),
             preparing: Arc::new(AtomicBool::new(false)),
         }
@@ -87,7 +96,7 @@ impl Spectra {
             },
         };
         self.tasks
-            .spawn::<DownloadDefinition>(input)
+            .spawn::<DownloadDefinition>(input, self.system_actor)
             .await?
             .wait()
             .await?;

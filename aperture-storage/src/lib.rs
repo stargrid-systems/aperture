@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use turso::{Builder, Connection, Database};
 
+pub use self::actor::{Actor, ActorKind, ActorRepository};
+pub use self::api_key::{ApiKey, ApiKeyRepository};
 pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
 pub use self::error::{Result, StorageError};
 pub use self::id::DbId;
@@ -17,11 +19,15 @@ pub use self::log::{
     SpanParentFilter, SpanRecord,
 };
 pub use self::page::{ListQuery, Order, Page};
+pub use self::session::{Session, SessionRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
     TaskRepository, TaskStatus,
 };
+pub use self::user::{User, UserRepository};
 
+mod actor;
+mod api_key;
 mod artifact;
 mod error;
 mod id;
@@ -29,8 +35,10 @@ mod log;
 mod macros;
 mod migration;
 mod page;
+mod session;
 mod sql;
 mod task;
+mod user;
 
 /// Busy timeout for write contention. turso uses WAL mode by default, but two
 /// writers still need to take turns. Without a timeout the second writer
@@ -90,5 +98,25 @@ impl Storage {
     /// Returns the repository over the structured log tables.
     pub fn logs(&self) -> Result<LogRepository> {
         Ok(LogRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the actors table.
+    pub fn actors(&self) -> Result<ActorRepository> {
+        Ok(ActorRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the users table.
+    pub fn users(&self) -> Result<UserRepository> {
+        Ok(UserRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the sessions table.
+    pub fn sessions(&self) -> Result<SessionRepository> {
+        Ok(SessionRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the api_keys table.
+    pub fn api_keys(&self) -> Result<ApiKeyRepository> {
+        Ok(ApiKeyRepository::new(self.connect()?))
     }
 }

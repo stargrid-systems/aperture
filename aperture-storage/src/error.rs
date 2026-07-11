@@ -30,6 +30,10 @@ pub enum StorageError {
     #[error("unknown task status {0:?}")]
     UnknownTaskStatus(String),
 
+    /// The database stored an unknown actor kind string.
+    #[error("unknown actor kind {0:?}")]
+    UnknownActorKind(String),
+
     /// A cursor string from the client could not be decoded.
     #[error("invalid cursor: {0}")]
     InvalidCursor(String),

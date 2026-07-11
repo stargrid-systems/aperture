@@ -1,4 +1,5 @@
-//! Migration 0001: artifact catalog, task invocations, and structured logs.
+//! Migration 0001: artifact catalog, actors, auth, task invocations, and
+//! structured logs.
 //!
 //! `boot_id` is stored as `BLOB` rather than the turso `uuid` custom type
 //! because the latter is broken in STRICT tables as of turso 0.6. See
@@ -21,10 +22,63 @@ pub(super) const SQL: &str = sql!(
     ) STRICT;
     CREATE INDEX idx_artifacts_key ON artifacts (key);
 
+    CREATE TABLE actors (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        disabled_at INTEGER
+    ) STRICT;
+    CREATE INDEX idx_actors_kind ON actors (kind);
+
+    CREATE TABLE users (
+        id INTEGER PRIMARY KEY,
+        actor_id INTEGER NOT NULL REFERENCES actors (id),
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        must_change_password INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    ) STRICT;
+
+    CREATE TABLE api_keys (
+        id INTEGER PRIMARY KEY,
+        actor_id INTEGER NOT NULL REFERENCES actors (id),
+        name TEXT NOT NULL,
+        key_hash TEXT NOT NULL,
+        prefix TEXT NOT NULL,
+        last_used_at INTEGER,
+        created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_api_keys_prefix ON api_keys (prefix);
+    CREATE INDEX idx_api_keys_actor ON api_keys (actor_id);
+
+    CREATE TABLE sessions (
+        id INTEGER PRIMARY KEY,
+        actor_id INTEGER NOT NULL REFERENCES actors (id),
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_sessions_actor ON sessions (actor_id);
+    CREATE INDEX idx_sessions_expires ON sessions (expires_at);
+
+    CREATE TABLE casbin_rule (
+        id INTEGER PRIMARY KEY,
+        ptype TEXT NOT NULL,
+        v0 TEXT NOT NULL,
+        v1 TEXT NOT NULL,
+        v2 TEXT NOT NULL,
+        v3 TEXT NOT NULL,
+        v4 TEXT NOT NULL,
+        v5 TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_casbin_rule_ptype ON casbin_rule (ptype);
+
     CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
         kind TEXT NOT NULL,
         parent_id INTEGER REFERENCES tasks (id),
+        initiator_id INTEGER REFERENCES actors (id),
         status TEXT NOT NULL,
         input TEXT NOT NULL,
         output TEXT,
@@ -36,6 +90,7 @@ pub(super) const SQL: &str = sql!(
     CREATE INDEX idx_tasks_kind ON tasks (kind);
     CREATE INDEX idx_tasks_status ON tasks (status);
     CREATE INDEX idx_tasks_parent ON tasks (parent_id);
+    CREATE INDEX idx_tasks_initiator ON tasks (initiator_id);
 
     CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,

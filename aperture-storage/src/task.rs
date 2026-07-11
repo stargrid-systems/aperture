@@ -22,6 +22,7 @@ mod col {
     pub const ERROR: &str = "error";
     pub const FINISHED_AT: &str = "finished_at";
     pub const ID: &str = "id";
+    pub const INITIATOR_ID: &str = "initiator_id";
     pub const INPUT: &str = "input";
     pub const KIND: &str = "kind";
     pub const OUTPUT: &str = "output";
@@ -35,6 +36,7 @@ const TASK_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KIND,
     col::PARENT_ID,
+    col::INITIATOR_ID,
     col::STATUS,
     col::INPUT,
     col::OUTPUT,
@@ -105,6 +107,8 @@ pub struct TaskInvocation {
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
     pub parent_id: Option<DbId>,
+    /// The actor that initiated this task. Child tasks inherit the parent's.
+    pub initiator_id: Option<DbId>,
     /// The lifecycle state.
     pub status: TaskStatus,
     /// JSON-encoded input the task was created with.
@@ -265,12 +269,14 @@ impl TaskRepository {
         &self,
         kind: &str,
         parent_id: Option<DbId>,
+        initiator_id: Option<DbId>,
         input: &str,
         created_at: Timestamp,
     ) -> Result<DbId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
+            initiator_id.to_sql(),
             TaskStatus::Pending.to_sql(),
             input.to_sql(),
             created_at.to_sql(),
@@ -278,8 +284,8 @@ impl TaskRepository {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO tasks (kind, parent_id, status, input, created_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5)
+                    INSERT INTO tasks (kind, parent_id, initiator_id, status, input, created_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ),
                 params,
             )
@@ -297,12 +303,14 @@ impl TaskRepository {
         &self,
         kind: &str,
         parent_id: Option<DbId>,
+        initiator_id: Option<DbId>,
         input: &str,
         started_at: Timestamp,
     ) -> Result<DbId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
+            initiator_id.to_sql(),
             TaskStatus::Running.to_sql(),
             input.to_sql(),
             started_at.to_sql(),
@@ -311,8 +319,8 @@ impl TaskRepository {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO tasks (kind, parent_id, status, input, created_at, started_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    INSERT INTO tasks (kind, parent_id, initiator_id, status, input, created_at, started_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 ),
                 params,
             )
@@ -505,6 +513,7 @@ fn row_to_task(row: &Row) -> Result<TaskInvocation> {
         id: TASK_COLUMNS.extract(row, col::ID)?,
         kind: TASK_COLUMNS.extract(row, col::KIND)?,
         parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
+        initiator_id: TASK_COLUMNS.extract(row, col::INITIATOR_ID)?,
         status: TASK_COLUMNS.extract(row, col::STATUS)?,
         input: TASK_COLUMNS.extract(row, col::INPUT)?,
         output: TASK_COLUMNS.extract(row, col::OUTPUT)?,

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
+use aperture_storage::ActorKind;
 use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
@@ -27,17 +28,22 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
 
     artifacts.sync().await.into_diagnostic()?;
 
+    // Ensure a system actor exists for internally spawned tasks.
+    let storage = artifacts.storage().clone();
+    let system_actor = ensure_system_actor(&storage).await?;
+
     // Register the task kinds and mark any invocations a previous run left
     // active as interrupted.
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
-    let tasks = Tasks::new(artifacts.storage().clone(), registry);
+    let tasks = Tasks::new(storage, registry);
     tasks.reconcile().await.into_diagnostic()?;
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
+        system_actor,
     );
     // Open a cached frontend right away. A missing one is fetched lazily on the
     // first request.
@@ -46,7 +52,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
+    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone(), system_actor);
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
@@ -107,6 +113,24 @@ pub async fn openapi() -> miette::Result<OpenApiSpec> {
 /// Registers every task kind the gateway supports.
 fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
     registry.register(DownloadDefinition::new(artifacts));
+}
+
+/// Creates the system actor if it does not exist yet, and returns its id.
+async fn ensure_system_actor(
+    storage: &aperture_storage::Storage,
+) -> miette::Result<aperture_storage::DbId> {
+    let actors = storage.actors().into_diagnostic()?;
+    let existing = actors.list_by_kind(ActorKind::System).await.into_diagnostic()?;
+    if let Some(actor) = existing.into_iter().next() {
+        return Ok(actor.id);
+    }
+    let now = jiff::Timestamp::now();
+    let actor = actors
+        .create(ActorKind::System, "system", now)
+        .await
+        .into_diagnostic()?;
+    tracing::info!(actor = actor.id.get(), "created system actor");
+    Ok(actor.id)
 }
 
 /// Opens the storage database and blob store under `data_dir`.

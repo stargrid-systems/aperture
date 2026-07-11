@@ -10,6 +10,7 @@ use turso::{Row, Value};
 pub use self::columns::Columns;
 use crate::error::{Result, StorageError};
 
+mod boolean;
 mod columns;
 mod domain;
 mod integer;

@@ -3,7 +3,7 @@ use turso::Value;
 use uuid::Uuid;
 
 use super::{FromSql, ToSql};
-use crate::{DbId, Level, Result, StorageError, TaskStatus};
+use crate::{ActorKind, DbId, Level, Result, StorageError, TaskStatus};
 
 impl ToSql for Uuid {
     fn to_sql(&self) -> Value {
@@ -82,6 +82,25 @@ impl ToSql for TaskStatus {
 }
 
 impl FromSql for TaskStatus {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        match value {
+            Value::Text(s) => Self::from_db(&s),
+            actual => Err(StorageError::ColumnTypeMismatch {
+                column: idx,
+                expected: "text",
+                actual,
+            }),
+        }
+    }
+}
+
+impl ToSql for ActorKind {
+    fn to_sql(&self) -> Value {
+        Value::Text(self.as_db().to_owned())
+    }
+}
+
+impl FromSql for ActorKind {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
             Value::Text(s) => Self::from_db(&s),

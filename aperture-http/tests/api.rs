@@ -57,8 +57,9 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
+        DbId::from(1),
     );
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks);
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks, DbId::from(1));
     (app(state), artifacts)
 }
 
@@ -214,7 +215,7 @@ async fn reads_recorded_tasks() {
     let (app, artifacts) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let id = repo
-        .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .create("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
         .await
         .unwrap();
     repo.finish(
@@ -244,7 +245,7 @@ async fn filters_tasks_by_json_field() {
     let (app, artifacts) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let spectra = repo
-        .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .create("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
         .await
         .unwrap();
     repo.finish(
@@ -257,7 +258,7 @@ async fn filters_tasks_by_json_field() {
     .await
     .unwrap();
     let other = repo
-        .create("download", None, r#"{"key":"other"}"#, at(1_100))
+        .create("download", None, None, r#"{"key":"other"}"#, at(1_100))
         .await
         .unwrap();
     repo.finish(other, TaskStatus::Failed, at(1_150), None, Some("boom"))

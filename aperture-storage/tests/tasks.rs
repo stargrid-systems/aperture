@@ -14,7 +14,7 @@ async fn create_then_finish_records_lifecycle() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .create("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
         .await
         .unwrap();
 
@@ -49,7 +49,7 @@ async fn create_running_starts_in_running_state() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create_running("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .create_running("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
         .await
         .unwrap();
 
@@ -65,7 +65,7 @@ async fn finish_does_not_overwrite_a_finished_row() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create_running("download", None, "{}", at(1_000))
+        .create_running("download", None, None, "{}", at(1_000))
         .await
         .unwrap();
     repo.finish(
@@ -102,13 +102,16 @@ async fn list_filters_by_status_kind_and_parent() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.tasks().unwrap();
 
-    let parent = repo.create("update", None, "{}", at(1_000)).await.unwrap();
+    let parent = repo
+        .create("update", None, None, "{}", at(1_000))
+        .await
+        .unwrap();
     let download = repo
-        .create("download", Some(parent), "{}", at(1_100))
+        .create("download", Some(parent), None, "{}", at(1_100))
         .await
         .unwrap();
     let install = repo
-        .create("install", Some(parent), "{}", at(1_200))
+        .create("install", Some(parent), None, "{}", at(1_200))
         .await
         .unwrap();
     repo.finish(install, TaskStatus::Failed, at(1_300), None, Some("boom"))
@@ -175,6 +178,7 @@ async fn list_filters_by_json_input_and_output() {
         .create_running(
             "download",
             None,
+            None,
             r#"{"key":"spectra","source":{"reference":"ghcr.io/x/spectra:1"}}"#,
             at(1_000),
         )
@@ -190,7 +194,7 @@ async fn list_filters_by_json_input_and_output() {
     .await
     .unwrap();
     let other = repo
-        .create_running("download", None, r#"{"key":"other"}"#, at(1_100))
+        .create_running("download", None, None, r#"{"key":"other"}"#, at(1_100))
         .await
         .unwrap();
     repo.finish(
@@ -283,16 +287,16 @@ async fn list_active_finds_unfinished_invocations() {
     let repo = storage.tasks().unwrap();
 
     let pending = repo
-        .create("download", None, "{}", at(1_000))
+        .create("download", None, None, "{}", at(1_000))
         .await
         .unwrap();
     let running = repo
-        .create("download", None, "{}", at(1_100))
+        .create("download", None, None, "{}", at(1_100))
         .await
         .unwrap();
     repo.mark_running(running, at(1_150)).await.unwrap();
     let done = repo
-        .create("download", None, "{}", at(1_200))
+        .create("download", None, None, "{}", at(1_200))
         .await
         .unwrap();
     repo.finish(done, TaskStatus::Succeeded, at(1_300), None, None)

@@ -112,18 +112,24 @@ impl Tasks {
     pub async fn spawn<T: TaskDefinition>(
         &self,
         input: T::Input,
+        initiator: DbId,
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
         self.inner
-            .spawn_value::<T::Output>(T::KIND, value, None)
+            .spawn_value::<T::Output>(T::KIND, value, None, initiator)
             .await
     }
 
     /// Spawns a top-level task by kind string, validating `input` against the
     /// kind's input type, and returns the created invocation. Used by the API,
     /// which does not await a typed output.
-    pub async fn create(&self, kind: &str, input: Value) -> Result<TaskInvocation, TaskError> {
-        let (invocation, _phase) = self.inner.start(kind, input, None).await?;
+    pub async fn create(
+        &self,
+        kind: &str,
+        input: Value,
+        initiator: DbId,
+    ) -> Result<TaskInvocation, TaskError> {
+        let (invocation, _phase) = self.inner.start(kind, input, None, initiator).await?;
         Ok(invocation)
     }
 
@@ -290,6 +296,7 @@ impl TasksInner {
         kind: &str,
         input: Value,
         parent_id: Option<DbId>,
+        initiator: DbId,
     ) -> Result<(TaskInvocation, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
             self.registry
@@ -303,7 +310,7 @@ impl TasksInner {
         let id = self
             .storage
             .tasks()?
-            .create_running(kind, parent_id, &input_json, now)
+            .create_running(kind, parent_id, Some(initiator), &input_json, now)
             .await?;
 
         let cancel = match parent_id.and_then(|parent| self.parent_token(parent)) {
@@ -317,7 +324,13 @@ impl TasksInner {
             phase: phase_tx,
         });
 
-        let ctx = TaskContext::new(id, Arc::clone(self), cancel, Arc::clone(&shared.progress));
+        let ctx = TaskContext::new(
+            id,
+            initiator,
+            Arc::clone(self),
+            cancel,
+            Arc::clone(&shared.progress),
+        );
         let capabilities = definition.capabilities();
 
         // Hold the registry lock across spawn and insert so the body cannot
@@ -346,6 +359,7 @@ impl TasksInner {
             id,
             kind: kind.to_owned(),
             parent_id,
+            initiator_id: Some(initiator),
             status: TaskStatus::Running,
             input: input_json,
             output: None,
@@ -363,8 +377,9 @@ impl TasksInner {
         kind: &str,
         input: Value,
         parent_id: Option<DbId>,
+        initiator: DbId,
     ) -> Result<TaskHandle<O>, TaskError> {
-        let (invocation, phase) = self.start(kind, input, parent_id).await?;
+        let (invocation, phase) = self.start(kind, input, parent_id, initiator).await?;
         Ok(TaskHandle {
             id: invocation.id,
             inner: Arc::clone(self),

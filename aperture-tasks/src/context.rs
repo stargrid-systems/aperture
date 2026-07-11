@@ -11,11 +11,13 @@ use crate::error::{RunError, TaskError};
 use crate::progress::{ProgressHandle, ProgressState};
 use crate::tasks::{TaskHandle, TasksInner};
 
-/// Everything a running task needs: its identity, a cooperative cancellation
-/// signal, a progress reporter, and the means to spawn sub-tasks under itself.
+/// Everything a running task needs: its identity, its initiator, a cooperative
+/// cancellation signal, a progress reporter, and the means to spawn sub-tasks
+/// under itself.
 #[derive(Clone)]
 pub struct TaskContext {
     id: DbId,
+    initiator: DbId,
     inner: Arc<TasksInner>,
     cancel: CancellationToken,
     progress: Arc<ProgressState>,
@@ -24,12 +26,14 @@ pub struct TaskContext {
 impl TaskContext {
     pub(crate) fn new(
         id: DbId,
+        initiator: DbId,
         inner: Arc<TasksInner>,
         cancel: CancellationToken,
         progress: Arc<ProgressState>,
     ) -> Self {
         Self {
             id,
+            initiator,
             inner,
             cancel,
             progress,
@@ -39,6 +43,11 @@ impl TaskContext {
     /// The id of the invocation this body is running.
     pub fn id(&self) -> DbId {
         self.id
+    }
+
+    /// The actor that initiated this task. Child tasks inherit the parent's.
+    pub fn initiator(&self) -> DbId {
+        self.initiator
     }
 
     /// Whether cancellation has been requested.
@@ -75,7 +84,7 @@ impl TaskContext {
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
         self.inner
-            .spawn_value::<T::Output>(T::KIND, value, Some(self.id))
+            .spawn_value::<T::Output>(T::KIND, value, Some(self.id), self.initiator)
             .await
     }
 
