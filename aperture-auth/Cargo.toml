@@ -1,0 +1,36 @@
+[package]
+name = "aperture-auth"
+version = "0.1.0"
+description = "Authentication and authorization for the Aperture gateway."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+schema = ["dep:utoipa"]
+
+[dependencies]
+aperture-storage = { workspace = true }
+argon2 = { workspace = true, features = ["alloc", "password-hash"] }
+async-trait = { workspace = true }
+casbin = { workspace = true, features = ["runtime-tokio", "globset"] }
+cookie = { workspace = true, features = ["percent-encode"] }
+jiff = { workspace = true, features = ["std"] }
+rand = { workspace = true, features = ["std", "thread_rng"] }
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+utoipa = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

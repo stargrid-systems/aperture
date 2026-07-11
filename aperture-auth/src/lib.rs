@@ -1,0 +1,371 @@
+//! Authentication and authorization for the Aperture gateway.
+//!
+//! [`AuthHandle`] is the single entry point. It wraps a casbin enforcer for
+//! authorization and the storage layer for credential management.
+//!
+//! Authentication supports two methods:
+//!
+//! - **Session cookie**: a browser-friendly flow. `POST /auth/login` returns a
+//!   session token stored as an httpOnly cookie.
+//! - **API key**: a bearer token for headless clients. Each key has its own
+//!   scoped permissions enforced as a separate casbin subject.
+
+use std::sync::Arc;
+
+use aperture_storage::{
+    Actor, ActorKind, DbId, Storage,
+};
+use ::casbin::{CoreApi, Enforcer, MgmtApi, RbacApi};
+use jiff::Timestamp;
+use tokio::sync::RwLock;
+
+pub use self::casbin::{actor_subject, apikey_subject, roles};
+pub use self::error::{AuthError, Result};
+pub use self::password::{hash_password, verify_password};
+pub use self::token::{
+    api_key_lookup_prefix, constant_time_eq, generate_api_key, generate_session_token, hash_token,
+};
+
+mod casbin;
+mod error;
+mod password;
+mod token;
+
+/// Sliding session lifetime. A session expires after this duration of
+/// inactivity.
+const SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// The result of a successful login.
+#[derive(Debug)]
+pub struct LoginResult {
+    /// The raw session token. The caller sets it as a cookie.
+    pub token: String,
+    /// The authenticated actor.
+    pub actor: Actor,
+    /// Whether the user must change their password before continuing.
+    pub must_change_password: bool,
+}
+
+/// An actor resolved from a credential (session or API key).
+#[derive(Debug, Clone)]
+pub struct AuthenticatedActor {
+    /// The resolved actor.
+    pub actor: Actor,
+    /// The casbin subject string (`"actor:<id>"` or `"apikey:<id>"`).
+    pub subject: String,
+    /// Whether the user must change their password (session auth only).
+    pub must_change_password: bool,
+}
+
+impl AuthenticatedActor {
+    /// The actor's database id.
+    pub fn actor_id(&self) -> DbId {
+        self.actor.id
+    }
+
+    /// The casbin subject for enforcement.
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+}
+
+/// The single auth entry point: casbin enforcer plus storage.
+#[derive(Clone)]
+pub struct AuthHandle {
+    storage: Storage,
+    enforcer: Arc<RwLock<Enforcer>>,
+}
+
+impl AuthHandle {
+    /// Creates the auth handle: builds the enforcer, loads existing policies,
+    /// and seeds built-in roles if the policy table is empty.
+    pub async fn new(storage: Storage) -> Result<Self> {
+        let mut enforcer = casbin::create_enforcer(&storage)
+            .await
+            .map_err(AuthError::Casbin)?;
+        casbin::seed_builtin_policies(&mut enforcer, &storage)
+            .await
+            .map_err(AuthError::Casbin)?;
+        Ok(Self {
+            storage,
+            enforcer: Arc::new(RwLock::new(enforcer)),
+        })
+    }
+
+    /// Read-only access to the underlying storage.
+    pub fn storage(&self) -> &Storage {
+        &self.storage
+    }
+
+    // ── Enforcement ──────────────────────────────────────────────────────
+
+    /// Checks whether `subject` may perform `action` on `object`.
+    pub async fn enforce(&self, subject: &str, obj: &str, act: &str) -> Result<bool> {
+        let e = self.enforcer.read().await;
+        Ok(e.enforce((subject, obj, act))
+            .map_err(AuthError::Casbin)?)
+    }
+
+    // ── Policy management ────────────────────────────────────────────────
+
+    /// Assigns `role` to `subject` (e.g. `"actor:1"` -> `"admin"`).
+    pub async fn assign_role(&self, subject: &str, role: &str) -> Result<()> {
+        let mut e = self.enforcer.write().await;
+        e.add_role_for_user(subject, role, None)
+            .await
+            .map_err(AuthError::Casbin)?;
+        Ok(())
+    }
+
+    /// Removes `role` from `subject`.
+    pub async fn revoke_role(&self, subject: &str, role: &str) -> Result<()> {
+        let mut e = self.enforcer.write().await;
+        e.delete_role_for_user(subject, role, None)
+            .await
+            .map_err(AuthError::Casbin)?;
+        Ok(())
+    }
+
+    /// Returns the list of roles assigned to `subject`.
+    pub async fn roles_for(&self, subject: &str) -> Result<Vec<String>> {
+        let e = self.enforcer.read().await;
+        Ok(e.get_roles_for_user(subject, None))
+    }
+
+    /// Grants a direct permission to `subject`.
+    pub async fn grant_permission(&self, subject: &str, obj: &str, act: &str) -> Result<()> {
+        let mut e = self.enforcer.write().await;
+        e.add_policy(vec![subject.to_owned(), obj.to_owned(), act.to_owned()])
+            .await
+            .map_err(AuthError::Casbin)?;
+        Ok(())
+    }
+
+    /// Removes all direct permissions for `subject`.
+    pub async fn revoke_permissions(&self, subject: &str) -> Result<()> {
+        let mut e = self.enforcer.write().await;
+        e.remove_filtered_policy(0, vec![subject.to_owned()])
+            .await
+            .map_err(AuthError::Casbin)?;
+        Ok(())
+    }
+    // ── Authentication: sessions ─────────────────────────────────────────
+
+    /// Verifies `username` / `password` and creates a new session.
+    /// Returns the raw token for the caller to set as a cookie.
+    pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
+        let users = self.storage.users()?;
+        let user = users
+            .find_by_username(username)
+            .await?
+            .ok_or(AuthError::InvalidCredentials)?;
+        if !verify_password(password, &user.password_hash)? {
+            return Err(AuthError::InvalidCredentials);
+        }
+        let actors = self.storage.actors()?;
+        let actor = actors
+            .get(user.actor_id)
+            .await?
+            .ok_or(AuthError::InvalidCredentials)?;
+        if actor.disabled_at.is_some() {
+            return Err(AuthError::ActorDisabled);
+        }
+        let token = generate_session_token();
+        let token_hash = hash_token(&token);
+        let now = Timestamp::now();
+        let expires_at = now + SESSION_TTL;
+        let sessions = self.storage.sessions()?;
+        sessions.create(user.actor_id, &token_hash, expires_at, now).await?;
+        Ok(LoginResult {
+            token,
+            actor,
+            must_change_password: user.must_change_password,
+        })
+    }
+
+    /// Resolves a session token to an authenticated actor. Extends the
+    /// session expiry (sliding window).
+    pub async fn resolve_session(&self, token: &str) -> Result<Option<AuthenticatedActor>> {
+        let token_hash = hash_token(token);
+        let sessions = self.storage.sessions()?;
+        let session = match sessions.find_by_token_hash(&token_hash).await? {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        let now = Timestamp::now();
+        if session.expires_at < now {
+            return Ok(None);
+        }
+        let actors = self.storage.actors()?;
+        let actor = match actors.get(session.actor_id).await? {
+            Some(a) if a.disabled_at.is_none() => a,
+            _ => return Ok(None),
+        };
+        let must_change = if actor.kind == ActorKind::User {
+            let users = self.storage.users()?;
+            users
+                .find_by_actor_id(actor.id)
+                .await?
+                .map(|u| u.must_change_password)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let new_expiry = now + SESSION_TTL;
+        sessions.touch_expiry(session.id, new_expiry).await?;
+        Ok(Some(AuthenticatedActor {
+            actor,
+            subject: actor_subject(session.actor_id),
+            must_change_password: must_change,
+        }))
+    }
+
+    /// Deletes a session (logout).
+    pub async fn delete_session(&self, session_token: &str) -> Result<()> {
+        let token_hash = hash_token(session_token);
+        let sessions = self.storage.sessions()?;
+        if let Some(session) = sessions.find_by_token_hash(&token_hash).await? {
+            sessions.delete(session.id).await?;
+        }
+        Ok(())
+    }
+
+    /// Deletes all expired sessions. Returns how many were removed.
+    pub async fn delete_expired_sessions(&self) -> Result<usize> {
+        let sessions = self.storage.sessions()?;
+        Ok(sessions.delete_expired(Timestamp::now()).await?)
+    }
+
+    // ── Authentication: API keys ─────────────────────────────────────────
+
+    /// Creates a new API key for `actor_id` with `name`. Returns the raw key
+    /// (only visible at creation time). The caller should grant permissions or
+    /// assign a role for the new key's subject.
+    pub async fn create_api_key(
+        &self,
+        actor_id: DbId,
+        name: &str,
+    ) -> Result<(String, aperture_storage::ApiKey)> {
+        let raw_key = generate_api_key();
+        let prefix = api_key_lookup_prefix(&raw_key)
+            .ok_or(AuthError::InvalidCredentials)?;
+        let key_hash = hash_token(&raw_key);
+        let now = Timestamp::now();
+        let repo = self.storage.api_keys()?;
+        let api_key = repo
+            .create(actor_id, name, &key_hash, &prefix, now)
+            .await?;
+        Ok((raw_key, api_key))
+    }
+
+    /// Resolves an API key to an authenticated actor.
+    pub async fn resolve_api_key(&self, key: &str) -> Result<Option<AuthenticatedActor>> {
+        let prefix = match api_key_lookup_prefix(key) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let repo = self.storage.api_keys()?;
+        let api_key = match repo.find_by_prefix(&prefix).await? {
+            Some(k) => k,
+            None => return Ok(None),
+        };
+        let key_hash = hash_token(key);
+        if !constant_time_eq(&key_hash, &api_key.key_hash) {
+            return Ok(None);
+        }
+        let actors = self.storage.actors()?;
+        let actor = match actors.get(api_key.actor_id).await? {
+            Some(a) if a.disabled_at.is_none() => a,
+            _ => return Ok(None),
+        };
+        let now = Timestamp::now();
+        repo.touch_last_used(api_key.id, now).await?;
+        Ok(Some(AuthenticatedActor {
+            actor,
+            subject: apikey_subject(api_key.id),
+            must_change_password: false,
+        }))
+    }
+
+    // ── User management ──────────────────────────────────────────────────
+
+    /// Creates a new user actor and user record. Returns the actor id.
+    pub async fn create_user(
+        &self,
+        username: &str,
+        password: &str,
+        must_change_password: bool,
+    ) -> Result<Actor> {
+        let now = Timestamp::now();
+        let hash = hash_password(password)?;
+        let actors = self.storage.actors()?;
+        let actor = actors
+            .create(ActorKind::User, username, now)
+            .await?;
+        let users = self.storage.users()?;
+        users
+            .create(actor.id, username, &hash, must_change_password, now)
+            .await?;
+        Ok(actor)
+    }
+
+    /// Changes the password for user `user_id`.
+    pub async fn change_password(&self, user_id: DbId, new_password: &str) -> Result<()> {
+        let hash = hash_password(new_password)?;
+        let users = self.storage.users()?;
+        users.update_password(user_id, &hash, false).await?;
+        Ok(())
+    }
+
+    /// Lists all users.
+    pub async fn list_users(&self) -> Result<Vec<aperture_storage::User>> {
+        let users = self.storage.users()?;
+        Ok(users.list().await?)
+    }
+
+    /// Deletes user `user_id` and disables the associated actor.
+    pub async fn delete_user(&self, user_id: DbId, actor_id: DbId) -> Result<()> {
+        let now = Timestamp::now();
+        let users = self.storage.users()?;
+        users.delete(user_id).await?;
+        let actors = self.storage.actors()?;
+        actors.disable(actor_id, now).await?;
+        let sessions = self.storage.sessions()?;
+        sessions.delete_for_actor(actor_id).await?;
+        self.revoke_permissions(&actor_subject(actor_id)).await?;
+        self.revoke_role(&actor_subject(actor_id), roles::ADMIN).await?;
+        self.revoke_role(&actor_subject(actor_id), roles::OPERATOR).await?;
+        self.revoke_role(&actor_subject(actor_id), roles::VIEWER).await?;
+        Ok(())
+    }
+
+    // ── Bootstrap ────────────────────────────────────────────────────────
+
+    /// Ensures a system actor exists. Returns its id.
+    pub async fn ensure_system_actor(&self) -> Result<DbId> {
+        let actors = self.storage.actors()?;
+        let existing = actors.list_by_kind(ActorKind::System).await?;
+        if let Some(actor) = existing.into_iter().next() {
+            return Ok(actor.id);
+        }
+        let now = Timestamp::now();
+        let actor = actors.create(ActorKind::System, "system", now).await?;
+        tracing::info!(actor = actor.id.get(), "created system actor");
+        Ok(actor.id)
+    }
+
+    /// Bootstraps the admin user if no users exist. Returns the generated
+    /// password if a new admin was created.
+    pub async fn bootstrap_admin(&self) -> Result<Option<String>> {
+        let users = self.storage.users()?;
+        if users.count().await? > 0 {
+            return Ok(None);
+        }
+        let password = generate_session_token();
+        let actor = self.create_user("admin", &password, true).await?;
+        let subject = actor_subject(actor.id);
+        self.assign_role(&subject, roles::ADMIN).await?;
+        tracing::info!(actor = actor.id.get(), "bootstrapped admin user");
+        Ok(Some(password))
+    }
+}

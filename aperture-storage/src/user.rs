@@ -127,6 +127,24 @@ impl UserRepository {
         }
     }
 
+    /// Returns the user associated with `actor_id`, if one exists.
+    #[tracing::instrument(level = "info", skip(self))]
+    pub async fn find_by_actor_id(&self, actor_id: DbId) -> Result<Option<User>> {
+        let sql_str = format!(
+            sql!(SELECT {cols} FROM users WHERE actor_id = ?1),
+            cols = USER_COLUMNS
+        );
+        let mut rows = self
+            .connection
+            .query(&sql_str, params_from_iter([actor_id.to_sql()]))
+            .await
+            .map_err(StorageError::from_turso)?;
+        match rows.next().await.map_err(StorageError::from_turso)? {
+            Some(row) => Ok(Some(row_to_user(&row)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Lists all users, ordered by username.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list(&self) -> Result<Vec<User>> {

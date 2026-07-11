@@ -12,6 +12,7 @@ use turso::{Builder, Connection, Database};
 pub use self::actor::{Actor, ActorKind, ActorRepository};
 pub use self::api_key::{ApiKey, ApiKeyRepository};
 pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
+pub use self::casbin::{CasbinRule, CasbinRuleRepository};
 pub use self::error::{Result, StorageError};
 pub use self::id::DbId;
 pub use self::log::{
@@ -29,6 +30,7 @@ pub use self::user::{User, UserRepository};
 mod actor;
 mod api_key;
 mod artifact;
+mod casbin;
 mod error;
 mod id;
 mod log;
@@ -118,5 +120,10 @@ impl Storage {
     /// Returns the repository over the api_keys table.
     pub fn api_keys(&self) -> Result<ApiKeyRepository> {
         Ok(ApiKeyRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the casbin_rule table.
+    pub fn casbin(&self) -> Result<CasbinRuleRepository> {
+        Ok(CasbinRuleRepository::new(self.connect()?))
     }
 }
