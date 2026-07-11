@@ -1,5 +1,6 @@
 //! Session token and API key generation and hashing.
 
+use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 
 /// Prefix for all API key strings so they are easy to identify.
@@ -43,7 +44,7 @@ pub fn constant_time_eq(a: &str, b: &str) -> bool {
 fn random_bytes(len: usize) -> Vec<u8> {
     use rand::TryRngCore;
     let mut buf = vec![0u8; len];
-    rand::rngs::OsRng
+    OsRng
         .try_fill_bytes(&mut buf)
         .expect("OsRng failed");
     buf

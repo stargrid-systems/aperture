@@ -6,7 +6,7 @@
 use aperture_auth::AuthenticatedActor;
 use aperture_storage::LogRepository;
 use aperture_tasks::{TaskDescriptor, Tasks};
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
@@ -123,7 +123,7 @@ fn is_password_change_path(path: &str) -> bool {
 async fn auth_middleware(
     State(state): State<AppState>,
     headers: HeaderMap,
-    mut request: axum::extract::Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_owned();
@@ -146,19 +146,20 @@ async fn auth_middleware(
 }
 
 /// Tries session cookie first, then API key bearer.
+#[allow(clippy::result_large_err)]
 async fn resolve_actor(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<AuthenticatedActor, Response> {
-    if let Some(token) = extract_session_token(headers) {
-        if let Ok(Some(actor)) = state.auth().resolve_session(&token).await {
-            return Ok(actor);
-        }
+    if let Some(token) = extract_session_token(headers)
+        && let Ok(Some(actor)) = state.auth().resolve_session(&token).await
+    {
+        return Ok(actor);
     }
-    if let Some(key) = extract_bearer_token(headers) {
-        if let Ok(Some(actor)) = state.auth().resolve_api_key(&key).await {
-            return Ok(actor);
-        }
+    if let Some(key) = extract_bearer_token(headers)
+        && let Ok(Some(actor)) = state.auth().resolve_api_key(&key).await
+    {
+        return Ok(actor);
     }
     Err(StatusCode::UNAUTHORIZED.into_response())
 }

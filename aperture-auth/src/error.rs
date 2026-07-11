@@ -1,5 +1,6 @@
 //! Errors returned by the auth layer.
 
+use argon2::password_hash;
 use std::result::Result as StdResult;
 
 /// Errors from the auth layer.
@@ -30,8 +31,8 @@ pub enum AuthError {
     MustChangePassword,
 }
 
-impl From<argon2::password_hash::Error> for AuthError {
-    fn from(err: argon2::password_hash::Error) -> Self {
+impl From<password_hash::Error> for AuthError {
+    fn from(err: password_hash::Error) -> Self {
         AuthError::PasswordHash(err.to_string())
     }
 }

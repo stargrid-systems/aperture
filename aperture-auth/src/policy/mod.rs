@@ -1,10 +1,10 @@
 //! Casbin model definition and built-in policy seeding.
 
-use ::casbin::{CoreApi, DefaultModel, Enforcer};
+use casbin::{CoreApi, DefaultModel, Enforcer};
 
 use aperture_storage::Storage;
 
-use self::adapter::TursoAdapter;
+use self::adapter::{TursoAdapter, map_storage_err};
 
 mod adapter;
 
@@ -50,15 +50,15 @@ pub(crate) async fn seed_builtin_policies(
 ) -> casbin::Result<bool> {
     let count = storage
         .casbin()
-        .map_err(|err| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(err))))?
+        .map_err(map_storage_err)?
         .count()
         .await
-        .map_err(|err| casbin::Error::AdapterError(casbin::error::AdapterError(Box::new(err))))?;
+        .map_err(map_storage_err)?;
     if count > 0 {
         return Ok(false);
     }
 
-    use ::casbin::MgmtApi;
+    use casbin::MgmtApi;
 
     // Admin: all permissions.
     e.add_policy(vec![

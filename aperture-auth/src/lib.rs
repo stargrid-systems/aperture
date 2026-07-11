@@ -10,30 +10,35 @@
 //! - **API key**: a bearer token for headless clients. Each key has its own
 //!   scoped permissions enforced as a separate casbin subject.
 
+use std::result::Result as StdResult;
 use std::sync::Arc;
+use std::time::Duration;
 
 use aperture_storage::{
     Actor, ActorKind, DbId, Storage,
 };
-use ::casbin::{CoreApi, Enforcer, MgmtApi, RbacApi};
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
+use axum::http::StatusCode;
+use casbin::{CoreApi, Enforcer, MgmtApi, RbacApi};
 use jiff::Timestamp;
 use tokio::sync::RwLock;
 
-pub use self::casbin::{actor_subject, apikey_subject, roles};
+pub use self::policy::{actor_subject, apikey_subject, roles};
 pub use self::error::{AuthError, Result};
 pub use self::password::{hash_password, verify_password};
 pub use self::token::{
     api_key_lookup_prefix, constant_time_eq, generate_api_key, generate_session_token, hash_token,
 };
 
-mod casbin;
 mod error;
 mod password;
+mod policy;
 mod token;
 
 /// Sliding session lifetime. A session expires after this duration of
 /// inactivity.
-const SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// The result of a successful login.
 #[derive(Debug)]
@@ -71,18 +76,18 @@ impl AuthenticatedActor {
 
 /// Axum extractor that reads the actor from request extensions (populated by
 /// the auth middleware).
-impl<S: Send + Sync> axum::extract::FromRequestParts<S> for AuthenticatedActor {
-    type Rejection = axum::http::StatusCode;
+impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedActor {
+    type Rejection = StatusCode;
 
     async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
+        parts: &mut Parts,
         _state: &S,
-    ) -> std::result::Result<Self, Self::Rejection> {
+    ) -> StdResult<Self, Self::Rejection> {
         parts
             .extensions
             .get::<AuthenticatedActor>()
             .cloned()
-            .ok_or(axum::http::StatusCode::UNAUTHORIZED)
+            .ok_or(StatusCode::UNAUTHORIZED)
     }
 }
 
@@ -97,10 +102,10 @@ impl AuthHandle {
     /// Creates the auth handle: builds the enforcer, loads existing policies,
     /// and seeds built-in roles if the policy table is empty.
     pub async fn new(storage: Storage) -> Result<Self> {
-        let mut enforcer = casbin::create_enforcer(&storage)
+        let mut enforcer = policy::create_enforcer(&storage)
             .await
             .map_err(AuthError::Casbin)?;
-        casbin::seed_builtin_policies(&mut enforcer, &storage)
+        policy::seed_builtin_policies(&mut enforcer, &storage)
             .await
             .map_err(AuthError::Casbin)?;
         Ok(Self {
@@ -119,8 +124,7 @@ impl AuthHandle {
     /// Checks whether `subject` may perform `action` on `object`.
     pub async fn enforce(&self, subject: &str, obj: &str, act: &str) -> Result<bool> {
         let e = self.enforcer.read().await;
-        Ok(e.enforce((subject, obj, act))
-            .map_err(AuthError::Casbin)?)
+        e.enforce((subject, obj, act)).map_err(AuthError::Casbin)
     }
 
     // ── Policy management ────────────────────────────────────────────────

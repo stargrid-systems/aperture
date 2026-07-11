@@ -3,6 +3,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use cookie::time::Duration as CookieDuration;
 use cookie::{Cookie, SameSite};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -57,7 +58,7 @@ async fn login(
         .http_only(true)
         .same_site(SameSite::Strict)
         .path("/")
-        .max_age(cookie::time::Duration::days(7))
+        .max_age(CookieDuration::days(7))
         .build();
     let mut response = Json(LoginResponse {
         must_change_password: result.must_change_password,
@@ -128,8 +129,8 @@ async fn change_password(
 
 /// Extracts the raw session token from the `Cookie` header, if present.
 pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
-    let header = headers.get(axum::http::header::COOKIE)?;
-    let header_str = header.to_str().ok()?;
+    let value = headers.get(header::COOKIE)?;
+    let header_str = value.to_str().ok()?;
     for pair in header_str.split(';') {
         let pair = pair.trim();
         if let Some(rest) = pair.strip_prefix(&format!("{SESSION_COOKIE}=")) {
@@ -145,7 +146,7 @@ pub(crate) fn clear_session_cookie() -> String {
         .http_only(true)
         .same_site(SameSite::Strict)
         .path("/")
-        .max_age(cookie::time::Duration::seconds(0))
+        .max_age(CookieDuration::seconds(0))
         .build()
         .to_string()
 }

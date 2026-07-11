@@ -1,7 +1,7 @@
 //! Argon2 password hashing and verification.
 
 use argon2::password_hash::{
-    PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
+    Error, PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
 
@@ -28,7 +28,7 @@ pub fn verify_password(password: &str, phc_hash: &str) -> Result<bool, AuthError
     let parsed = PasswordHash::new(phc_hash).map_err(AuthError::from)?;
     match argon2().verify_password(password.as_bytes(), &parsed) {
         Ok(()) => Ok(true),
-        Err(argon2::password_hash::Error::Password) => Ok(false),
+        Err(Error::Password) => Ok(false),
         Err(err) => Err(AuthError::from(err)),
     }
 }
