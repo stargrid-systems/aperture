@@ -56,7 +56,6 @@ impl PolicyRuleRepository {
     /// Inserts a single rule.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn insert(&self, ptype: &str, values: &[String]) -> Result<()> {
-        let cols = ["v0", "v1", "v2", "v3", "v4", "v5"];
         let mut params: Vec<Value> = vec![ptype.to_sql()];
         for i in 0..6 {
             if i < values.len() {
@@ -75,7 +74,6 @@ impl PolicyRuleRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        let _ = cols; // silence unused warning if cols not needed elsewhere
         Ok(())
     }
 
@@ -160,5 +158,54 @@ impl PolicyRuleRepository {
             Some(row) => Ok(get(&row, 0)?),
             None => Ok(0),
         }
+    }
+
+    /// Clears the table then inserts all `rules` in a single transaction.
+    /// On failure the table is left unchanged.
+    #[tracing::instrument(level = "info", skip(self, rules))]
+    pub async fn replace_all(&self, rules: &[(String, Vec<String>)]) -> Result<()> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .await
+            .map_err(StorageError::from_turso)?;
+        self.clear().await?;
+        for (ptype, values) in rules {
+            self.insert(ptype, values).await?;
+        }
+        tx.commit().await.map_err(StorageError::from_turso)?;
+        Ok(())
+    }
+
+    /// Inserts multiple rules in a single transaction.
+    #[tracing::instrument(level = "info", skip(self, rules))]
+    pub async fn insert_batch(&self, rules: &[(String, Vec<String>)]) -> Result<()> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .await
+            .map_err(StorageError::from_turso)?;
+        for (ptype, values) in rules {
+            self.insert(ptype, values).await?;
+        }
+        tx.commit().await.map_err(StorageError::from_turso)?;
+        Ok(())
+    }
+
+    /// Deletes multiple exact-match rules in a single transaction. Returns the
+    /// total number of rows removed.
+    #[tracing::instrument(level = "info", skip(self, rules))]
+    pub async fn delete_batch(&self, rules: &[(String, Vec<String>)]) -> Result<usize> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .await
+            .map_err(StorageError::from_turso)?;
+        let mut total = 0;
+        for (ptype, values) in rules {
+            total += self.delete(ptype, values).await?;
+        }
+        tx.commit().await.map_err(StorageError::from_turso)?;
+        Ok(total)
     }
 }

@@ -36,7 +36,8 @@ pub mod roles {
 /// policies from the database.
 pub(crate) async fn create_enforcer(storage: &Storage) -> casbin::Result<Enforcer> {
     let model = DefaultModel::from_str(MODEL_TEXT).await?;
-    let adapter = TursoAdapter::new(storage.clone());
+    let repo = storage.policy().map_err(map_storage_err)?;
+    let adapter = TursoAdapter::new(repo);
     let mut e = Enforcer::new(model, adapter).await?;
     e.enable_auto_save(true);
     Ok(e)

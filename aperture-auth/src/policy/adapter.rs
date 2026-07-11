@@ -1,32 +1,26 @@
 //! Casbin adapter backed by turso (libsql) via aperture-storage.
 
-use aperture_storage::Storage;
+use aperture_storage::PolicyRuleRepository;
 use async_trait::async_trait;
 use casbin::error::AdapterError;
 use casbin::{Adapter, Filter, Model};
 
-/// Converts a storage error into a casbin error.
-pub(super) fn map_storage_err(err: aperture_storage::StorageError) -> casbin::Error {
-    casbin::Error::AdapterError(AdapterError(Box::new(err)))
-}
-
 /// Casbin adapter that persists policies in the `casbin_rule` table through
 /// the storage layer.
 pub struct TursoAdapter {
-    storage: Storage,
+    repo: PolicyRuleRepository,
 }
 
 impl TursoAdapter {
-    pub(crate) fn new(storage: Storage) -> Self {
-        Self { storage }
+    pub(crate) fn new(repo: PolicyRuleRepository) -> Self {
+        Self { repo }
     }
 }
 
 #[async_trait]
 impl Adapter for TursoAdapter {
     async fn load_policy(&mut self, m: &mut dyn Model) -> casbin::Result<()> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        let rules = repo.load_all().await.map_err(map_storage_err)?;
+        let rules = self.repo.load_all().await.map_err(map_storage_err)?;
         for rule in rules {
             let sec = rule.ptype.chars().next().unwrap_or('p').to_string();
             m.add_policy(&sec, &rule.ptype, rule.values);
@@ -43,19 +37,21 @@ impl Adapter for TursoAdapter {
     }
 
     async fn save_policy(&mut self, m: &mut dyn Model) -> casbin::Result<()> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        repo.clear().await.map_err(map_storage_err)?;
+        let mut rules: Vec<(String, Vec<String>)> = Vec::new();
         for (sec, ptype) in [("p", "p"), ("g", "g")] {
             for policy in m.get_policy(sec, ptype) {
-                repo.insert(ptype, &policy).await.map_err(map_storage_err)?;
+                rules.push((ptype.to_owned(), policy));
             }
         }
+        self.repo
+            .replace_all(&rules)
+            .await
+            .map_err(map_storage_err)?;
         Ok(())
     }
 
     async fn clear_policy(&mut self) -> casbin::Result<()> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        repo.clear().await.map_err(map_storage_err)?;
+        self.repo.clear().await.map_err(map_storage_err)?;
         Ok(())
     }
 
@@ -69,8 +65,10 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rule: Vec<String>,
     ) -> casbin::Result<bool> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        repo.insert(ptype, &rule).await.map_err(map_storage_err)?;
+        self.repo
+            .insert(ptype, &rule)
+            .await
+            .map_err(map_storage_err)?;
         Ok(true)
     }
 
@@ -80,10 +78,12 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rules: Vec<Vec<String>>,
     ) -> casbin::Result<bool> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        for rule in &rules {
-            repo.insert(ptype, rule).await.map_err(map_storage_err)?;
-        }
+        let batch: Vec<(String, Vec<String>)> =
+            rules.into_iter().map(|r| (ptype.to_owned(), r)).collect();
+        self.repo
+            .insert_batch(&batch)
+            .await
+            .map_err(map_storage_err)?;
         Ok(true)
     }
 
@@ -93,8 +93,11 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rule: Vec<String>,
     ) -> casbin::Result<bool> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        let removed = repo.delete(ptype, &rule).await.map_err(map_storage_err)?;
+        let removed = self
+            .repo
+            .delete(ptype, &rule)
+            .await
+            .map_err(map_storage_err)?;
         Ok(removed > 0)
     }
 
@@ -104,10 +107,12 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rules: Vec<Vec<String>>,
     ) -> casbin::Result<bool> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        for rule in &rules {
-            repo.delete(ptype, rule).await.map_err(map_storage_err)?;
-        }
+        let batch: Vec<(String, Vec<String>)> =
+            rules.into_iter().map(|r| (ptype.to_owned(), r)).collect();
+        self.repo
+            .delete_batch(&batch)
+            .await
+            .map_err(map_storage_err)?;
         Ok(true)
     }
 
@@ -118,11 +123,16 @@ impl Adapter for TursoAdapter {
         field_index: usize,
         field_values: Vec<String>,
     ) -> casbin::Result<bool> {
-        let repo = self.storage.policy().map_err(map_storage_err)?;
-        let removed = repo
+        let removed = self
+            .repo
             .delete_filtered(ptype, field_index, &field_values)
             .await
             .map_err(map_storage_err)?;
         Ok(removed > 0)
     }
+}
+
+/// Converts a storage error into a casbin error.
+pub(super) fn map_storage_err(err: aperture_storage::StorageError) -> casbin::Error {
+    casbin::Error::AdapterError(AdapterError(Box::new(err)))
 }
