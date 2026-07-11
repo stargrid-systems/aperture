@@ -7,7 +7,7 @@
 //! correct even when rows are inserted between page fetches, as long as the
 //! sort field and direction do not change.
 
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use turso::Value;
 
@@ -248,21 +248,31 @@ impl Filters {
         self.sql.push_str(condition);
     }
 
-    /// Adds `column = ?` bound to `value`, or nothing when `value` is `None`.
-    pub(crate) fn eq_text(&mut self, column: &str, value: Option<&str>) {
+    /// Adds `column = ?` bound to `value`.
+    pub(crate) fn eq_text(&mut self, column: &str, value: &str) {
+        self.params.push(Value::Text(value.to_owned()));
+        self.separator();
+        let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+    }
+
+    /// Like [`eq_text`](Self::eq_text), but skips the condition when `None`.
+    pub(crate) fn eq_text_opt(&mut self, column: &str, value: Option<&str>) {
         if let Some(value) = value {
-            self.params.push(Value::Text(value.to_owned()));
-            self.separator();
-            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+            self.eq_text(column, value);
         }
     }
 
-    /// Adds `column = ?` bound to `value`, or nothing when `value` is `None`.
-    pub(crate) fn eq_int(&mut self, column: &str, value: Option<i64>) {
+    /// Adds `column = ?` bound to `value`.
+    pub(crate) fn eq_int(&mut self, column: &str, value: i64) {
+        self.params.push(Value::Integer(value));
+        self.separator();
+        let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+    }
+
+    /// Like [`eq_int`](Self::eq_int), but skips the condition when `None`.
+    pub(crate) fn eq_int_opt(&mut self, column: &str, value: Option<i64>) {
         if let Some(value) = value {
-            self.params.push(Value::Integer(value));
-            self.separator();
-            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+            self.eq_int(column, value);
         }
     }
 
@@ -305,26 +315,27 @@ impl Filters {
     }
 
     /// Adds `column LIKE ?` matching `value` as a literal substring (wildcards
-    /// escaped), or nothing when `value` is `None`.
-    pub(crate) fn like(&mut self, column: &str, value: Option<&str>) {
+    /// escaped).
+    pub(crate) fn like(&mut self, column: &str, value: &str) {
+        self.params
+            .push(Value::Text(format!("%{}%", EscapeLike(value))));
+        self.separator();
+        let _ = write!(self.sql, "{column} LIKE ?{} ESCAPE '\\'", self.params.len());
+    }
+
+    /// Like [`like`](Self::like), but skips the condition when `None`.
+    pub(crate) fn like_opt(&mut self, column: &str, value: Option<&str>) {
         if let Some(value) = value {
-            self.params
-                .push(Value::Text(format!("%{}%", escape_like(value))));
-            self.separator();
-            let _ = write!(self.sql, "{column} LIKE ?{} ESCAPE '\\'", self.params.len());
+            self.like(column, value);
         }
     }
 
     /// Adds `(c1 LIKE ? ESCAPE '\' OR c2 LIKE ? ESCAPE '\' ...)` where each
-    /// column references the same reused param value, or nothing when `value`
-    /// is `None`. Wildcards in `value` are escaped, so it matches as a literal
-    /// substring.
-    pub(crate) fn like_any(&mut self, columns: &[&str], value: Option<&str>) {
-        let Some(value) = value else {
-            return;
-        };
+    /// column references the same reused param value. Wildcards in `value` are
+    /// escaped, so it matches as a literal substring.
+    pub(crate) fn like_any(&mut self, columns: &[&str], value: &str) {
         self.params
-            .push(Value::Text(format!("%{}%", escape_like(value))));
+            .push(Value::Text(format!("%{}%", EscapeLike(value))));
         self.separator();
         let placeholder = self.params.len();
         let mut first = true;
@@ -339,30 +350,52 @@ impl Filters {
         self.sql.push(')');
     }
 
-    /// Adds `column = ?` bound to the blob `value`, or nothing when `None`.
-    pub(crate) fn eq_blob(&mut self, column: &str, value: Option<Vec<u8>>) {
+    /// Like [`like_any`](Self::like_any), but skips the condition when `None`.
+    pub(crate) fn like_any_opt(&mut self, columns: &[&str], value: Option<&str>) {
         if let Some(value) = value {
-            self.params.push(Value::Blob(value));
-            self.separator();
-            let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+            self.like_any(columns, value);
         }
     }
 
-    /// Adds `column >= ?` bound to the integer `value`, or nothing when `None`.
-    pub(crate) fn gte_int(&mut self, column: &str, value: Option<i64>) {
+    /// Adds `column = ?` bound to the blob `value`.
+    pub(crate) fn eq_blob(&mut self, column: &str, value: Vec<u8>) {
+        self.params.push(Value::Blob(value));
+        self.separator();
+        let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+    }
+
+    /// Like [`eq_blob`](Self::eq_blob), but skips the condition when `None`.
+    pub(crate) fn eq_blob_opt(&mut self, column: &str, value: Option<Vec<u8>>) {
         if let Some(value) = value {
-            self.params.push(Value::Integer(value));
-            self.separator();
-            let _ = write!(self.sql, "{column} >= ?{}", self.params.len());
+            self.eq_blob(column, value);
         }
     }
 
-    /// Adds `column <= ?` bound to the integer `value`, or nothing when `None`.
-    pub(crate) fn lte_int(&mut self, column: &str, value: Option<i64>) {
+    /// Adds `column >= ?` bound to the integer `value`.
+    pub(crate) fn gte_int(&mut self, column: &str, value: i64) {
+        self.params.push(Value::Integer(value));
+        self.separator();
+        let _ = write!(self.sql, "{column} >= ?{}", self.params.len());
+    }
+
+    /// Like [`gte_int`](Self::gte_int), but skips the condition when `None`.
+    pub(crate) fn gte_int_opt(&mut self, column: &str, value: Option<i64>) {
         if let Some(value) = value {
-            self.params.push(Value::Integer(value));
-            self.separator();
-            let _ = write!(self.sql, "{column} <= ?{}", self.params.len());
+            self.gte_int(column, value);
+        }
+    }
+
+    /// Adds `column <= ?` bound to the integer `value`.
+    pub(crate) fn lte_int(&mut self, column: &str, value: i64) {
+        self.params.push(Value::Integer(value));
+        self.separator();
+        let _ = write!(self.sql, "{column} <= ?{}", self.params.len());
+    }
+
+    /// Like [`lte_int`](Self::lte_int), but skips the condition when `None`.
+    pub(crate) fn lte_int_opt(&mut self, column: &str, value: Option<i64>) {
+        if let Some(value) = value {
+            self.lte_int(column, value);
         }
     }
 
@@ -494,18 +527,22 @@ impl Paginator {
     }
 }
 
-/// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) so a
-/// user-supplied substring matches literally. Pair with `ESCAPE '\'` in the
-/// SQL.
-pub(crate) fn escape_like(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if matches!(ch, '\\' | '%' | '_') {
-            out.push('\\');
+/// Escapes the LIKE wildcards `%` and `_` (and the escape char itself) while
+/// formatting, so a user-supplied substring matches literally. Escaping into
+/// the formatter avoids an intermediate allocation when used in a `format!`.
+/// Pair with `ESCAPE '\'` in the SQL.
+pub(crate) struct EscapeLike<'a>(pub(crate) &'a str);
+
+impl fmt::Display for EscapeLike<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for ch in self.0.chars() {
+            if matches!(ch, '\\' | '%' | '_') {
+                f.write_char('\\')?;
+            }
+            f.write_char(ch)?;
         }
-        out.push(ch);
+        Ok(())
     }
-    out
 }
 
 fn to_hex(bytes: &[u8]) -> String {

@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
-use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator, escape_like};
+use crate::page::{CursorValue, EscapeLike, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::sql::{Columns, ToSql, get};
 
 mod col {
@@ -289,20 +289,20 @@ impl LogRepository {
         let mut filters = Filters::new();
 
         if let Some(min_level) = filter.min_level {
-            filters.gte_int(col::LEVEL, Some(min_level.as_db()));
+            filters.gte_int(col::LEVEL, min_level.as_db());
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
-        filters.eq_int(col::SPAN_ID, filter.span_id.map(DbId::get));
-        filters.eq_blob(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
-        filters.gte_int(col::TIMESTAMP, filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int(col::TIMESTAMP, filter.until.map(|ts| ts.as_millisecond()));
+        filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(DbId::get));
+        filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
+        filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_millisecond()));
+        filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_millisecond()));
 
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
         }
 
-        filters.like_any(&[col::MESSAGE, col::TARGET], filter.query.as_deref());
+        filters.like_any_opt(&[col::MESSAGE, col::TARGET], filter.query.as_deref());
 
         filters.keyset(&keyset, &paginator);
 
@@ -353,7 +353,7 @@ impl LogRepository {
             ),
         };
         let params: Vec<Value> = match q {
-            Some(prefix) => vec![Value::Text(format!("{}%", escape_like(prefix)))],
+            Some(prefix) => vec![Value::Text(format!("{}%", EscapeLike(prefix)))],
             None => vec![],
         };
         let mut rows = self
@@ -378,19 +378,19 @@ impl LogRepository {
         let mut filters = Filters::new();
 
         if let Some(min_level) = filter.min_level {
-            filters.gte_int(col::LEVEL, Some(min_level.as_db()));
+            filters.gte_int(col::LEVEL, min_level.as_db());
         }
 
         match filter.parent {
             SpanParentFilter::Any => {}
             SpanParentFilter::RootOnly => filters.raw("parent_id IS NULL"),
-            SpanParentFilter::ChildrenOf(id) => filters.eq_int(col::PARENT_ID, Some(id.get())),
+            SpanParentFilter::ChildrenOf(id) => filters.eq_int(col::PARENT_ID, id.get()),
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
-        filters.eq_blob(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
-        filters.gte_int(col::STARTED_AT, filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int(col::STARTED_AT, filter.until.map(|ts| ts.as_millisecond()));
+        filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
+        filters.gte_int_opt(col::STARTED_AT, filter.since.map(|ts| ts.as_millisecond()));
+        filters.lte_int_opt(col::STARTED_AT, filter.until.map(|ts| ts.as_millisecond()));
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
         }

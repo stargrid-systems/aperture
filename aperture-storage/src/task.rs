@@ -408,7 +408,7 @@ impl TaskRepository {
 
         let mut filters = Filters::new();
         match status {
-            Some(StatusFilter::Exact(status)) => filters.eq_text(col::STATUS, Some(status.as_db())),
+            Some(StatusFilter::Exact(status)) => filters.eq_text(col::STATUS, status.as_db()),
             Some(StatusFilter::Active) => {
                 filters.one_of(col::STATUS, db_values(&TaskStatus::ACTIVE).iter().copied())
             }
@@ -420,10 +420,10 @@ impl TaskRepository {
             }
             None => {}
         }
-        filters.eq_text(col::KIND, kind);
+        filters.eq_text_opt(col::KIND, kind);
         match parent {
             Some(ParentFilter::Root) => filters.raw("parent_id IS NULL"),
-            Some(ParentFilter::Of(id)) => filters.eq_int(col::PARENT_ID, Some(id.get())),
+            Some(ParentFilter::Of(id)) => filters.eq_int(col::PARENT_ID, id.get()),
             None => {}
         }
         for filter in json {

@@ -203,7 +203,7 @@ impl ArtifactRepository {
             "a.id = (SELECT b.id FROM artifacts b WHERE b.key = a.key ORDER BY b.downloaded_at \
              DESC, b.id DESC LIMIT 1)",
         );
-        filters.like("a.key", q);
+        filters.like_opt("a.key", q);
         filters.keyset(&keyset, &paginator);
 
         let sql = format!(
@@ -254,9 +254,9 @@ impl ArtifactRepository {
         let keyset = Keyset::with_id(column, paginator.query_order());
 
         let mut filters = Filters::new();
-        filters.eq_text(col::KEY, Some(key));
-        filters.eq_text(col::MEDIA_TYPE, media_type);
-        filters.eq_text(col::VERSION, version);
+        filters.eq_text(col::KEY, key);
+        filters.eq_text_opt(col::MEDIA_TYPE, media_type);
+        filters.eq_text_opt(col::VERSION, version);
         filters.keyset(&keyset, &paginator);
 
         let sql = format!(
