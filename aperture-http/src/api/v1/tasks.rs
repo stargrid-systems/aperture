@@ -36,9 +36,13 @@ pub fn definitions_router() -> OpenApiRouter<AppState> {
     responses((status = 200, description = "Tasks", body = Page<TaskResponse>)),
 )]
 async fn list_tasks(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
+    if !state.auth().enforce(auth.subject(), "task", "read").await? {
+        return Err(ApiError::FORBIDDEN);
+    }
     let tasks = state.tasks();
     let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
     let parent = params.parent_filter();
@@ -101,9 +105,13 @@ async fn create_task(
     ),
 )]
 async fn get_task(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(id): Path<DbId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
+    if !state.auth().enforce(auth.subject(), "task", "read").await? {
+        return Err(ApiError::FORBIDDEN);
+    }
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     let progress = state.tasks().progress(id);
     Ok(Json(TaskResponse::new(task, progress)))
@@ -123,9 +131,13 @@ async fn get_task(
     ),
 )]
 async fn cancel_task(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(id): Path<DbId>,
 ) -> Result<StatusCode, ApiError> {
+    if !state.auth().enforce(auth.subject(), "task", "cancel").await? {
+        return Err(ApiError::FORBIDDEN);
+    }
     if state.tasks().cancel(id).await? {
         Ok(StatusCode::ACCEPTED)
     } else {
@@ -140,7 +152,17 @@ async fn cancel_task(
     operation_id = operation_ids::LIST_TASK_DEFINITIONS,
     responses((status = 200, description = "Task definitions", body = Vec<TaskDefinitionResponse>)),
 )]
-async fn list_definitions(State(state): State<AppState>) -> Json<Vec<TaskDefinitionResponse>> {
+async fn list_definitions(
+    auth: AuthenticatedActor,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
+    if !state
+        .auth()
+        .enforce(auth.subject(), "task-definition", "read")
+        .await?
+    {
+        return Err(ApiError::FORBIDDEN);
+    }
     let definitions = state
         .tasks()
         .registry()
@@ -148,5 +170,5 @@ async fn list_definitions(State(state): State<AppState>) -> Json<Vec<TaskDefinit
         .into_iter()
         .map(TaskDefinitionResponse::from)
         .collect();
-    Json(definitions)
+    Ok(Json(definitions))
 }
