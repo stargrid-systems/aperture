@@ -1,5 +1,5 @@
 use aperture_auth::AuthenticatedActor;
-use aperture_storage::DbId;
+use aperture_storage::ApiKeyId;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -112,7 +112,7 @@ async fn create_api_key(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_API_KEY,
-    params(("id" = DbId, Path, description = "API key id")),
+    params(("id" = ApiKeyId, Path, description = "API key id")),
     responses(
         (status = 204, description = "API key deleted"),
         (status = 404, description = "Unknown API key"),
@@ -121,7 +121,7 @@ async fn create_api_key(
 async fn delete_api_key(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<ApiKeyId>,
 ) -> Result<StatusCode, ApiError> {
     let repo = state.auth().storage().api_keys()?;
     let key = repo.get(id).await?.ok_or(ApiError::NOT_FOUND)?;

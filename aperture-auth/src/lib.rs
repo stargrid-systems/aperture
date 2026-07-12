@@ -14,7 +14,7 @@ use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aperture_storage::{Actor, ActorKind, DbId, Storage};
+use aperture_storage::{Actor, ActorId, ActorKind, Storage, UserId};
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
@@ -62,7 +62,7 @@ pub struct AuthenticatedActor {
 
 impl AuthenticatedActor {
     /// The actor's database id.
-    pub fn actor_id(&self) -> DbId {
+    pub fn actor_id(&self) -> ActorId {
         self.actor.id
     }
 
@@ -262,7 +262,7 @@ impl AuthHandle {
     /// assign a role for the new key's subject.
     pub async fn create_api_key(
         &self,
-        actor_id: DbId,
+        actor_id: ActorId,
         name: &str,
     ) -> Result<(String, aperture_storage::ApiKey)> {
         let raw_key = generate_api_key();
@@ -326,7 +326,7 @@ impl AuthHandle {
     }
 
     /// Changes the password for user `user_id`.
-    pub async fn change_password(&self, user_id: DbId, new_password: &str) -> Result<()> {
+    pub async fn change_password(&self, user_id: UserId, new_password: &str) -> Result<()> {
         let hash = hash_password(new_password)?;
         let users = self.storage.users()?;
         users.update_password(user_id, &hash, None).await?;
@@ -340,7 +340,7 @@ impl AuthHandle {
     }
 
     /// Deletes user `user_id` and disables the associated actor.
-    pub async fn delete_user(&self, user_id: DbId, actor_id: DbId) -> Result<()> {
+    pub async fn delete_user(&self, user_id: UserId, actor_id: ActorId) -> Result<()> {
         let now = Timestamp::now();
         let users = self.storage.users()?;
         users.delete(user_id).await?;
@@ -361,7 +361,7 @@ impl AuthHandle {
     // ── Bootstrap ────────────────────────────────────────────────────────
 
     /// Ensures a system actor exists. Returns its id.
-    pub async fn ensure_system_actor(&self) -> Result<DbId> {
+    pub async fn ensure_system_actor(&self) -> Result<ActorId> {
         let actors = self.storage.actors()?;
         let existing = actors.list_by_kind(ActorKind::System).await?;
         if let Some(actor) = existing.into_iter().next() {

@@ -6,7 +6,13 @@
 //! ever written once a version's blob is materialized, so every row is present
 //! and usable.
 
+use std::fmt;
+use std::num::ParseIntError;
+use std::result::Result as StdResult;
+use std::str::FromStr;
+
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
@@ -14,6 +20,55 @@ use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::sql::{Columns, ToSql, get};
+
+/// Primary key of a row in the `artifacts` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct ArtifactId(DbId);
+
+impl ArtifactId {
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+impl From<i64> for ArtifactId {
+    fn from(value: i64) -> Self {
+        Self(DbId::from(value))
+    }
+}
+
+impl fmt::Display for ArtifactId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for ArtifactId {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse::<i64>().map(|v| Self(DbId::from(v)))
+    }
+}
+
+impl Serialize for ArtifactId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ArtifactId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DbId::deserialize(deserializer).map(Self)
+    }
+}
 
 mod col {
     pub const DIGEST: &str = "digest";
@@ -44,7 +99,7 @@ const ARTIFACT_COLUMNS: Columns = Columns::new(&[
 #[derive(Debug, Clone, PartialEq)]
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
-    pub id: DbId,
+    pub id: ArtifactId,
     /// Logical key, for example `spectra` or `tool/avrdude`.
     pub key: String,
     /// Where it came from (an image reference or a URL).

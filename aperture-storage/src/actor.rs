@@ -5,13 +5,71 @@
 //! task invocation records its initiator so the system always knows who caused
 //! what.
 
+use std::fmt;
+use std::num::ParseIntError;
+use std::result::Result as StdResult;
+use std::str::FromStr;
+
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::sql::{Columns, ToSql, get};
+
+/// Primary key of a row in the `actors` table.
+///
+/// Used wherever an actor is referenced: `users.actor_id`,
+/// `sessions.actor_id`, `api_keys.actor_id`, `tasks.initiator_id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct ActorId(DbId);
+
+impl ActorId {
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+impl From<i64> for ActorId {
+    fn from(value: i64) -> Self {
+        Self(DbId::from(value))
+    }
+}
+
+impl fmt::Display for ActorId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for ActorId {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse::<i64>().map(|v| Self(DbId::from(v)))
+    }
+}
+
+impl Serialize for ActorId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ActorId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DbId::deserialize(deserializer).map(Self)
+    }
+}
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
@@ -63,7 +121,7 @@ impl ActorKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Actor {
     /// Store-assigned id.
-    pub id: DbId,
+    pub id: ActorId,
     /// What kind of identity this is.
     pub kind: ActorKind,
     /// Human-readable label.
@@ -103,7 +161,7 @@ impl ActorRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        let id = DbId::from(self.connection.last_insert_rowid());
+        let id = ActorId::from(self.connection.last_insert_rowid());
         Ok(Actor {
             id,
             kind,
@@ -115,7 +173,7 @@ impl ActorRepository {
 
     /// Returns the actor with `id`, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: DbId) -> Result<Option<Actor>> {
+    pub async fn get(&self, id: ActorId) -> Result<Option<Actor>> {
         let sql_str = format!(
             sql!(SELECT {cols} FROM actors WHERE id = ?1),
             cols = ACTOR_COLUMNS
@@ -133,7 +191,7 @@ impl ActorRepository {
 
     /// Marks the actor as disabled at `at`. Does nothing if already disabled.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn disable(&self, id: DbId, at: Timestamp) -> Result<()> {
+    pub async fn disable(&self, id: ActorId, at: Timestamp) -> Result<()> {
         self.connection
             .execute(
                 sql!(UPDATE actors SET disabled_at = ?1 WHERE id = ?2 AND disabled_at IS NULL),

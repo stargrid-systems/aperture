@@ -1,12 +1,68 @@
 //! Login sessions: token hashes with sliding expiry, backed by the database.
 
+use std::fmt;
+use std::num::ParseIntError;
+use std::result::Result as StdResult;
+use std::str::FromStr;
+
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use turso::{Connection, Row, params_from_iter};
 
+use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::sql::{Columns, ToSql};
+
+/// Primary key of a row in the `sessions` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct SessionId(DbId);
+
+impl SessionId {
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+impl From<i64> for SessionId {
+    fn from(value: i64) -> Self {
+        Self(DbId::from(value))
+    }
+}
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for SessionId {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse::<i64>().map(|v| Self(DbId::from(v)))
+    }
+}
+
+impl Serialize for SessionId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DbId::deserialize(deserializer).map(Self)
+    }
+}
 
 mod col {
     pub const ACTOR_ID: &str = "actor_id";
@@ -28,9 +84,9 @@ const SESSION_COLUMNS: Columns = Columns::new(&[
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
     /// Store-assigned id.
-    pub id: DbId,
+    pub id: SessionId,
     /// The authenticated actor.
-    pub actor_id: DbId,
+    pub actor_id: ActorId,
     /// SHA-256 hash of the session token.
     pub token_hash: Vec<u8>,
     /// When the session expires.
@@ -53,11 +109,11 @@ impl SessionRepository {
     #[tracing::instrument(level = "info", skip(self, token_hash))]
     pub async fn create(
         &self,
-        actor_id: DbId,
+        actor_id: ActorId,
         token_hash: &[u8],
         expires_at: Timestamp,
         created_at: Timestamp,
-    ) -> Result<DbId> {
+    ) -> Result<SessionId> {
         let params = params_from_iter([
             actor_id.to_sql(),
             token_hash.to_sql(),
@@ -74,7 +130,7 @@ impl SessionRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(DbId::from(self.connection.last_insert_rowid()))
+        Ok(SessionId::from(self.connection.last_insert_rowid()))
     }
 
     /// Returns the session with `token_hash`, if one exists.
@@ -97,7 +153,7 @@ impl SessionRepository {
 
     /// Extends the expiry of session `id`. Used for sliding expiry.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn touch_expiry(&self, id: DbId, expires_at: Timestamp) -> Result<()> {
+    pub async fn touch_expiry(&self, id: SessionId, expires_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
                 sql!(UPDATE sessions SET expires_at = ?1 WHERE id = ?2),
@@ -110,7 +166,7 @@ impl SessionRepository {
 
     /// Deletes the session with `id`. Used for logout.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn delete(&self, id: DbId) -> Result<()> {
+    pub async fn delete(&self, id: SessionId) -> Result<()> {
         self.connection
             .execute(
                 sql!(DELETE FROM sessions WHERE id = ?1),
@@ -139,7 +195,7 @@ impl SessionRepository {
     /// Deletes all sessions for `actor_id`. Used when disabling an actor or
     /// forcing logout everywhere.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn delete_for_actor(&self, actor_id: DbId) -> Result<usize> {
+    pub async fn delete_for_actor(&self, actor_id: ActorId) -> Result<usize> {
         let affected = self
             .connection
             .execute(
@@ -153,7 +209,7 @@ impl SessionRepository {
 
     /// Lists sessions for `actor_id`, ordered by creation time descending.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn list_for_actor(&self, actor_id: DbId) -> Result<Vec<Session>> {
+    pub async fn list_for_actor(&self, actor_id: ActorId) -> Result<Vec<Session>> {
         let sql_str = format!(
             sql!(SELECT {cols} FROM sessions WHERE actor_id = ?1 ORDER BY created_at DESC),
             cols = SESSION_COLUMNS

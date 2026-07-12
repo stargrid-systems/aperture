@@ -1,5 +1,5 @@
 use aperture_auth::AuthenticatedActor;
-use aperture_storage::{DbId, EventFilter, SpanFilter, SpanParentFilter};
+use aperture_storage::{EventFilter, SpanFilter, SpanId, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -137,7 +137,7 @@ async fn list_spans(
     get,
     path = "/spans/{id}",
     operation_id = operation_ids::GET_SPAN,
-    params(("id" = DbId, Path, description = "Span id")),
+    params(("id" = SpanId, Path, description = "Span id")),
     responses(
         (status = 200, description = "Span with events", body = LogSpanDetailResponse),
         (status = 404, description = "Unknown span"),
@@ -146,7 +146,7 @@ async fn list_spans(
 async fn get_span(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<SpanId>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
     if !state.auth().enforce(auth.subject(), "log", "read").await? {
         return Err(ApiError::FORBIDDEN);

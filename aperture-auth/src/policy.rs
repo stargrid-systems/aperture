@@ -90,11 +90,11 @@ pub(crate) async fn seed_builtin_policies(
 }
 
 /// Subject string for a session-authenticated actor.
-pub fn actor_subject(actor_id: aperture_storage::DbId) -> String {
+pub fn actor_subject(actor_id: aperture_storage::ActorId) -> String {
     format!("actor:{}", actor_id.get())
 }
 
 /// Subject string for an API key.
-pub fn apikey_subject(key_id: aperture_storage::DbId) -> String {
+pub fn apikey_subject(key_id: aperture_storage::ApiKeyId) -> String {
     format!("apikey:{}", key_id.get())
 }

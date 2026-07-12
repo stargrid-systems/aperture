@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use aperture_auth::AuthenticatedActor;
-use aperture_storage::DbId;
+use aperture_storage::TaskId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -56,7 +56,7 @@ async fn list_tasks(
         )
         .await?;
 
-    let live: HashMap<DbId, _> = tasks
+    let live: HashMap<TaskId, _> = tasks
         .active()
         .into_iter()
         .map(|task| (task.id, task.progress))
@@ -98,7 +98,7 @@ async fn create_task(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK,
-    params(("id" = DbId, Path, description = "Task id")),
+    params(("id" = TaskId, Path, description = "Task id")),
     responses(
         (status = 200, description = "Task", body = TaskResponse),
         (status = 404, description = "Unknown task"),
@@ -107,7 +107,7 @@ async fn create_task(
 async fn get_task(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<TaskId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
     if !state.auth().enforce(auth.subject(), "task", "read").await? {
         return Err(ApiError::FORBIDDEN);
@@ -122,7 +122,7 @@ async fn get_task(
     post,
     path = "/{id}/cancel",
     operation_id = operation_ids::CANCEL_TASK,
-    params(("id" = DbId, Path, description = "Task id")),
+    params(("id" = TaskId, Path, description = "Task id")),
     responses(
         (status = 202, description = "Cancellation requested"),
         (status = 404, description = "Unknown task"),
@@ -133,7 +133,7 @@ async fn get_task(
 async fn cancel_task(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<TaskId>,
 ) -> Result<StatusCode, ApiError> {
     if !state
         .auth()

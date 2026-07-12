@@ -1,6 +1,6 @@
 use std::{env, fs};
 
-use aperture_storage::{Artifact, DbId, ListQuery, Storage, VersionSort};
+use aperture_storage::{Artifact, ArtifactId, ListQuery, Storage, VersionSort};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
@@ -9,7 +9,7 @@ fn at(millis: i64) -> Timestamp {
 
 fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
     Artifact {
-        id: DbId::from(0),
+        id: ArtifactId::from(0),
         key: key.to_owned(),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
         digest: digest.to_owned(),

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
-use aperture_storage::{Artifact, ArtifactKey, DbId, ListQuery, Page, Storage, VersionSort};
+use aperture_storage::{Artifact, ArtifactId, ArtifactKey, ListQuery, Page, Storage, VersionSort};
 use aperture_tasks::ProgressHandle;
 use jiff::Timestamp;
 use oci_client::Reference;
@@ -497,7 +497,7 @@ fn build_artifact(
     at: Timestamp,
 ) -> Artifact {
     Artifact {
-        id: DbId::from(0),
+        id: ArtifactId::from(0),
         key: request.key.clone(),
         source: request.source_str().to_owned(),
         digest: digest.to_string(),

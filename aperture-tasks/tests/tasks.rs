@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use aperture_storage::{DbId, Storage, TaskStatus};
+use aperture_storage::{ActorId, Storage, TaskId, TaskStatus};
 use aperture_tasks::{
     Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry,
     Tasks,
@@ -82,7 +82,7 @@ impl TaskDefinition for Probe {
 /// A task that spawns a [`Probe`] child, publishes the child's id, then awaits
 /// it. When the parent is cancelled the child is too, so the await unwinds.
 struct Parent {
-    child_id: Arc<Mutex<Option<DbId>>>,
+    child_id: Arc<Mutex<Option<TaskId>>>,
     spawned: Arc<Notify>,
 }
 
@@ -164,7 +164,7 @@ async fn spawn_and_wait_returns_decoded_output() {
     let tasks = Tasks::new(storage.clone(), registry);
 
     let handle = tasks
-        .spawn::<Double>(DoubleIn { n: 21 }, DbId::from(1))
+        .spawn::<Double>(DoubleIn { n: 21 }, ActorId::from(1))
         .await
         .unwrap();
     let id = handle.id();
@@ -184,7 +184,10 @@ async fn live_progress_is_visible_while_running() {
     registry.register(probe);
     let tasks = Tasks::new(storage, registry);
 
-    let handle = tasks.spawn::<Probe>(Empty {}, DbId::from(1)).await.unwrap();
+    let handle = tasks
+        .spawn::<Probe>(Empty {}, ActorId::from(1))
+        .await
+        .unwrap();
     ready.notified().await;
 
     let progress = handle.progress().expect("running task has progress");
@@ -207,7 +210,10 @@ async fn cancellable_task_records_cancelled() {
     registry.register(probe);
     let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = tasks.spawn::<Probe>(Empty {}, DbId::from(1)).await.unwrap();
+    let handle = tasks
+        .spawn::<Probe>(Empty {}, ActorId::from(1))
+        .await
+        .unwrap();
     let id = handle.id();
     ready.notified().await;
 
@@ -227,7 +233,10 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     registry.register(probe);
     let tasks = Tasks::new(storage, registry);
 
-    let handle = tasks.spawn::<Probe>(Empty {}, DbId::from(1)).await.unwrap();
+    let handle = tasks
+        .spawn::<Probe>(Empty {}, ActorId::from(1))
+        .await
+        .unwrap();
     let id = handle.id();
     ready.notified().await;
 
@@ -253,7 +262,7 @@ async fn child_inherits_parent_cancellation() {
     let tasks = Tasks::new(storage.clone(), registry);
 
     let handle = tasks
-        .spawn::<Parent>(Empty {}, DbId::from(1))
+        .spawn::<Parent>(Empty {}, ActorId::from(1))
         .await
         .unwrap();
     let parent_id = handle.id();
@@ -280,7 +289,10 @@ async fn panicking_task_settles_as_failed() {
     registry.register(Boom);
     let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = tasks.spawn::<Boom>(Empty {}, DbId::from(1)).await.unwrap();
+    let handle = tasks
+        .spawn::<Boom>(Empty {}, ActorId::from(1))
+        .await
+        .unwrap();
     let id = handle.id();
 
     // The body panics, but wait() must still return rather than hang forever.
@@ -303,7 +315,10 @@ async fn failed_task_records_full_error_chain() {
     registry.register(Fail);
     let tasks = Tasks::new(storage.clone(), registry);
 
-    let handle = tasks.spawn::<Fail>(Empty {}, DbId::from(1)).await.unwrap();
+    let handle = tasks
+        .spawn::<Fail>(Empty {}, ActorId::from(1))
+        .await
+        .unwrap();
     let id = handle.id();
     assert!(matches!(
         handle.wait().await,
@@ -324,7 +339,7 @@ async fn cancel_distinguishes_unknown_from_settled() {
     let tasks = Tasks::new(storage.clone(), registry);
 
     // An unknown id is not found.
-    let unknown = DbId::from(999);
+    let unknown = TaskId::from(999);
     assert!(matches!(
         tasks.cancel(unknown).await,
         Err(TaskError::NotFound(id)) if id == unknown
@@ -332,7 +347,7 @@ async fn cancel_distinguishes_unknown_from_settled() {
 
     // A task that already finished is reported as settled, not unknown.
     let handle = tasks
-        .spawn::<Double>(DoubleIn { n: 1 }, DbId::from(1))
+        .spawn::<Double>(DoubleIn { n: 1 }, ActorId::from(1))
         .await
         .unwrap();
     let id = handle.id();
@@ -348,7 +363,7 @@ async fn reconcile_marks_orphaned_invocations() {
     let id = storage
         .tasks()
         .unwrap()
-        .create("double", None, Some(DbId::from(1)), "{}", at(1_000))
+        .create("double", None, Some(ActorId::from(1)), "{}", at(1_000))
         .await
         .unwrap();
     storage

@@ -1,6 +1,12 @@
 //! Structured log storage: tracing spans and events persisted for querying.
 
+use std::fmt;
+use std::num::ParseIntError;
+use std::result::Result as StdResult;
+use std::str::FromStr;
+
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use turso::transaction::Transaction;
 use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
@@ -10,6 +16,104 @@ use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, EscapeLike, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::sql::{Columns, ToSql, get};
+
+/// Primary key of a row in the log_spans table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct SpanId(DbId);
+
+impl SpanId {
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+impl From<i64> for SpanId {
+    fn from(value: i64) -> Self {
+        Self(DbId::from(value))
+    }
+}
+
+impl fmt::Display for SpanId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for SpanId {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse::<i64>().map(|v| Self(DbId::from(v)))
+    }
+}
+
+impl Serialize for SpanId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SpanId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DbId::deserialize(deserializer).map(Self)
+    }
+}
+
+/// Primary key of a row in the log_events table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct EventId(DbId);
+
+impl EventId {
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+impl From<i64> for EventId {
+    fn from(value: i64) -> Self {
+        Self(DbId::from(value))
+    }
+}
+
+impl fmt::Display for EventId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for EventId {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse::<i64>().map(|v| Self(DbId::from(v)))
+    }
+}
+
+impl Serialize for EventId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for EventId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DbId::deserialize(deserializer).map(Self)
+    }
+}
 
 mod col {
     pub const BOOT_ID: &str = "boot_id";
@@ -125,8 +229,8 @@ impl Level {
 /// A persisted tracing span.
 #[derive(Debug, Clone)]
 pub struct Span {
-    pub id: DbId,
-    pub parent_id: Option<DbId>,
+    pub id: SpanId,
+    pub parent_id: Option<SpanId>,
     pub name: String,
     pub level: Level,
     pub target: String,
@@ -140,9 +244,9 @@ pub struct Span {
 /// A persisted tracing event (log record).
 #[derive(Debug, Clone)]
 pub struct Event {
-    pub id: DbId,
+    pub id: EventId,
     pub boot_id: Uuid,
-    pub span_id: Option<DbId>,
+    pub span_id: Option<SpanId>,
     pub level: Level,
     pub target: String,
     pub message: Option<String>,
@@ -167,7 +271,7 @@ pub struct EventFilter {
     pub min_level: Option<Level>,
     pub target: Vec<String>,
     pub query: Option<String>,
-    pub span_id: Option<DbId>,
+    pub span_id: Option<SpanId>,
     pub boot_id: Option<Uuid>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
@@ -183,7 +287,7 @@ pub enum SpanParentFilter {
     /// Only root spans (parent_id IS NULL).
     RootOnly,
     /// Only direct children of the given span id.
-    ChildrenOf(DbId),
+    ChildrenOf(SpanId),
 }
 
 /// Filters for span queries.
@@ -293,7 +397,7 @@ impl LogRepository {
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
-        filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(DbId::get));
+        filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(|id| id.get()));
         filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
         filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_millisecond()));
         filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_millisecond()));
@@ -423,7 +527,7 @@ impl LogRepository {
 
     /// Returns a single span by id, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get_span(&self, id: DbId) -> Result<Option<Span>> {
+    pub async fn get_span(&self, id: SpanId) -> Result<Option<Span>> {
         let sql = format!(
             sql!(SELECT {cols} FROM log_spans_resolved WHERE id = ?1),
             cols = SPAN_COLUMNS,
@@ -441,7 +545,7 @@ impl LogRepository {
 
     /// Returns all events belonging to `span_id`, ordered by timestamp.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn events_for_span(&self, span_id: DbId) -> Result<Vec<Event>> {
+    pub async fn events_for_span(&self, span_id: SpanId) -> Result<Vec<Event>> {
         let sql = format!(
             sql!(SELECT {cols} FROM log_events_resolved WHERE span_id = ?1 ORDER BY timestamp),
             cols = EVENT_COLUMNS,

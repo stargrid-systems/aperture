@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition, DownloadInput, DownloadSource};
-use aperture_storage::DbId;
+use aperture_storage::ActorId;
 use aperture_tasks::Tasks;
 use tokio::time;
 
@@ -19,7 +19,7 @@ pub struct Spectra {
     artifacts: Arc<Artifacts>,
     tasks: Tasks,
     config: SpectraConfig,
-    system_actor: DbId,
+    system_actor: ActorId,
     current: Arc<RwLock<Option<Arc<SpectraImage>>>>,
     preparing: Arc<AtomicBool>,
 }
@@ -32,7 +32,7 @@ impl Spectra {
         artifacts: Arc<Artifacts>,
         tasks: Tasks,
         config: SpectraConfig,
-        system_actor: DbId,
+        system_actor: ActorId,
     ) -> Self {
         Self {
             artifacts,

@@ -6,16 +6,70 @@
 //! are opaque here. The task layer owns their shapes and (de)serialization, so
 //! storage stays a plain record of what ran.
 
+use std::fmt;
+use std::num::ParseIntError;
 use std::result::Result as StdResult;
+use std::str::FromStr;
 
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use turso::{Connection, Row, params_from_iter};
 
+use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::sql::{Columns, ToSql};
+
+/// Primary key of a row in the `tasks` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct TaskId(DbId);
+
+impl TaskId {
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+impl From<i64> for TaskId {
+    fn from(value: i64) -> Self {
+        Self(DbId::from(value))
+    }
+}
+
+impl fmt::Display for TaskId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for TaskId {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse::<i64>().map(|v| Self(DbId::from(v)))
+    }
+}
+
+impl Serialize for TaskId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DbId::deserialize(deserializer).map(Self)
+    }
+}
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
@@ -102,13 +156,13 @@ impl TaskStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskInvocation {
     /// Store-assigned id.
-    pub id: DbId,
+    pub id: TaskId,
     /// The kind of task, matching a registered definition.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<DbId>,
+    pub parent_id: Option<TaskId>,
     /// The actor that initiated this task. Child tasks inherit the parent's.
-    pub initiator_id: Option<DbId>,
+    pub initiator_id: Option<ActorId>,
     /// The lifecycle state.
     pub status: TaskStatus,
     /// JSON-encoded input the task was created with.
@@ -249,7 +303,7 @@ pub enum ParentFilter {
     /// Only top-level invocations, with no parent.
     Root,
     /// Only the children of one invocation.
-    Of(DbId),
+    Of(TaskId),
 }
 
 /// Repository over the task catalog.
@@ -268,11 +322,11 @@ impl TaskRepository {
     pub async fn create(
         &self,
         kind: &str,
-        parent_id: Option<DbId>,
-        initiator_id: Option<DbId>,
+        parent_id: Option<TaskId>,
+        initiator_id: Option<ActorId>,
         input: &str,
         created_at: Timestamp,
-    ) -> Result<DbId> {
+    ) -> Result<TaskId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
@@ -291,7 +345,7 @@ impl TaskRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(DbId::from(self.connection.last_insert_rowid()))
+        Ok(TaskId::from(self.connection.last_insert_rowid()))
     }
 
     /// Records a new invocation already in the [`TaskStatus::Running`] state
@@ -302,11 +356,11 @@ impl TaskRepository {
     pub async fn create_running(
         &self,
         kind: &str,
-        parent_id: Option<DbId>,
-        initiator_id: Option<DbId>,
+        parent_id: Option<TaskId>,
+        initiator_id: Option<ActorId>,
         input: &str,
         started_at: Timestamp,
-    ) -> Result<DbId> {
+    ) -> Result<TaskId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
@@ -326,12 +380,12 @@ impl TaskRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(DbId::from(self.connection.last_insert_rowid()))
+        Ok(TaskId::from(self.connection.last_insert_rowid()))
     }
 
     /// Marks the invocation with `id` as running.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn mark_running(&self, id: DbId, started_at: Timestamp) -> Result<()> {
+    pub async fn mark_running(&self, id: TaskId, started_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
                 sql!(UPDATE tasks SET status = ?1, started_at = ?2 WHERE id = ?3),
@@ -355,7 +409,7 @@ impl TaskRepository {
     #[tracing::instrument(level = "info", skip(self, output, error))]
     pub async fn finish(
         &self,
-        id: DbId,
+        id: TaskId,
         status: TaskStatus,
         finished_at: Timestamp,
         output: Option<&str>,
@@ -383,7 +437,7 @@ impl TaskRepository {
 
     /// Returns the invocation with `id`, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: DbId) -> Result<Option<TaskInvocation>> {
+    pub async fn get(&self, id: TaskId) -> Result<Option<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE id = ?1),
             cols = TASK_COLUMNS
@@ -463,7 +517,7 @@ impl TaskRepository {
 
     /// Lists the children of `parent_id`, oldest first.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn children(&self, parent_id: DbId) -> Result<Vec<TaskInvocation>> {
+    pub async fn children(&self, parent_id: TaskId) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE parent_id = ?1 ORDER BY id),
             cols = TASK_COLUMNS,

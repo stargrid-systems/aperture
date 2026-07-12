@@ -9,23 +9,23 @@ use std::time::Duration;
 
 use turso::{Builder, Connection, Database};
 
-pub use self::actor::{Actor, ActorKind, ActorRepository};
-pub use self::api_key::{ApiKey, ApiKeyRepository};
-pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
+pub use self::actor::{Actor, ActorId, ActorKind, ActorRepository};
+pub use self::api_key::{ApiKey, ApiKeyId, ApiKeyRepository};
+pub use self::artifact::{Artifact, ArtifactId, ArtifactKey, ArtifactRepository, VersionSort};
 pub use self::error::{Result, StorageError};
 pub use self::id::DbId;
 pub use self::log::{
-    BootInfo, Event, EventFilter, EventRecord, Level, LogBatch, LogRepository, Span, SpanFilter,
-    SpanParentFilter, SpanRecord,
+    BootInfo, Event, EventFilter, EventId, EventRecord, Level, LogBatch, LogRepository, Span,
+    SpanFilter, SpanId, SpanParentFilter, SpanRecord,
 };
 pub use self::page::{ListQuery, Order, Page};
 pub use self::policy::{PolicyRule, PolicyRuleRepository};
-pub use self::session::{Session, SessionRepository};
+pub use self::session::{Session, SessionId, SessionRepository};
 pub use self::task::{
-    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
-    TaskRepository, TaskStatus,
+    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskId,
+    TaskInvocation, TaskRepository, TaskStatus,
 };
-pub use self::user::{User, UserRepository};
+pub use self::user::{User, UserId, UserRepository};
 
 mod actor;
 mod api_key;

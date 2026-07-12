@@ -3,7 +3,10 @@ use turso::Value;
 use uuid::Uuid;
 
 use super::{FromSql, ToSql};
-use crate::{ActorKind, DbId, Level, Result, StorageError, TaskStatus};
+use crate::{
+    ActorId, ActorKind, ApiKeyId, ArtifactId, DbId, EventId, Level, Result, SessionId, SpanId,
+    StorageError, TaskId, TaskStatus, UserId,
+};
 
 impl ToSql for Uuid {
     fn to_sql(&self) -> Value {
@@ -57,6 +60,102 @@ impl ToSql for DbId {
 }
 
 impl FromSql for DbId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for ActorId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for ActorId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for UserId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for UserId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for SessionId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for SessionId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for ApiKeyId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for ApiKeyId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for TaskId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for TaskId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for ArtifactId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for ArtifactId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for SpanId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for SpanId {
+    fn from_sql(value: Value, idx: usize) -> Result<Self> {
+        i64::from_sql(value, idx).map(Self::from)
+    }
+}
+
+impl ToSql for EventId {
+    fn to_sql(&self) -> Value {
+        Value::Integer(self.get())
+    }
+}
+
+impl FromSql for EventId {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         i64::from_sql(value, idx).map(Self::from)
     }

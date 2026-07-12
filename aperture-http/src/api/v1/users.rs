@@ -1,5 +1,5 @@
 use aperture_auth::AuthenticatedActor;
-use aperture_storage::DbId;
+use aperture_storage::UserId;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -104,7 +104,7 @@ async fn create_user(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_USER,
-    params(("id" = DbId, Path, description = "User id")),
+    params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 200, description = "User", body = UserResponse),
         (status = 404, description = "Unknown user"),
@@ -113,7 +113,7 @@ async fn create_user(
 async fn get_user(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<UserId>,
 ) -> Result<Json<UserResponse>, ApiError> {
     state.auth().enforce(auth.subject(), "user", "read").await?;
     let user = state
@@ -131,7 +131,7 @@ async fn get_user(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_USER,
-    params(("id" = DbId, Path, description = "User id")),
+    params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 204, description = "User deleted"),
         (status = 404, description = "Unknown user"),
@@ -140,7 +140,7 @@ async fn get_user(
 async fn delete_user(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<UserId>,
 ) -> Result<StatusCode, ApiError> {
     state
         .auth()

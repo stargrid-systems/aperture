@@ -1,12 +1,68 @@
 //! User credentials: usernames, password hashes, and the password-change flag.
 
+use std::fmt;
+use std::num::ParseIntError;
+use std::result::Result as StdResult;
+use std::str::FromStr;
+
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use turso::{Connection, Row, params_from_iter};
 
+use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
 use crate::sql::{Columns, ToSql, get};
+
+/// Primary key of a row in the `users` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct UserId(DbId);
+
+impl UserId {
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+impl From<i64> for UserId {
+    fn from(value: i64) -> Self {
+        Self(DbId::from(value))
+    }
+}
+
+impl fmt::Display for UserId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for UserId {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse::<i64>().map(|v| Self(DbId::from(v)))
+    }
+}
+
+impl Serialize for UserId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for UserId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        DbId::deserialize(deserializer).map(Self)
+    }
+}
 
 mod col {
     pub const ACTOR_ID: &str = "actor_id";
@@ -30,9 +86,9 @@ const USER_COLUMNS: Columns = Columns::new(&[
 #[derive(Debug, Clone, PartialEq)]
 pub struct User {
     /// Store-assigned id.
-    pub id: DbId,
+    pub id: UserId,
     /// The actor this user authenticates as.
-    pub actor_id: DbId,
+    pub actor_id: ActorId,
     /// Unique login name.
     pub username: String,
     /// Argon2 password hash.
@@ -57,7 +113,7 @@ impl UserRepository {
     #[tracing::instrument(level = "info", skip(self, password_hash))]
     pub async fn create(
         &self,
-        actor_id: DbId,
+        actor_id: ActorId,
         username: &str,
         password_hash: &str,
         password_change_required_at: Option<Timestamp>,
@@ -80,7 +136,7 @@ impl UserRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        let id = DbId::from(self.connection.last_insert_rowid());
+        let id = UserId::from(self.connection.last_insert_rowid());
         Ok(User {
             id,
             actor_id,
@@ -111,7 +167,7 @@ impl UserRepository {
 
     /// Returns the user with `id`, if one exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: DbId) -> Result<Option<User>> {
+    pub async fn get(&self, id: UserId) -> Result<Option<User>> {
         let sql_str = format!(
             sql!(SELECT {cols} FROM users WHERE id = ?1),
             cols = USER_COLUMNS
@@ -129,7 +185,7 @@ impl UserRepository {
 
     /// Returns the user associated with `actor_id`, if one exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn find_by_actor_id(&self, actor_id: DbId) -> Result<Option<User>> {
+    pub async fn find_by_actor_id(&self, actor_id: ActorId) -> Result<Option<User>> {
         let sql_str = format!(
             sql!(SELECT {cols} FROM users WHERE actor_id = ?1),
             cols = USER_COLUMNS
@@ -168,7 +224,7 @@ impl UserRepository {
     #[tracing::instrument(level = "info", skip(self, password_hash))]
     pub async fn update_password(
         &self,
-        id: DbId,
+        id: UserId,
         password_hash: &str,
         password_change_required_at: Option<Timestamp>,
     ) -> Result<()> {
@@ -192,7 +248,7 @@ impl UserRepository {
 
     /// Deletes the user with `id`. Does nothing if absent.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn delete(&self, id: DbId) -> Result<()> {
+    pub async fn delete(&self, id: UserId) -> Result<()> {
         self.connection
             .execute(
                 sql!(DELETE FROM users WHERE id = ?1),
