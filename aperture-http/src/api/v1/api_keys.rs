@@ -54,7 +54,6 @@ async fn list_api_keys(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ApiKeyResponse>>, ApiError> {
     let keys = state
-        .auth()
         .storage()
         .api_keys()?
         .list_for_actor(auth.actor.id)
@@ -123,7 +122,7 @@ async fn delete_api_key(
     State(state): State<AppState>,
     Path(id): Path<ApiKeyId>,
 ) -> Result<StatusCode, ApiError> {
-    let repo = state.auth().storage().api_keys()?;
+    let repo = state.storage().api_keys()?;
     let key = repo.get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     if key.actor_id != auth.actor.id {
         state

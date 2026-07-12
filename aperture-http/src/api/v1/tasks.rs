@@ -40,10 +40,7 @@ async fn list_tasks(
     State(state): State<AppState>,
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, "task", "read")
-        .await?;
+    state.auth().require(&auth.subject, "task", "read").await?;
     let tasks = state.tasks();
     let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
     let parent = params.parent_filter();
@@ -110,10 +107,7 @@ async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, "task", "read")
-        .await?;
+    state.auth().require(&auth.subject, "task", "read").await?;
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     let progress = state.tasks().progress(id);
     Ok(Json(TaskResponse::new(task, progress)))

@@ -15,7 +15,7 @@ pub enum AuthError {
     Policy(#[source] anyhow::Error),
 
     #[error("password hash error: {0}")]
-    PasswordHash(#[source] anyhow::Error),
+    PasswordHash(#[from] password_hash::Error),
 
     #[error("invalid credentials")]
     InvalidCredentials,
@@ -51,12 +51,6 @@ impl AuthError {
             };
         }
         AuthError::Policy(err.into())
-    }
-
-    /// Converts a password hashing error into an [`AuthError`] without
-    /// leaking the underlying crate type.
-    pub(crate) fn from_password_hash(err: password_hash::Error) -> Self {
-        AuthError::PasswordHash(anyhow::Error::msg(err))
     }
 }
 

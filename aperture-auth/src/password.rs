@@ -44,27 +44,25 @@ impl Password {
     /// Hashes this password with Argon2id and a random salt.
     pub fn hash(&self) -> Result<PasswordHash, AuthError> {
         let salt = SaltString::generate(&mut OsRng);
-        let hash = argon2()
-            .hash_password(self.0.as_bytes(), &salt)
-            .map_err(AuthError::from_password_hash)?;
-        Ok(PasswordHash::new(hash.to_string()))
+        let hash = argon2().hash_password(self.0.as_bytes(), &salt)?;
+        Ok(PasswordHash::new(hash.into()))
     }
 
     /// Verifies this password against a stored hash.
     /// Returns `Ok(true)` on match, `Ok(false)` on mismatch.
     pub fn verify_against(&self, hash: &PasswordHash) -> Result<bool, AuthError> {
-        let parsed = PhcHash::new(hash.as_str()).map_err(AuthError::from_password_hash)?;
+        let parsed = PhcHash::new(hash.as_str())?;
         match argon2().verify_password(self.0.as_bytes(), &parsed) {
             Ok(()) => Ok(true),
             Err(Error::Password) => Ok(false),
-            Err(err) => Err(AuthError::from_password_hash(err)),
+            Err(err) => Err(err.into()),
         }
     }
 }
 
 impl fmt::Debug for Password {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Password(**redacted**)")
+        f.debug_tuple("Password").finish_non_exhaustive()
     }
 }
 

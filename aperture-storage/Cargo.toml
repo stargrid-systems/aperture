@@ -18,6 +18,7 @@ schema = ["dep:utoipa"]
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std"] }
+password-hash = { workspace = true, features = ["alloc", "std"] }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 subtle = { workspace = true }

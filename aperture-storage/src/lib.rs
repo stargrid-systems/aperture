@@ -11,9 +11,6 @@ use jiff::Timestamp;
 use turso::transaction::{Transaction, TransactionBehavior};
 use turso::{Builder, Connection, Database, params_from_iter};
 
-use crate::macros::sql;
-use crate::sql::{ToSql, get};
-
 pub use self::actor::{Actor, ActorId, ActorKind, ActorRepository};
 pub use self::api_key::{ApiKey, ApiKeyId, ApiKeyRepository};
 pub use self::artifact::{Artifact, ArtifactId, ArtifactKey, ArtifactRepository, VersionSort};
@@ -32,6 +29,8 @@ pub use self::task::{
     TaskInvocation, TaskRepository, TaskStatus,
 };
 pub use self::user::{User, UserId, UserRepository};
+use crate::macros::sql;
+use crate::sql::{ToSql, get};
 
 mod actor;
 mod api_key;

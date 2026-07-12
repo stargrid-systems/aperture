@@ -116,7 +116,7 @@ async fn change_password(
     State(state): State<AppState>,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let users = state.auth().storage().users()?;
+    let users = state.storage().users()?;
     let user = users
         .find_by_actor_id(auth.actor.id)
         .await?

@@ -42,7 +42,7 @@ impl SessionToken {
 
 impl fmt::Debug for SessionToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SessionToken(**redacted**)")
+        f.debug_tuple("SessionToken").finish_non_exhaustive()
     }
 }
 
@@ -85,7 +85,7 @@ impl RawApiKey {
 
 impl fmt::Debug for RawApiKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("RawApiKey(**redacted**)")
+        f.debug_tuple("RawApiKey").finish_non_exhaustive()
     }
 }
 

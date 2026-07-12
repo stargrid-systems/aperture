@@ -77,6 +77,10 @@ impl AppState {
         &self.auth
     }
 
+    pub(crate) fn storage(&self) -> &Storage {
+        &self.storage
+    }
+
     /// Returns the repository over the structured log tables for this request.
     pub(crate) fn logs(&self) -> Result<LogRepository, aperture_storage::StorageError> {
         self.storage.logs()

@@ -98,11 +98,6 @@ impl Tasks {
         }
     }
 
-    /// Read access to the storage catalog, for listing recorded invocations.
-    pub fn storage(&self) -> &Storage {
-        &self.inner.storage
-    }
-
     /// The registry of kinds, for projecting schemas and capabilities.
     pub fn registry(&self) -> &TaskRegistry {
         &self.inner.registry

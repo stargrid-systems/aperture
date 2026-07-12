@@ -95,16 +95,13 @@ impl AuthHandle {
         })
     }
 
-    /// Read-only access to the underlying storage.
-    pub fn storage(&self) -> &Storage {
-        &self.storage
-    }
-
     /// Requires that `subject` may perform `act` on `obj`. Returns
     /// [`AuthError::Forbidden`] if denied.
     pub async fn require(&self, subject: &str, obj: &str, act: &str) -> Result<()> {
         let e = self.enforcer.read().await;
-        if e.enforce((subject, obj, act)).map_err(AuthError::from_casbin)? {
+        if e.enforce((subject, obj, act))
+            .map_err(AuthError::from_casbin)?
+        {
             Ok(())
         } else {
             Err(AuthError::Forbidden)
