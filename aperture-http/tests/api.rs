@@ -33,13 +33,13 @@ fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
     }
 }
 
-async fn seeded_app() -> (Router, Arc<Artifacts>, String) {
+async fn seeded_app() -> (Router, Arc<Artifacts>, Storage, String) {
     let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Arc::new(Artifacts::new(storage, root));
+    let artifacts = Arc::new(Artifacts::new(storage.clone(), root));
 
-    let repo = artifacts.storage().artifacts().unwrap();
+    let repo = storage.artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:fff", 1_000))
         .await
         .unwrap();
@@ -52,9 +52,9 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, String) {
 
     let mut registry = TaskRegistry::new();
     registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
-    let tasks = Tasks::new(artifacts.storage().clone(), registry);
+    let tasks = Tasks::new(storage.clone(), registry);
 
-    let auth = aperture_auth::AuthHandle::new(artifacts.storage().clone())
+    let auth = aperture_auth::AuthHandle::new(storage.clone())
         .await
         .unwrap();
     let system_actor = auth.ensure_system_actor().await.unwrap();
@@ -72,8 +72,8 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, roles::ADMIN).await.unwrap();
 
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks, auth);
-    (app(state), artifacts, raw_key)
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks, auth, storage.clone());
+    (app(state), artifacts, storage, raw_key)
 }
 
 async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
@@ -121,7 +121,7 @@ async fn read_json(response: Response) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn lists_artifacts_with_summary() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, json) = get_json(&app, &token, "/api/v1/artifacts").await;
     assert_eq!(status, StatusCode::OK);
@@ -137,7 +137,7 @@ async fn lists_artifacts_with_summary() {
 
 #[tokio::test]
 async fn paginates_artifacts_with_cursor() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, first) = get_json(&app, &token, "/api/v1/artifacts?limit=1").await;
     assert_eq!(status, StatusCode::OK);
@@ -168,14 +168,14 @@ async fn paginates_artifacts_with_cursor() {
 
 #[tokio::test]
 async fn rejects_bad_cursor() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
     let (status, _) = get_json(&app, &token, "/api/v1/artifacts?cursor=nothex").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn gets_artifact_and_404s_unknown() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, json) = get_json(&app, &token, "/api/v1/artifacts/spectra").await;
     assert_eq!(status, StatusCode::OK);
@@ -188,7 +188,7 @@ async fn gets_artifact_and_404s_unknown() {
 
 #[tokio::test]
 async fn lists_versions_newest_first() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, json) = get_json(&app, &token, "/api/v1/artifacts/spectra/versions").await;
     assert_eq!(status, StatusCode::OK);
@@ -200,7 +200,7 @@ async fn lists_versions_newest_first() {
 
 #[tokio::test]
 async fn evicts_a_version() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let response = app
         .clone()
@@ -227,7 +227,7 @@ async fn evicts_a_version() {
 
 #[tokio::test]
 async fn lists_task_definitions_with_schemas() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, json) = get_json(&app, &token, "/api/v1/task-definitions").await;
     assert_eq!(status, StatusCode::OK);
@@ -244,8 +244,8 @@ async fn lists_task_definitions_with_schemas() {
 
 #[tokio::test]
 async fn reads_recorded_tasks() {
-    let (app, artifacts, token) = seeded_app().await;
-    let repo = artifacts.storage().tasks().unwrap();
+    let (app, _artifacts, storage, token) = seeded_app().await;
+    let repo = storage.tasks().unwrap();
     let id = repo
         .create(
             "download",
@@ -280,8 +280,8 @@ async fn reads_recorded_tasks() {
 
 #[tokio::test]
 async fn filters_tasks_by_json_field() {
-    let (app, artifacts, token) = seeded_app().await;
-    let repo = artifacts.storage().tasks().unwrap();
+    let (app, _artifacts, storage, token) = seeded_app().await;
+    let repo = storage.tasks().unwrap();
     let spectra = repo
         .create(
             "download",
@@ -357,7 +357,7 @@ async fn filters_tasks_by_json_field() {
 
 #[tokio::test]
 async fn create_rejects_unknown_kind() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
     let (status, _) = post_json(
         &app,
         &token,
@@ -370,7 +370,7 @@ async fn create_rejects_unknown_kind() {
 
 #[tokio::test]
 async fn get_and_cancel_unknown_task_404() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, _) = get_json(&app, &token, "/api/v1/tasks/999").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -381,7 +381,7 @@ async fn get_and_cancel_unknown_task_404() {
 
 #[tokio::test]
 async fn filters_artifacts_and_versions() {
-    let (app, _artifacts, token) = seeded_app().await;
+    let (app, _artifacts, _storage, token) = seeded_app().await;
 
     // Substring match on key.
     let (status, json) = get_json(&app, &token, "/api/v1/artifacts?q=spec").await;

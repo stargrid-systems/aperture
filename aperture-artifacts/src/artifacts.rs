@@ -128,18 +128,6 @@ impl Artifacts {
         }
     }
 
-    /// Opens storage at `db_path` (applying migrations) and keeps blobs under
-    /// `store_root`.
-    pub async fn open(db_path: &str, store_root: PathBuf) -> Result<Self> {
-        let storage = Storage::open(db_path).await?;
-        Ok(Self::new(storage, store_root))
-    }
-
-    /// Read access to the storage catalog.
-    pub fn storage(&self) -> &Storage {
-        &self.inner.storage
-    }
-
     /// Returns the blob of the newest stored version of `key`, if present on
     /// disk.
     pub async fn locate(&self, key: &str) -> Result<Option<Located>> {

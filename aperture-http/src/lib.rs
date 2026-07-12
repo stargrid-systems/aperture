@@ -4,7 +4,7 @@
 //! Spectra frontend served as a fallback.
 
 use aperture_auth::AuthenticatedActor;
-use aperture_storage::LogRepository;
+use aperture_storage::{LogRepository, Storage};
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -39,6 +39,7 @@ pub struct AppState {
     spectra: Spectra,
     tasks: Tasks,
     auth: aperture_auth::AuthHandle,
+    storage: Storage,
 }
 
 impl AppState {
@@ -48,6 +49,7 @@ impl AppState {
         spectra: Spectra,
         tasks: Tasks,
         auth: aperture_auth::AuthHandle,
+        storage: Storage,
     ) -> Self {
         Self {
             version,
@@ -55,6 +57,7 @@ impl AppState {
             spectra,
             tasks,
             auth,
+            storage,
         }
     }
 
@@ -80,7 +83,7 @@ impl AppState {
 
     /// Returns the repository over the structured log tables for this request.
     pub(crate) fn logs(&self) -> Result<LogRepository, aperture_storage::StorageError> {
-        self.spectra.artifacts().storage().logs()
+        self.storage.logs()
     }
 }
 
