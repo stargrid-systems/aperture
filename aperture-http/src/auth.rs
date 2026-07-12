@@ -1,7 +1,7 @@
 //! Auth middleware, path predicates, session cookie helpers, and OpenAPI
 //! security scheme registration.
 
-use aperture_auth::AuthenticatedActor;
+use aperture_auth::{AuthenticatedActor, RawApiKey, SessionToken};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::Next;
@@ -66,12 +66,15 @@ async fn resolve_actor(
     headers: &HeaderMap,
 ) -> Result<AuthenticatedActor, Response> {
     if let Some(token) = extract_session_token(headers)
-        && let Ok(Some(actor)) = state.auth().resolve_session(&token).await
+        && let Ok(Some(actor)) = state
+            .auth()
+            .resolve_session(&SessionToken::new(token))
+            .await
     {
         return Ok(actor);
     }
     if let Some(key) = extract_bearer_token(headers)
-        && let Ok(Some(actor)) = state.auth().resolve_api_key(&key).await
+        && let Ok(Some(actor)) = state.auth().resolve_api_key(&RawApiKey::new(key)).await
     {
         return Ok(actor);
     }

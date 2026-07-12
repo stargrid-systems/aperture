@@ -1,4 +1,4 @@
-use aperture_auth::AuthenticatedActor;
+use aperture_auth::{AuthenticatedActor, RawApiKey};
 use aperture_storage::ApiKeyId;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -32,7 +32,7 @@ pub struct CreateApiKeyResponse {
     name: String,
     prefix: String,
     /// The full key. Only visible at creation time.
-    key: String,
+    key: RawApiKey,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

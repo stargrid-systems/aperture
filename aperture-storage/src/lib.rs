@@ -20,6 +20,7 @@ pub use self::log::{
 };
 pub use self::page::{ListQuery, Order, Page};
 pub use self::policy::{PolicyRule, PolicyRuleRepository, PolicyType};
+pub use self::secret::{ApiKeyHash, PasswordHash, TokenHash};
 pub use self::session::{Session, SessionId, SessionRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskId,
@@ -37,6 +38,7 @@ mod macros;
 mod migration;
 mod page;
 mod policy;
+mod secret;
 mod session;
 mod sql;
 mod task;

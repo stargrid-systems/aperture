@@ -1,4 +1,4 @@
-use aperture_auth::AuthenticatedActor;
+use aperture_auth::{AuthenticatedActor, Password, SessionToken};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -27,7 +27,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
     username: String,
-    password: String,
+    password: Password,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -55,7 +55,7 @@ async fn login(
         .auth()
         .login(&request.username, &request.password)
         .await?;
-    let cookie = Cookie::build((SESSION_COOKIE, result.token))
+    let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
         .http_only(true)
         .same_site(SameSite::Strict)
         .path("/")
@@ -81,7 +81,10 @@ async fn login(
 )]
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     if let Some(token) = extract_session_token(&headers) {
-        state.auth().delete_session(&token).await?;
+        state
+            .auth()
+            .delete_session(&SessionToken::new(token))
+            .await?;
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().append(
@@ -93,8 +96,8 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ChangePasswordRequest {
-    current_password: String,
-    new_password: String,
+    current_password: Password,
+    new_password: Password,
 }
 
 /// Changes the password for the authenticated user.
@@ -118,7 +121,10 @@ async fn change_password(
         .find_by_actor_id(auth.actor.id)
         .await?
         .ok_or(ApiError::FORBIDDEN)?;
-    if !aperture_auth::verify_password(&request.current_password, &user.password_hash)? {
+    if !request
+        .current_password
+        .verify_against(&user.password_hash)?
+    {
         return Err(ApiError::UNAUTHORIZED);
     }
     state
@@ -151,7 +157,7 @@ async fn setup_status(
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetupRequest {
     username: String,
-    password: String,
+    password: Password,
 }
 
 /// Creates the initial admin user. Only available when no users exist.
@@ -177,7 +183,7 @@ async fn setup(
         .auth()
         .setup_admin(&request.username, &request.password)
         .await?;
-    let cookie = Cookie::build((SESSION_COOKIE, result.token))
+    let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
         .http_only(true)
         .same_site(SameSite::Strict)
         .path("/")

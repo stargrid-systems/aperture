@@ -13,6 +13,7 @@ use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
+use crate::secret::PasswordHash;
 use crate::sql::{Columns, ToSql, get};
 
 /// Primary key of a row in the `users` table.
@@ -92,7 +93,7 @@ pub struct User {
     /// Unique login name.
     pub username: String,
     /// Argon2 password hash.
-    pub password_hash: String,
+    pub password_hash: PasswordHash,
     /// When a password change was required, if applicable.
     pub password_change_required_at: Option<Timestamp>,
     /// When the user was created.
@@ -115,7 +116,7 @@ impl UserRepository {
         &self,
         actor_id: ActorId,
         username: &str,
-        password_hash: &str,
+        password_hash: &PasswordHash,
         password_change_required_at: Option<Timestamp>,
         created_at: Timestamp,
     ) -> Result<User> {
@@ -141,7 +142,7 @@ impl UserRepository {
             id,
             actor_id,
             username: username.to_owned(),
-            password_hash: password_hash.to_owned(),
+            password_hash: password_hash.clone(),
             password_change_required_at,
             created_at,
         })
@@ -225,7 +226,7 @@ impl UserRepository {
     pub async fn update_password(
         &self,
         id: UserId,
-        password_hash: &str,
+        password_hash: &PasswordHash,
         password_change_required_at: Option<Timestamp>,
     ) -> Result<()> {
         self.connection

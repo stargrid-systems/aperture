@@ -13,6 +13,7 @@ use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
+use crate::secret::ApiKeyHash;
 use crate::sql::{Columns, ToSql};
 
 /// Primary key of a row in the `api_keys` table.
@@ -94,7 +95,7 @@ pub struct ApiKey {
     /// Human-readable name.
     pub name: String,
     /// SHA-256 hash of the full key string.
-    pub key_hash: Vec<u8>,
+    pub key_hash: ApiKeyHash,
     /// First characters of the key, for display and lookup.
     pub prefix: String,
     /// When the key was last used, if ever.
@@ -119,7 +120,7 @@ impl ApiKeyRepository {
         &self,
         actor_id: ActorId,
         name: &str,
-        key_hash: &[u8],
+        key_hash: &ApiKeyHash,
         prefix: &str,
         created_at: Timestamp,
     ) -> Result<ApiKey> {
@@ -145,7 +146,7 @@ impl ApiKeyRepository {
             id,
             actor_id,
             name: name.to_owned(),
-            key_hash: key_hash.to_vec(),
+            key_hash: key_hash.clone(),
             prefix: prefix.to_owned(),
             last_used_at: None,
             created_at,

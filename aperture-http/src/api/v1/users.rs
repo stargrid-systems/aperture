@@ -1,4 +1,4 @@
-use aperture_auth::AuthenticatedActor;
+use aperture_auth::{AuthenticatedActor, Password};
 use aperture_storage::UserId;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -41,7 +41,7 @@ impl From<aperture_storage::User> for UserResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateUserRequest {
     username: String,
-    password: String,
+    password: Password,
     role: Option<String>,
 }
 

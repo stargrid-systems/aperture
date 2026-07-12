@@ -1,6 +1,10 @@
 //! Session token and API key generation and hashing.
 
+use std::fmt;
+
+use aperture_storage::{ApiKeyHash, TokenHash};
 use rand::rngs::OsRng;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 /// Prefix for all API key strings so they are easy to identify.
@@ -9,47 +13,94 @@ const API_KEY_PREFIX: &str = "apkey_";
 /// Number of characters after the prefix used for database lookup.
 const API_KEY_LOOKUP_LEN: usize = 12;
 
-/// Generates a cryptographically random session token (64 hex chars = 32 bytes
-/// of entropy).
-pub fn generate_session_token() -> String {
-    let bytes = random_bytes(32);
-    hex_encode(&bytes)
+/// A raw session token. Redacts in Debug output.
+#[derive(Clone)]
+pub struct SessionToken(String);
+
+impl SessionToken {
+    /// Wraps an existing token string.
+    pub fn new(s: String) -> Self {
+        Self(s)
+    }
+
+    /// Generates a cryptographically random session token (64 hex chars = 32
+    /// bytes of entropy).
+    pub fn generate() -> Self {
+        Self(random_hex(32))
+    }
+
+    /// Returns the underlying token string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns the SHA-256 hash of this token.
+    pub fn hash(&self) -> TokenHash {
+        TokenHash::new(sha256(&self.0))
+    }
 }
 
-/// Generates a full API key string (`apkey_` + 48 random hex chars).
-pub fn generate_api_key() -> String {
-    let bytes = random_bytes(24);
-    format!("{API_KEY_PREFIX}{}", hex_encode(&bytes))
+impl fmt::Debug for SessionToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SessionToken(**redacted**)")
+    }
 }
 
-/// Returns the lookup prefix (first N chars after `apkey_`) for a full key, or
-/// `None` if the key does not have the expected prefix.
-pub fn api_key_lookup_prefix(key: &str) -> Option<String> {
-    let rest = key.strip_prefix(API_KEY_PREFIX)?;
-    let len = rest.len().min(API_KEY_LOOKUP_LEN);
-    Some(rest[..len].to_owned())
+/// A raw API key. Redacts in Debug output.
+#[derive(Clone, Serialize)]
+#[serde(transparent)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schema", schema(value_type = String))]
+pub struct RawApiKey(String);
+
+impl RawApiKey {
+    /// Wraps an existing key string.
+    pub fn new(s: String) -> Self {
+        Self(s)
+    }
+
+    /// Generates a full API key string (`apkey_` + 48 random hex chars).
+    pub fn generate() -> Self {
+        Self(format!("{API_KEY_PREFIX}{}", random_hex(24)))
+    }
+
+    /// Returns the underlying key string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Returns the lookup prefix (first N chars after `apkey_`) for database
+    /// lookup, or `None` if the key does not have the expected prefix.
+    pub fn lookup_prefix(&self) -> Option<String> {
+        let rest = self.0.strip_prefix(API_KEY_PREFIX)?;
+        let len = rest.len().min(API_KEY_LOOKUP_LEN);
+        Some(rest[..len].to_owned())
+    }
+
+    /// Returns the SHA-256 hash of this key.
+    pub fn hash(&self) -> ApiKeyHash {
+        ApiKeyHash::new(sha256(&self.0))
+    }
 }
 
-/// SHA-256 hash of a token or key. The raw value is never stored.
-pub fn hash_token(token: &str) -> Vec<u8> {
-    Sha256::digest(token.as_bytes()).to_vec()
+impl fmt::Debug for RawApiKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RawApiKey(**redacted**)")
+    }
 }
 
-/// Constant-time comparison of two byte slices.
-pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    subtle::ConstantTimeEq::ct_eq(a, b).into()
+fn sha256(input: &str) -> Vec<u8> {
+    Sha256::digest(input.as_bytes()).to_vec()
 }
 
-fn random_bytes(len: usize) -> Vec<u8> {
-    use rand::TryRngCore;
-    let mut buf = vec![0u8; len];
-    OsRng.try_fill_bytes(&mut buf).expect("OsRng failed");
-    buf
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
+pub(crate) fn random_hex(bytes: usize) -> String {
+    let mut buf = vec![0u8; bytes];
+    {
+        use rand::TryRngCore;
+        OsRng.try_fill_bytes(&mut buf).expect("OsRng failed");
+    }
+    let mut s = String::with_capacity(buf.len() * 2);
+    for b in &buf {
         s.push_str(&format!("{b:02x}"));
     }
     s
@@ -61,39 +112,43 @@ mod tests {
 
     #[test]
     fn session_tokens_are_unique() {
-        let a = generate_session_token();
-        let b = generate_session_token();
-        assert_ne!(a, b);
-        assert_eq!(a.len(), 64);
+        let a = SessionToken::generate();
+        let b = SessionToken::generate();
+        assert_ne!(a.as_str(), b.as_str());
+        assert_eq!(a.as_str().len(), 64);
     }
 
     #[test]
     fn api_keys_have_prefix() {
-        let key = generate_api_key();
-        assert!(key.starts_with("apkey_"));
-        assert!(key.len() > API_KEY_PREFIX.len() + 10);
+        let key = RawApiKey::generate();
+        assert!(key.as_str().starts_with("apkey_"));
+        assert!(key.as_str().len() > API_KEY_PREFIX.len() + 10);
     }
 
     #[test]
     fn api_key_prefix_extraction() {
-        let key = generate_api_key();
-        let prefix = api_key_lookup_prefix(&key).unwrap();
+        let key = RawApiKey::generate();
+        let prefix = key.lookup_prefix().unwrap();
         assert_eq!(prefix.len(), API_KEY_LOOKUP_LEN);
     }
 
     #[test]
     fn api_key_prefix_rejects_bad_key() {
-        assert!(api_key_lookup_prefix("not_a_key").is_none());
+        let key = RawApiKey::new("not_a_key".to_owned());
+        assert!(key.lookup_prefix().is_none());
     }
 
     #[test]
     fn hash_is_deterministic() {
-        assert_eq!(hash_token("abc"), hash_token("abc"));
-        assert_ne!(hash_token("abc"), hash_token("abd"));
+        let token = SessionToken::new("abc".to_owned());
+        let a = token.hash();
+        let b = SessionToken::new("abc".to_owned()).hash();
+        assert_eq!(a.as_bytes(), b.as_bytes());
     }
 
     #[test]
     fn hash_produces_32_bytes() {
-        assert_eq!(hash_token("abc").len(), 32);
+        let token = SessionToken::new("abc".to_owned());
+        assert_eq!(token.hash().as_bytes().len(), 32);
     }
 }

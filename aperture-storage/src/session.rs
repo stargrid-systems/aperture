@@ -13,6 +13,7 @@ use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
+use crate::secret::TokenHash;
 use crate::sql::{Columns, ToSql};
 
 /// Primary key of a row in the `sessions` table.
@@ -88,7 +89,7 @@ pub struct Session {
     /// The authenticated actor.
     pub actor_id: ActorId,
     /// SHA-256 hash of the session token.
-    pub token_hash: Vec<u8>,
+    pub token_hash: TokenHash,
     /// When the session expires.
     pub expires_at: Timestamp,
     /// When the session was created.
@@ -110,7 +111,7 @@ impl SessionRepository {
     pub async fn create(
         &self,
         actor_id: ActorId,
-        token_hash: &[u8],
+        token_hash: &TokenHash,
         expires_at: Timestamp,
         created_at: Timestamp,
     ) -> Result<SessionId> {
@@ -135,7 +136,7 @@ impl SessionRepository {
 
     /// Returns the session with `token_hash`, if one exists.
     #[tracing::instrument(level = "info", skip(self, token_hash))]
-    pub async fn find_by_token_hash(&self, token_hash: &[u8]) -> Result<Option<Session>> {
+    pub async fn find_by_token_hash(&self, token_hash: &TokenHash) -> Result<Option<Session>> {
         let sql_str = format!(
             sql!(SELECT {cols} FROM sessions WHERE token_hash = ?1),
             cols = SESSION_COLUMNS

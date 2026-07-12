@@ -23,11 +23,9 @@ use jiff::Timestamp;
 use tokio::sync::RwLock;
 
 pub use self::error::{AuthError, Result};
-pub use self::password::{hash_password, verify_password};
+pub use self::password::Password;
 pub use self::policy::{actor_subject, apikey_subject, roles};
-pub use self::token::{
-    api_key_lookup_prefix, constant_time_eq, generate_api_key, generate_session_token, hash_token,
-};
+pub use self::token::{RawApiKey, SessionToken};
 
 mod error;
 mod password;
@@ -42,7 +40,7 @@ const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 #[derive(Debug)]
 pub struct LoginResult {
     /// The raw session token. The caller sets it as a cookie.
-    pub token: String,
+    pub token: SessionToken,
     /// The authenticated actor.
     pub actor: Actor,
     /// Whether the user must change their password before continuing.
@@ -152,14 +150,14 @@ impl AuthHandle {
     }
 
     /// Verifies `username` / `password` and creates a new session.
-    /// Returns the raw token for the caller to set as a cookie.
-    pub async fn login(&self, username: &str, password: &str) -> Result<LoginResult> {
+    /// Returns the session token for the caller to set as a cookie.
+    pub async fn login(&self, username: &str, password: &Password) -> Result<LoginResult> {
         let users = self.storage.users()?;
         let user = users
             .find_by_username(username)
             .await?
             .ok_or(AuthError::InvalidCredentials)?;
-        if !verify_password(password, &user.password_hash)? {
+        if !password.verify_against(&user.password_hash)? {
             return Err(AuthError::InvalidCredentials);
         }
         let actors = self.storage.actors()?;
@@ -170,8 +168,8 @@ impl AuthHandle {
         if actor.disabled_at.is_some() {
             return Err(AuthError::ActorDisabled);
         }
-        let token = generate_session_token();
-        let token_hash = hash_token(&token);
+        let token = SessionToken::generate();
+        let token_hash = token.hash();
         let now = Timestamp::now();
         let expires_at = now + SESSION_TTL;
         let sessions = self.storage.sessions()?;
@@ -187,8 +185,11 @@ impl AuthHandle {
 
     /// Resolves a session token to an authenticated actor. Extends the
     /// session expiry (sliding window).
-    pub async fn resolve_session(&self, token: &str) -> Result<Option<AuthenticatedActor>> {
-        let token_hash = hash_token(token);
+    pub async fn resolve_session(
+        &self,
+        token: &SessionToken,
+    ) -> Result<Option<AuthenticatedActor>> {
+        let token_hash = token.hash();
         let sessions = self.storage.sessions()?;
         let session = match sessions.find_by_token_hash(&token_hash).await? {
             Some(s) => s,
@@ -223,8 +224,8 @@ impl AuthHandle {
     }
 
     /// Deletes a session (logout).
-    pub async fn delete_session(&self, session_token: &str) -> Result<()> {
-        let token_hash = hash_token(session_token);
+    pub async fn delete_session(&self, session_token: &SessionToken) -> Result<()> {
+        let token_hash = session_token.hash();
         let sessions = self.storage.sessions()?;
         if let Some(session) = sessions.find_by_token_hash(&token_hash).await? {
             sessions.delete(session.id).await?;
@@ -245,10 +246,12 @@ impl AuthHandle {
         &self,
         actor_id: ActorId,
         name: &str,
-    ) -> Result<(String, aperture_storage::ApiKey)> {
-        let raw_key = generate_api_key();
-        let prefix = api_key_lookup_prefix(&raw_key).ok_or(AuthError::InvalidCredentials)?;
-        let key_hash = hash_token(&raw_key);
+    ) -> Result<(RawApiKey, aperture_storage::ApiKey)> {
+        let raw_key = RawApiKey::generate();
+        let prefix = raw_key
+            .lookup_prefix()
+            .ok_or(AuthError::InvalidCredentials)?;
+        let key_hash = raw_key.hash();
         let now = Timestamp::now();
         let repo = self.storage.api_keys()?;
         let api_key = repo.create(actor_id, name, &key_hash, &prefix, now).await?;
@@ -256,8 +259,8 @@ impl AuthHandle {
     }
 
     /// Resolves an API key to an authenticated actor.
-    pub async fn resolve_api_key(&self, key: &str) -> Result<Option<AuthenticatedActor>> {
-        let prefix = match api_key_lookup_prefix(key) {
+    pub async fn resolve_api_key(&self, key: &RawApiKey) -> Result<Option<AuthenticatedActor>> {
+        let prefix = match key.lookup_prefix() {
             Some(p) => p,
             None => return Ok(None),
         };
@@ -266,8 +269,8 @@ impl AuthHandle {
             Some(k) => k,
             None => return Ok(None),
         };
-        let key_hash = hash_token(key);
-        if !constant_time_eq(&key_hash, &api_key.key_hash) {
+        let key_hash = key.hash();
+        if !key_hash.matches(&api_key.key_hash) {
             return Ok(None);
         }
         let actors = self.storage.actors()?;
@@ -290,11 +293,11 @@ impl AuthHandle {
     pub async fn create_user(
         &self,
         username: &str,
-        password: &str,
+        password: &Password,
         password_change_required_at: Option<Timestamp>,
     ) -> Result<Actor> {
         let now = Timestamp::now();
-        let hash = hash_password(password)?;
+        let hash = password.hash()?;
         let actors = self.storage.actors()?;
         let actor = actors.create(ActorKind::User, username, now).await?;
         let users = self.storage.users()?;
@@ -305,8 +308,8 @@ impl AuthHandle {
     }
 
     /// Changes the password for user `user_id`.
-    pub async fn change_password(&self, user_id: UserId, new_password: &str) -> Result<()> {
-        let hash = hash_password(new_password)?;
+    pub async fn change_password(&self, user_id: UserId, new_password: &Password) -> Result<()> {
+        let hash = new_password.hash()?;
         let users = self.storage.users()?;
         users.update_password(user_id, &hash, None).await?;
         Ok(())
@@ -346,7 +349,7 @@ impl AuthHandle {
     /// Creates the initial admin user and returns a login result with a
     /// session token. Only succeeds when no users exist. The caller is
     /// responsible for checking [`Self::is_setup_required`] first.
-    pub async fn setup_admin(&self, username: &str, password: &str) -> Result<LoginResult> {
+    pub async fn setup_admin(&self, username: &str, password: &Password) -> Result<LoginResult> {
         let actor = self.create_user(username, password, None).await?;
         let subject = actor_subject(actor.id);
         self.assign_role(&subject, roles::ADMIN).await?;
