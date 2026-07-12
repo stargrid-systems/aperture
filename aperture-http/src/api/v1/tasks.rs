@@ -40,9 +40,10 @@ async fn list_tasks(
     State(state): State<AppState>,
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
-    if !state.auth().enforce(&auth.subject, "task", "read").await? {
-        return Err(ApiError::FORBIDDEN);
-    }
+    state
+        .auth()
+        .require(&auth.subject, "task", "read")
+        .await?;
     let tasks = state.tasks();
     let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
     let parent = params.parent_filter();
@@ -84,7 +85,7 @@ async fn create_task(
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
     state
         .auth()
-        .enforce(&auth.subject, "task", "create")
+        .require(&auth.subject, "task", "create")
         .await?;
     let task = state
         .tasks()
@@ -109,9 +110,10 @@ async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
-    if !state.auth().enforce(&auth.subject, "task", "read").await? {
-        return Err(ApiError::FORBIDDEN);
-    }
+    state
+        .auth()
+        .require(&auth.subject, "task", "read")
+        .await?;
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     let progress = state.tasks().progress(id);
     Ok(Json(TaskResponse::new(task, progress)))
@@ -135,13 +137,10 @@ async fn cancel_task(
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<StatusCode, ApiError> {
-    if !state
+    state
         .auth()
-        .enforce(&auth.subject, "task", "cancel")
-        .await?
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+        .require(&auth.subject, "task", "cancel")
+        .await?;
     if state.tasks().cancel(id).await? {
         Ok(StatusCode::ACCEPTED)
     } else {
@@ -160,13 +159,10 @@ async fn list_definitions(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
-    if !state
+    state
         .auth()
-        .enforce(&auth.subject, "task-definition", "read")
-        .await?
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+        .require(&auth.subject, "task-definition", "read")
+        .await?;
     let definitions = state
         .tasks()
         .registry()

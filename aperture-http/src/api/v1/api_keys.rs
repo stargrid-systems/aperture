@@ -86,7 +86,7 @@ async fn create_api_key(
 ) -> Result<(StatusCode, Json<CreateApiKeyResponse>), ApiError> {
     state
         .auth()
-        .enforce(&auth.subject, "api-key", "create")
+        .require(&auth.subject, "api-key", "create")
         .await?;
     let (raw_key, api_key) = state
         .auth()
@@ -128,7 +128,7 @@ async fn delete_api_key(
     if key.actor_id != auth.actor.id {
         state
             .auth()
-            .enforce(&auth.subject, "api-key", "delete")
+            .require(&auth.subject, "api-key", "delete")
             .await?;
     }
     repo.delete(id).await?;

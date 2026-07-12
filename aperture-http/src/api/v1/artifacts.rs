@@ -34,13 +34,10 @@ async fn list_artifacts(
     State(state): State<AppState>,
     Query(params): Query<ArtifactListParams>,
 ) -> Result<Json<Page<ArtifactSummaryResponse>>, ApiError> {
-    if !state
+    state
         .auth()
-        .enforce(&auth.subject, "artifact", "read")
-        .await?
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+        .require(&auth.subject, "artifact", "read")
+        .await?;
     let page = state
         .spectra()
         .artifacts()
@@ -65,13 +62,10 @@ async fn get_artifact(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<Json<ArtifactSummaryResponse>, ApiError> {
-    if !state
+    state
         .auth()
-        .enforce(&auth.subject, "artifact", "read")
-        .await?
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+        .require(&auth.subject, "artifact", "read")
+        .await?;
     let artifact = state.spectra().artifacts().artifact(&key).await?;
     artifact
         .map(|key| Json(key.into()))
@@ -95,13 +89,10 @@ async fn list_versions(
     Path(key): Path<String>,
     Query(params): Query<VersionListParams>,
 ) -> Result<Json<Page<ArtifactVersionResponse>>, ApiError> {
-    if !state
+    state
         .auth()
-        .enforce(&auth.subject, "artifact", "read")
-        .await?
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+        .require(&auth.subject, "artifact", "read")
+        .await?;
     let page = state
         .spectra()
         .artifacts()
@@ -135,13 +126,10 @@ async fn get_version(
     State(state): State<AppState>,
     Path((key, digest)): Path<(String, String)>,
 ) -> Result<Json<ArtifactVersionResponse>, ApiError> {
-    if !state
+    state
         .auth()
-        .enforce(&auth.subject, "artifact", "read")
-        .await?
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+        .require(&auth.subject, "artifact", "read")
+        .await?;
     let version = state.spectra().artifacts().version(&key, &digest).await?;
     version
         .map(|version| Json(version.into()))
@@ -167,13 +155,10 @@ async fn delete_version(
     State(state): State<AppState>,
     Path((key, digest)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    if !state
+    state
         .auth()
-        .enforce(&auth.subject, "artifact", "evict")
-        .await?
-    {
-        return Err(ApiError::FORBIDDEN);
-    }
+        .require(&auth.subject, "artifact", "evict")
+        .await?;
     let evicted = state
         .spectra()
         .artifacts()

@@ -31,6 +31,9 @@ pub enum AuthError {
 
     #[error("password must be changed before continuing")]
     MustChangePassword,
+
+    #[error("permission denied")]
+    Forbidden,
 }
 
 impl AuthError {

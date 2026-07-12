@@ -118,6 +118,39 @@ async fn read_json(response: Response) -> (StatusCode, Value) {
     (status, json)
 }
 
+/// Builds an app whose API key has the given built-in role. Used to exercise
+/// authorization decisions for non-admin actors.
+async fn app_with_role(role: &str) -> (Router, String) {
+    let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let storage = Storage::open(":memory:").await.unwrap();
+    let artifacts = Arc::new(Artifacts::new(storage.clone(), root));
+
+    let mut registry = TaskRegistry::new();
+    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
+    let tasks = Tasks::new(storage.clone(), registry);
+
+    let auth = aperture_auth::AuthHandle::new(storage.clone())
+        .await
+        .unwrap();
+
+    let spectra = Spectra::new(
+        Arc::clone(&artifacts),
+        tasks.clone(),
+        SpectraConfig::default(),
+        ActorId::SYSTEM,
+    );
+
+    let password = Password::generate();
+    let actor = auth.create_user(role, &password, None).await.unwrap();
+    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
+    let subject = aperture_auth::apikey_subject(api_key.id);
+    auth.assign_role(&subject, role).await.unwrap();
+
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks, auth, storage);
+    (app(state), raw_key.as_str().to_owned())
+}
+
 #[tokio::test]
 async fn lists_artifacts_with_summary() {
     let (app, _artifacts, _storage, token) = seeded_app().await;
@@ -404,4 +437,35 @@ async fn filters_artifacts_and_versions() {
     )
     .await;
     assert!(miss["items"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn viewer_is_forbidden_from_user_management() {
+    let (app, token) = app_with_role(roles::VIEWER).await;
+
+    let (status, _) = get_json(&app, &token, "/api/v1/users").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = post_json(
+        &app,
+        &token,
+        "/api/v1/users",
+        json!({"username": "new-user", "password": "hunter2hunter2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_can_create_users() {
+    let (app, token) = app_with_role(roles::ADMIN).await;
+
+    let (status, _) = post_json(
+        &app,
+        &token,
+        "/api/v1/users",
+        json!({"username": "new-user", "password": "hunter2hunter2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
 }

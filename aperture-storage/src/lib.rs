@@ -7,7 +7,12 @@
 
 use std::time::Duration;
 
-use turso::{Builder, Connection, Database};
+use jiff::Timestamp;
+use turso::transaction::{Transaction, TransactionBehavior};
+use turso::{Builder, Connection, Database, params_from_iter};
+
+use crate::macros::sql;
+use crate::sql::{ToSql, get};
 
 pub use self::actor::{Actor, ActorId, ActorKind, ActorRepository};
 pub use self::api_key::{ApiKey, ApiKeyId, ApiKeyRepository};
@@ -127,5 +132,87 @@ impl Storage {
     /// Returns the repository over the policy rules table.
     pub fn policy(&self) -> Result<PolicyRuleRepository> {
         Ok(PolicyRuleRepository::new(self.connect()?))
+    }
+
+    /// Atomically creates the first user (and its actor) when no users exist.
+    ///
+    /// Returns `None` if a user already exists. The count check and inserts run
+    /// inside one `BEGIN IMMEDIATE` transaction, so concurrent setup attempts
+    /// serialize and only one succeeds.
+    pub async fn create_initial_user(
+        &self,
+        username: &str,
+        password_hash: &PasswordHash,
+        now: Timestamp,
+    ) -> Result<Option<(Actor, User)>> {
+        let conn = self.connect()?;
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(StorageError::from_turso)?;
+        let result = async {
+            let count: i64 = {
+                let mut rows = tx
+                    .query(sql!(SELECT COUNT(*) FROM users), ())
+                    .await
+                    .map_err(StorageError::from_turso)?;
+                match rows.next().await.map_err(StorageError::from_turso)? {
+                    Some(row) => get(&row, 0)?,
+                    None => 0,
+                }
+            };
+            if count > 0 {
+                return Ok(None);
+            }
+            tx.execute(
+                sql!(INSERT INTO actors (kind, display_name, created_at) VALUES (?1, ?2, ?3)),
+                params_from_iter([ActorKind::User.to_sql(), username.to_sql(), now.to_sql()]),
+            )
+            .await
+            .map_err(StorageError::from_turso)?;
+            let actor_id = ActorId::from(tx.last_insert_rowid());
+            tx.execute(
+                sql!(
+                    INSERT INTO users (actor_id, username, password_hash, password_change_required_at, created_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5)
+                ),
+                params_from_iter([
+                    actor_id.to_sql(),
+                    username.to_sql(),
+                    password_hash.to_sql(),
+                    None::<Timestamp>.to_sql(),
+                    now.to_sql(),
+                ]),
+            )
+            .await
+            .map_err(StorageError::from_turso)?;
+            let user_id = UserId::from(tx.last_insert_rowid());
+            let actor = Actor {
+                id: actor_id,
+                kind: ActorKind::User,
+                display_name: username.to_owned(),
+                created_at: now,
+                disabled_at: None,
+            };
+            let user = User {
+                id: user_id,
+                actor_id,
+                username: username.to_owned(),
+                password_hash: password_hash.clone(),
+                password_change_required_at: None,
+                created_at: now,
+            };
+            Ok(Some((actor, user)))
+        }
+        .await;
+        match result {
+            Ok(value) => {
+                tx.commit().await.map_err(StorageError::from_turso)?;
+                Ok(value)
+            }
+            Err(err) => {
+                let _ = tx.rollback().await;
+                Err(err)
+            }
+        }
     }
 }

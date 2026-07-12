@@ -76,6 +76,7 @@ impl From<AuthError> for ApiError {
             | AuthError::ApiKeyNotFound => StatusCode::UNAUTHORIZED,
             AuthError::ActorDisabled => StatusCode::FORBIDDEN,
             AuthError::MustChangePassword => StatusCode::FORBIDDEN,
+            AuthError::Forbidden => StatusCode::FORBIDDEN,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {

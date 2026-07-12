@@ -176,13 +176,13 @@ async fn setup(
     State(state): State<AppState>,
     Json(request): Json<SetupRequest>,
 ) -> Result<Response, ApiError> {
-    if !state.auth().is_setup_required().await? {
-        return Err(ApiError::CONFLICT);
-    }
-    let result = state
+    let Some(result) = state
         .auth()
         .setup_admin(&request.username, &request.password)
-        .await?;
+        .await?
+    else {
+        return Err(ApiError::CONFLICT);
+    };
     let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
         .http_only(true)
         .same_site(SameSite::Strict)

@@ -100,11 +100,15 @@ impl AuthHandle {
         &self.storage
     }
 
-    /// Checks whether `subject` may perform `action` on `object`.
-    pub async fn enforce(&self, subject: &str, obj: &str, act: &str) -> Result<bool> {
+    /// Requires that `subject` may perform `act` on `obj`. Returns
+    /// [`AuthError::Forbidden`] if denied.
+    pub async fn require(&self, subject: &str, obj: &str, act: &str) -> Result<()> {
         let e = self.enforcer.read().await;
-        e.enforce((subject, obj, act))
-            .map_err(AuthError::from_casbin)
+        if e.enforce((subject, obj, act)).map_err(AuthError::from_casbin)? {
+            Ok(())
+        } else {
+            Err(AuthError::Forbidden)
+        }
     }
 
     /// Assigns `role` to `subject` (e.g. `"actor:1"` -> `"admin"`).
@@ -346,14 +350,27 @@ impl AuthHandle {
         Ok(users.count().await? == 0)
     }
 
-    /// Creates the initial admin user and returns a login result with a
-    /// session token. Only succeeds when no users exist. The caller is
-    /// responsible for checking [`Self::is_setup_required`] first.
-    pub async fn setup_admin(&self, username: &str, password: &Password) -> Result<LoginResult> {
-        let actor = self.create_user(username, password, None).await?;
+    /// Creates the initial admin user when no users exist. The check and the
+    /// inserts run as one atomic storage transaction, so concurrent setup
+    /// attempts cannot both succeed. Returns `None` if a user already exists.
+    pub async fn setup_admin(
+        &self,
+        username: &str,
+        password: &Password,
+    ) -> Result<Option<LoginResult>> {
+        let now = Timestamp::now();
+        let hash = password.hash()?;
+        let Some((actor, _user)) = self
+            .storage
+            .create_initial_user(username, &hash, now)
+            .await?
+        else {
+            return Ok(None);
+        };
         let subject = actor_subject(actor.id);
         self.assign_role(&subject, roles::ADMIN).await?;
         tracing::info!(actor = actor.id.get(), "setup admin user");
-        self.login(username, password).await
+        let login = self.login(username, password).await?;
+        Ok(Some(login))
     }
 }
