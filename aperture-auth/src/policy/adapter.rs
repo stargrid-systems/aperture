@@ -1,6 +1,8 @@
 //! Casbin adapter backed by turso (libsql) via aperture-storage.
 
-use aperture_storage::PolicyRuleRepository;
+use std::str::FromStr;
+
+use aperture_storage::{PolicyRuleRepository, PolicyType};
 use async_trait::async_trait;
 use casbin::error::AdapterError;
 use casbin::{Adapter, Filter, Model};
@@ -22,8 +24,8 @@ impl Adapter for TursoAdapter {
     async fn load_policy(&mut self, m: &mut dyn Model) -> casbin::Result<()> {
         let rules = self.repo.load_all().await.map_err(map_storage_err)?;
         for rule in rules {
-            let sec = rule.ptype.chars().next().unwrap_or('p').to_string();
-            m.add_policy(&sec, &rule.ptype, rule.values);
+            let sec = rule.ptype.as_db().chars().next().unwrap_or('p').to_string();
+            m.add_policy(&sec, rule.ptype.as_db(), rule.values);
         }
         Ok(())
     }
@@ -37,10 +39,11 @@ impl Adapter for TursoAdapter {
     }
 
     async fn save_policy(&mut self, m: &mut dyn Model) -> casbin::Result<()> {
-        let mut rules: Vec<(String, Vec<String>)> = Vec::new();
+        let mut rules: Vec<(PolicyType, Vec<String>)> = Vec::new();
         for (sec, ptype) in [("p", "p"), ("g", "g")] {
+            let ty = PolicyType::from_str(ptype).map_err(map_storage_err)?;
             for policy in m.get_policy(sec, ptype) {
-                rules.push((ptype.to_owned(), policy));
+                rules.push((ty, policy));
             }
         }
         self.repo
@@ -65,6 +68,7 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rule: Vec<String>,
     ) -> casbin::Result<bool> {
+        let ptype = PolicyType::from_str(ptype).map_err(map_storage_err)?;
         self.repo
             .insert(ptype, &rule)
             .await
@@ -78,8 +82,8 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rules: Vec<Vec<String>>,
     ) -> casbin::Result<bool> {
-        let batch: Vec<(String, Vec<String>)> =
-            rules.into_iter().map(|r| (ptype.to_owned(), r)).collect();
+        let ptype = PolicyType::from_str(ptype).map_err(map_storage_err)?;
+        let batch: Vec<(PolicyType, Vec<String>)> = rules.into_iter().map(|r| (ptype, r)).collect();
         self.repo
             .insert_batch(&batch)
             .await
@@ -93,6 +97,7 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rule: Vec<String>,
     ) -> casbin::Result<bool> {
+        let ptype = PolicyType::from_str(ptype).map_err(map_storage_err)?;
         let removed = self
             .repo
             .delete(ptype, &rule)
@@ -107,8 +112,8 @@ impl Adapter for TursoAdapter {
         ptype: &str,
         rules: Vec<Vec<String>>,
     ) -> casbin::Result<bool> {
-        let batch: Vec<(String, Vec<String>)> =
-            rules.into_iter().map(|r| (ptype.to_owned(), r)).collect();
+        let ptype = PolicyType::from_str(ptype).map_err(map_storage_err)?;
+        let batch: Vec<(PolicyType, Vec<String>)> = rules.into_iter().map(|r| (ptype, r)).collect();
         self.repo
             .delete_batch(&batch)
             .await
@@ -123,6 +128,7 @@ impl Adapter for TursoAdapter {
         field_index: usize,
         field_values: Vec<String>,
     ) -> casbin::Result<bool> {
+        let ptype = PolicyType::from_str(ptype).map_err(map_storage_err)?;
         let removed = self
             .repo
             .delete_filtered(ptype, field_index, &field_values)

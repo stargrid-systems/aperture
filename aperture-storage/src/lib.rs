@@ -19,7 +19,7 @@ pub use self::log::{
     SpanFilter, SpanId, SpanParentFilter, SpanRecord,
 };
 pub use self::page::{ListQuery, Order, Page};
-pub use self::policy::{PolicyRule, PolicyRuleRepository};
+pub use self::policy::{PolicyRule, PolicyRuleRepository, PolicyType};
 pub use self::session::{Session, SessionId, SessionRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskId,

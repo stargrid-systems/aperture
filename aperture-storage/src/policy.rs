@@ -4,17 +4,65 @@
 //! format. This repository provides the CRUD operations the casbin adapter
 //! needs, without coupling the storage layer to casbin itself.
 
+use std::fmt;
+use std::str::FromStr;
+
 use turso::{Connection, Value, params_from_iter};
 
 use crate::error::{Result, StorageError};
 use crate::macros::sql;
 use crate::sql::{ToSql, get};
 
+/// Whether a rule is a policy (`p`) or a grouping (`g`) rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyType {
+    /// A policy rule (`p`).
+    Policy,
+    /// A grouping (role) rule (`g`).
+    Grouping,
+}
+
+impl PolicyType {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Policy => "p",
+            Self::Grouping => "g",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "p" => Ok(Self::Policy),
+            "g" => Ok(Self::Grouping),
+            other => Err(StorageError::UnknownPolicyType(other.to_owned())),
+        }
+    }
+}
+
+impl fmt::Display for PolicyType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_db())
+    }
+}
+
+impl FromStr for PolicyType {
+    type Err = StorageError;
+    fn from_str(s: &str) -> Result<Self> {
+        Self::from_db(s)
+    }
+}
+
+impl ToSql for PolicyType {
+    fn to_sql(&self) -> Value {
+        Value::Text(self.as_db().to_owned())
+    }
+}
+
 /// One policy or grouping rule, in casbin's flat string format.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyRule {
-    /// Policy type: `"p"` for policy rules, `"g"` for grouping (role) rules.
-    pub ptype: String,
+    /// Whether this is a policy or grouping rule.
+    pub ptype: PolicyType,
     /// The rule values (v0 through v5). Unused trailing values are empty
     /// strings.
     pub values: Vec<String>,
@@ -44,6 +92,7 @@ impl PolicyRuleRepository {
         let mut rules = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             let ptype: String = get(&row, 0)?;
+            let ptype = PolicyType::from_db(&ptype)?;
             let mut values = Vec::with_capacity(6);
             for i in 1..=6 {
                 values.push(get::<String>(&row, i)?);
@@ -54,8 +103,8 @@ impl PolicyRuleRepository {
     }
 
     /// Inserts a single rule.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn insert(&self, ptype: &str, values: &[String]) -> Result<()> {
+    #[tracing::instrument(level = "info", skip(self, values))]
+    pub async fn insert(&self, ptype: PolicyType, values: &[String]) -> Result<()> {
         let mut params: Vec<Value> = vec![ptype.to_sql()];
         for i in 0..6 {
             if i < values.len() {
@@ -79,8 +128,8 @@ impl PolicyRuleRepository {
 
     /// Deletes all rules matching `ptype` and `values` exactly. Returns how
     /// many were removed.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn delete(&self, ptype: &str, values: &[String]) -> Result<usize> {
+    #[tracing::instrument(level = "info", skip(self, values))]
+    pub async fn delete(&self, ptype: PolicyType, values: &[String]) -> Result<usize> {
         let mut params: Vec<Value> = vec![ptype.to_sql()];
         for i in 0..6 {
             if i < values.len() {
@@ -110,7 +159,7 @@ impl PolicyRuleRepository {
     #[tracing::instrument(level = "info", skip(self, field_values))]
     pub async fn delete_filtered(
         &self,
-        ptype: &str,
+        ptype: PolicyType,
         field_index: usize,
         field_values: &[String],
     ) -> Result<usize> {
@@ -163,7 +212,7 @@ impl PolicyRuleRepository {
     /// Clears the table then inserts all `rules` in a single transaction.
     /// On failure the table is left unchanged.
     #[tracing::instrument(level = "info", skip(self, rules))]
-    pub async fn replace_all(&self, rules: &[(String, Vec<String>)]) -> Result<()> {
+    pub async fn replace_all(&self, rules: &[(PolicyType, Vec<String>)]) -> Result<()> {
         let tx = self
             .connection
             .unchecked_transaction()
@@ -171,7 +220,7 @@ impl PolicyRuleRepository {
             .map_err(StorageError::from_turso)?;
         self.clear().await?;
         for (ptype, values) in rules {
-            self.insert(ptype, values).await?;
+            self.insert(*ptype, values).await?;
         }
         tx.commit().await.map_err(StorageError::from_turso)?;
         Ok(())
@@ -179,14 +228,14 @@ impl PolicyRuleRepository {
 
     /// Inserts multiple rules in a single transaction.
     #[tracing::instrument(level = "info", skip(self, rules))]
-    pub async fn insert_batch(&self, rules: &[(String, Vec<String>)]) -> Result<()> {
+    pub async fn insert_batch(&self, rules: &[(PolicyType, Vec<String>)]) -> Result<()> {
         let tx = self
             .connection
             .unchecked_transaction()
             .await
             .map_err(StorageError::from_turso)?;
         for (ptype, values) in rules {
-            self.insert(ptype, values).await?;
+            self.insert(*ptype, values).await?;
         }
         tx.commit().await.map_err(StorageError::from_turso)?;
         Ok(())
@@ -195,7 +244,7 @@ impl PolicyRuleRepository {
     /// Deletes multiple exact-match rules in a single transaction. Returns the
     /// total number of rows removed.
     #[tracing::instrument(level = "info", skip(self, rules))]
-    pub async fn delete_batch(&self, rules: &[(String, Vec<String>)]) -> Result<usize> {
+    pub async fn delete_batch(&self, rules: &[(PolicyType, Vec<String>)]) -> Result<usize> {
         let tx = self
             .connection
             .unchecked_transaction()
@@ -203,7 +252,7 @@ impl PolicyRuleRepository {
             .map_err(StorageError::from_turso)?;
         let mut total = 0;
         for (ptype, values) in rules {
-            total += self.delete(ptype, values).await?;
+            total += self.delete(*ptype, values).await?;
         }
         tx.commit().await.map_err(StorageError::from_turso)?;
         Ok(total)
