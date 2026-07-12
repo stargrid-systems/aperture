@@ -15,8 +15,11 @@ use axum::{Json, Router};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
-use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::{Discriminator, ObjectBuilder, OneOfBuilder, Ref, Schema, Type};
+use utoipa::openapi::security::{
+    ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityRequirement, SecurityScheme,
+};
+use utoipa::openapi::{Components, RefOr};
 use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
@@ -102,11 +105,31 @@ fn api_router() -> OpenApiRouter<AppState> {
 }
 
 /// Returns the generated OpenAPI specification for the gateway API, with the
-/// registered task kinds in `descriptors` projected into it.
+/// registered task kinds projected in.
 pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
     let mut spec = self::api_router().split_for_parts().1;
+    add_security_schemes(&mut spec);
     project_tasks(&mut spec, descriptors);
     spec
+}
+
+/// Adds session-cookie and bearer-token security schemes plus a default
+/// security requirement to the spec. Endpoints annotated with
+/// `security(())` override the default and are documented as public.
+fn add_security_schemes(spec: &mut OpenApiSpec) {
+    let components = spec.components.get_or_insert_with(Components::new);
+    components.security_schemes.insert(
+        "SessionCookie".to_owned(),
+        SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("session"))),
+    );
+    components.security_schemes.insert(
+        "BearerAuth".to_owned(),
+        SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+    );
+    spec.security = Some(vec![
+        SecurityRequirement::default().add::<&str, [&str; 0], &str>("SessionCookie", []),
+        SecurityRequirement::default().add::<&str, [&str; 0], &str>("BearerAuth", []),
+    ]);
 }
 
 /// Paths that do not require authentication.

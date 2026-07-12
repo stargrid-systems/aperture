@@ -47,6 +47,7 @@ pub struct LoginResponse {
         (status = 200, description = "Login successful", body = LoginResponse),
         (status = 401, description = "Invalid credentials"),
     ),
+    security(()),
 )]
 async fn login(
     State(state): State<AppState>,
@@ -140,6 +141,7 @@ pub struct SetupStatusResponse {
     path = "/setup-status",
     operation_id = operation_ids::SETUP_STATUS,
     responses((status = 200, description = "Setup status", body = SetupStatusResponse)),
+    security(()),
 )]
 async fn setup_status(
     State(state): State<AppState>,
@@ -164,6 +166,7 @@ pub struct SetupRequest {
         (status = 200, description = "Setup complete, session created", body = LoginResponse),
         (status = 409, description = "Setup already complete"),
     ),
+    security(()),
 )]
 async fn setup(
     State(state): State<AppState>,
