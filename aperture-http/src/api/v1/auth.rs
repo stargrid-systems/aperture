@@ -117,7 +117,7 @@ async fn change_password(
 ) -> Result<StatusCode, ApiError> {
     let users = state.auth().storage().users()?;
     let user = users
-        .find_by_actor_id(auth.actor_id())
+        .find_by_actor_id(auth.actor.id)
         .await?
         .ok_or(ApiError::FORBIDDEN)?;
     if !aperture_auth::verify_password(&request.current_password, &user.password_hash)? {

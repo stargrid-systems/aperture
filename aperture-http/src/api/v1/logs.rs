@@ -35,7 +35,7 @@ async fn list_logs(
     State(state): State<AppState>,
     Query(params): Query<LogListParams>,
 ) -> Result<Json<Page<LogEventResponse>>, ApiError> {
-    if !state.auth().enforce(auth.subject(), "log", "read").await? {
+    if !state.auth().enforce(&auth.subject, "log", "read").await? {
         return Err(ApiError::FORBIDDEN);
     }
     let query = params.to_query();
@@ -68,7 +68,7 @@ async fn list_log_targets(
     State(state): State<AppState>,
     Query(params): Query<LogTargetListParams>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    if !state.auth().enforce(auth.subject(), "log", "read").await? {
+    if !state.auth().enforce(&auth.subject, "log", "read").await? {
         return Err(ApiError::FORBIDDEN);
     }
     let logs = state.logs()?;
@@ -87,7 +87,7 @@ async fn list_log_boots(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BootResponse>>, ApiError> {
-    if !state.auth().enforce(auth.subject(), "log", "read").await? {
+    if !state.auth().enforce(&auth.subject, "log", "read").await? {
         return Err(ApiError::FORBIDDEN);
     }
     let logs = state.logs()?;
@@ -108,7 +108,7 @@ async fn list_spans(
     State(state): State<AppState>,
     Query(params): Query<LogSpanListParams>,
 ) -> Result<Json<Page<LogSpanResponse>>, ApiError> {
-    if !state.auth().enforce(auth.subject(), "log", "read").await? {
+    if !state.auth().enforce(&auth.subject, "log", "read").await? {
         return Err(ApiError::FORBIDDEN);
     }
     let query = params.to_query();
@@ -148,7 +148,7 @@ async fn get_span(
     State(state): State<AppState>,
     Path(id): Path<SpanId>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
-    if !state.auth().enforce(auth.subject(), "log", "read").await? {
+    if !state.auth().enforce(&auth.subject, "log", "read").await? {
         return Err(ApiError::FORBIDDEN);
     }
     let logs = state.logs()?;

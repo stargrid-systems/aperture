@@ -56,7 +56,7 @@ async fn list_users(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
-    state.auth().enforce(auth.subject(), "user", "read").await?;
+    state.auth().enforce(&auth.subject, "user", "read").await?;
     let users = state.auth().list_users().await?;
     Ok(Json(users.into_iter().map(UserResponse::from).collect()))
 }
@@ -79,7 +79,7 @@ async fn create_user(
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     state
         .auth()
-        .enforce(auth.subject(), "user", "create")
+        .enforce(&auth.subject, "user", "create")
         .await?;
     let actor = state
         .auth()
@@ -115,7 +115,7 @@ async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<UserId>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    state.auth().enforce(auth.subject(), "user", "read").await?;
+    state.auth().enforce(&auth.subject, "user", "read").await?;
     let user = state
         .auth()
         .storage()
@@ -144,7 +144,7 @@ async fn delete_user(
 ) -> Result<StatusCode, ApiError> {
     state
         .auth()
-        .enforce(auth.subject(), "user", "delete")
+        .enforce(&auth.subject, "user", "delete")
         .await?;
     let user = state
         .auth()

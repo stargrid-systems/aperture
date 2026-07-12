@@ -57,7 +57,7 @@ async fn list_api_keys(
         .auth()
         .storage()
         .api_keys()?
-        .list_for_actor(auth.actor_id())
+        .list_for_actor(auth.actor.id)
         .await?;
     Ok(Json(
         keys.into_iter()
@@ -86,11 +86,11 @@ async fn create_api_key(
 ) -> Result<(StatusCode, Json<CreateApiKeyResponse>), ApiError> {
     state
         .auth()
-        .enforce(auth.subject(), "api-key", "create")
+        .enforce(&auth.subject, "api-key", "create")
         .await?;
     let (raw_key, api_key) = state
         .auth()
-        .create_api_key(auth.actor_id(), &request.name)
+        .create_api_key(auth.actor.id, &request.name)
         .await?;
     if let Some(role) = &request.role {
         let subject = aperture_auth::apikey_subject(api_key.id);
@@ -125,10 +125,10 @@ async fn delete_api_key(
 ) -> Result<StatusCode, ApiError> {
     let repo = state.auth().storage().api_keys()?;
     let key = repo.get(id).await?.ok_or(ApiError::NOT_FOUND)?;
-    if key.actor_id != auth.actor_id() {
+    if key.actor_id != auth.actor.id {
         state
             .auth()
-            .enforce(auth.subject(), "api-key", "delete")
+            .enforce(&auth.subject, "api-key", "delete")
             .await?;
     }
     repo.delete(id).await?;

@@ -36,7 +36,7 @@ async fn list_artifacts(
 ) -> Result<Json<Page<ArtifactSummaryResponse>>, ApiError> {
     if !state
         .auth()
-        .enforce(auth.subject(), "artifact", "read")
+        .enforce(&auth.subject, "artifact", "read")
         .await?
     {
         return Err(ApiError::FORBIDDEN);
@@ -67,7 +67,7 @@ async fn get_artifact(
 ) -> Result<Json<ArtifactSummaryResponse>, ApiError> {
     if !state
         .auth()
-        .enforce(auth.subject(), "artifact", "read")
+        .enforce(&auth.subject, "artifact", "read")
         .await?
     {
         return Err(ApiError::FORBIDDEN);
@@ -97,7 +97,7 @@ async fn list_versions(
 ) -> Result<Json<Page<ArtifactVersionResponse>>, ApiError> {
     if !state
         .auth()
-        .enforce(auth.subject(), "artifact", "read")
+        .enforce(&auth.subject, "artifact", "read")
         .await?
     {
         return Err(ApiError::FORBIDDEN);
@@ -137,7 +137,7 @@ async fn get_version(
 ) -> Result<Json<ArtifactVersionResponse>, ApiError> {
     if !state
         .auth()
-        .enforce(auth.subject(), "artifact", "read")
+        .enforce(&auth.subject, "artifact", "read")
         .await?
     {
         return Err(ApiError::FORBIDDEN);
@@ -169,7 +169,7 @@ async fn delete_version(
 ) -> Result<StatusCode, ApiError> {
     if !state
         .auth()
-        .enforce(auth.subject(), "artifact", "evict")
+        .enforce(&auth.subject, "artifact", "evict")
         .await?
     {
         return Err(ApiError::FORBIDDEN);

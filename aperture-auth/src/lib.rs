@@ -60,18 +60,6 @@ pub struct AuthenticatedActor {
     pub must_change_password: bool,
 }
 
-impl AuthenticatedActor {
-    /// The actor's database id.
-    pub fn actor_id(&self) -> ActorId {
-        self.actor.id
-    }
-
-    /// The casbin subject for enforcement.
-    pub fn subject(&self) -> &str {
-        &self.subject
-    }
-}
-
 /// Axum extractor that reads the actor from request extensions (populated by
 /// the auth middleware).
 impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedActor {

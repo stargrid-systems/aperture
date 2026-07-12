@@ -40,7 +40,7 @@ async fn list_tasks(
     State(state): State<AppState>,
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
-    if !state.auth().enforce(auth.subject(), "task", "read").await? {
+    if !state.auth().enforce(&auth.subject, "task", "read").await? {
         return Err(ApiError::FORBIDDEN);
     }
     let tasks = state.tasks();
@@ -84,11 +84,11 @@ async fn create_task(
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
     state
         .auth()
-        .enforce(auth.subject(), "task", "create")
+        .enforce(&auth.subject, "task", "create")
         .await?;
     let task = state
         .tasks()
-        .create(&request.kind, request.input, auth.actor_id())
+        .create(&request.kind, request.input, auth.actor.id)
         .await?;
     Ok((StatusCode::ACCEPTED, Json(TaskResponse::new(task, None))))
 }
@@ -109,7 +109,7 @@ async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
-    if !state.auth().enforce(auth.subject(), "task", "read").await? {
+    if !state.auth().enforce(&auth.subject, "task", "read").await? {
         return Err(ApiError::FORBIDDEN);
     }
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
@@ -137,7 +137,7 @@ async fn cancel_task(
 ) -> Result<StatusCode, ApiError> {
     if !state
         .auth()
-        .enforce(auth.subject(), "task", "cancel")
+        .enforce(&auth.subject, "task", "cancel")
         .await?
     {
         return Err(ApiError::FORBIDDEN);
@@ -162,7 +162,7 @@ async fn list_definitions(
 ) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
     if !state
         .auth()
-        .enforce(auth.subject(), "task-definition", "read")
+        .enforce(&auth.subject, "task-definition", "read")
         .await?
     {
         return Err(ApiError::FORBIDDEN);
