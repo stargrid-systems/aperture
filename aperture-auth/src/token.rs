@@ -73,8 +73,7 @@ impl RawApiKey {
     /// lookup, or `None` if the key does not have the expected prefix.
     pub fn lookup_prefix(&self) -> Option<String> {
         let rest = self.0.strip_prefix(API_KEY_PREFIX)?;
-        let len = rest.len().min(API_KEY_LOOKUP_LEN);
-        Some(rest[..len].to_owned())
+        Some(rest.chars().take(API_KEY_LOOKUP_LEN).collect())
     }
 
     /// Returns the SHA-256 hash of this key.

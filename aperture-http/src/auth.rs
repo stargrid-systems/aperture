@@ -1,6 +1,8 @@
 //! Auth middleware, path predicates, session cookie helpers, and OpenAPI
 //! security scheme registration.
 
+use std::error::Error as StdError;
+
 use aperture_auth::{AuthenticatedActor, RawApiKey, SessionToken};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -65,18 +67,29 @@ async fn resolve_actor(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<AuthenticatedActor, Response> {
-    if let Some(token) = extract_session_token(headers)
-        && let Ok(Some(actor)) = state
+    if let Some(token) = extract_session_token(headers) {
+        match state
             .auth()
             .resolve_session(&SessionToken::new(token))
             .await
-    {
-        return Ok(actor);
+        {
+            Ok(Some(actor)) => return Ok(actor),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::error!(error = &err as &dyn StdError, "session resolution failed");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+        }
     }
-    if let Some(key) = extract_bearer_token(headers)
-        && let Ok(Some(actor)) = state.auth().resolve_api_key(&RawApiKey::new(key)).await
-    {
-        return Ok(actor);
+    if let Some(key) = extract_bearer_token(headers) {
+        match state.auth().resolve_api_key(&RawApiKey::new(key)).await {
+            Ok(Some(actor)) => return Ok(actor),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::error!(error = &err as &dyn StdError, "api key resolution failed");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+        }
     }
     Err(StatusCode::UNAUTHORIZED.into_response())
 }

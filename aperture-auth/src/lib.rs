@@ -11,7 +11,7 @@
 //!   scoped permissions enforced as a separate casbin subject.
 
 use std::result::Result as StdResult;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use aperture_storage::{Actor, ActorId, ActorKind, Storage, UserId};
@@ -35,6 +35,14 @@ mod token;
 /// Sliding session lifetime. A session expires after this duration of
 /// inactivity.
 const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// A dummy hash used to keep login timing constant when the username does not
+/// exist. The password it hashes is irrelevant; verification always fails.
+static DUMMY_HASH: LazyLock<aperture_storage::PasswordHash> = LazyLock::new(|| {
+    Password::new("dummy".to_owned())
+        .hash()
+        .expect("dummy password hash must not fail")
+});
 
 /// The result of a successful login.
 #[derive(Debug)]
@@ -154,10 +162,13 @@ impl AuthHandle {
     /// Returns the session token for the caller to set as a cookie.
     pub async fn login(&self, username: &str, password: &Password) -> Result<LoginResult> {
         let users = self.storage.users()?;
-        let user = users
-            .find_by_username(username)
-            .await?
-            .ok_or(AuthError::InvalidCredentials)?;
+        let user = match users.find_by_username(username).await? {
+            Some(u) => u,
+            None => {
+                let _ = password.verify_against(&DUMMY_HASH);
+                return Err(AuthError::InvalidCredentials);
+            }
+        };
         if !password.verify_against(&user.password_hash)? {
             return Err(AuthError::InvalidCredentials);
         }
@@ -299,11 +310,9 @@ impl AuthHandle {
     ) -> Result<Actor> {
         let now = Timestamp::now();
         let hash = password.hash()?;
-        let actors = self.storage.actors()?;
-        let actor = actors.create(ActorKind::User, username, now).await?;
-        let users = self.storage.users()?;
-        users
-            .create(actor.id, username, &hash, password_change_required_at, now)
+        let (actor, _user) = self
+            .storage
+            .create_user(username, &hash, password_change_required_at, now)
             .await?;
         Ok(actor)
     }

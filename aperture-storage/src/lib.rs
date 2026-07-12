@@ -133,6 +133,73 @@ impl Storage {
         Ok(PolicyRuleRepository::new(self.connect()?))
     }
 
+    /// Creates a user actor and user record in one transaction. If the user
+    /// insert fails (e.g. duplicate username), the actor insert is rolled back.
+    pub async fn create_user(
+        &self,
+        username: &str,
+        password_hash: &PasswordHash,
+        password_change_required_at: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<(Actor, User)> {
+        let conn = self.connect()?;
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(StorageError::from_turso)?;
+        let result = async {
+            tx.execute(
+                sql!(INSERT INTO actors (kind, display_name, created_at) VALUES (?1, ?2, ?3)),
+                params_from_iter([ActorKind::User.to_sql(), username.to_sql(), now.to_sql()]),
+            )
+            .await
+            .map_err(StorageError::from_turso)?;
+            let actor_id = ActorId::from(tx.last_insert_rowid());
+            tx.execute(
+                sql!(
+                    INSERT INTO users (actor_id, username, password_hash, password_change_required_at, created_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5)
+                ),
+                params_from_iter([
+                    actor_id.to_sql(),
+                    username.to_sql(),
+                    password_hash.to_sql(),
+                    password_change_required_at.to_sql(),
+                    now.to_sql(),
+                ]),
+            )
+            .await
+            .map_err(StorageError::from_turso)?;
+            let user_id = UserId::from(tx.last_insert_rowid());
+            let actor = Actor {
+                id: actor_id,
+                kind: ActorKind::User,
+                display_name: username.to_owned(),
+                created_at: now,
+                disabled_at: None,
+            };
+            let user = User {
+                id: user_id,
+                actor_id,
+                username: username.to_owned(),
+                password_hash: password_hash.clone(),
+                password_change_required_at,
+                created_at: now,
+            };
+            Ok((actor, user))
+        }
+        .await;
+        match result {
+            Ok(value) => {
+                tx.commit().await.map_err(StorageError::from_turso)?;
+                Ok(value)
+            }
+            Err(err) => {
+                let _ = tx.rollback().await;
+                Err(err)
+            }
+        }
+    }
+
     /// Atomically creates the first user (and its actor) when no users exist.
     ///
     /// Returns `None` if a user already exists. The count check and inserts run
