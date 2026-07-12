@@ -32,6 +32,10 @@ impl ActorId {
     pub const fn get(self) -> i64 {
         self.0.get()
     }
+
+    pub const fn from_i64(value: i64) -> Self {
+        Self(DbId::from_i64(value))
+    }
 }
 
 impl From<i64> for ActorId {

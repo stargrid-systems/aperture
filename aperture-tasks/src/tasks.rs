@@ -310,7 +310,7 @@ impl TasksInner {
         let id = self
             .storage
             .tasks()?
-            .create_running(kind, parent_id, Some(initiator), &input_json, now)
+            .create_running(kind, parent_id, initiator, &input_json, now)
             .await?;
 
         let cancel = match parent_id.and_then(|parent| self.parent_token(parent)) {
@@ -359,7 +359,7 @@ impl TasksInner {
             id,
             kind: kind.to_owned(),
             parent_id,
-            initiator_id: Some(initiator),
+            initiator_id: initiator,
             status: TaskStatus::Running,
             input: input_json,
             output: None,

@@ -78,7 +78,7 @@ pub(super) const SQL: &str = sql!(
         id INTEGER PRIMARY KEY,
         kind TEXT NOT NULL,
         parent_id INTEGER REFERENCES tasks (id),
-        initiator_id INTEGER REFERENCES actors (id),
+        initiator_id INTEGER NOT NULL REFERENCES actors (id),
         status TEXT NOT NULL,
         input TEXT NOT NULL,
         output TEXT,

@@ -162,7 +162,7 @@ pub struct TaskInvocation {
     /// The parent invocation, if this task was spawned by another.
     pub parent_id: Option<TaskId>,
     /// The actor that initiated this task. Child tasks inherit the parent's.
-    pub initiator_id: Option<ActorId>,
+    pub initiator_id: ActorId,
     /// The lifecycle state.
     pub status: TaskStatus,
     /// JSON-encoded input the task was created with.
@@ -323,7 +323,7 @@ impl TaskRepository {
         &self,
         kind: &str,
         parent_id: Option<TaskId>,
-        initiator_id: Option<ActorId>,
+        initiator_id: ActorId,
         input: &str,
         created_at: Timestamp,
     ) -> Result<TaskId> {
@@ -357,7 +357,7 @@ impl TaskRepository {
         &self,
         kind: &str,
         parent_id: Option<TaskId>,
-        initiator_id: Option<ActorId>,
+        initiator_id: ActorId,
         input: &str,
         started_at: Timestamp,
     ) -> Result<TaskId> {

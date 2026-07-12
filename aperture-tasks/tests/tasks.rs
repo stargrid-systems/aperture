@@ -363,7 +363,7 @@ async fn reconcile_marks_orphaned_invocations() {
     let id = storage
         .tasks()
         .unwrap()
-        .create("double", None, Some(ActorId::from(1)), "{}", at(1_000))
+        .create("double", None, ActorId::from(1), "{}", at(1_000))
         .await
         .unwrap();
     storage

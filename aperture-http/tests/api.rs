@@ -4,7 +4,7 @@ use std::{env, fs, process};
 use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::roles;
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
-use aperture_storage::ArtifactId;
+use aperture_storage::{ActorId, ArtifactId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -247,7 +247,13 @@ async fn reads_recorded_tasks() {
     let (app, artifacts, token) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let id = repo
-        .create("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
+        .create(
+            "download",
+            None,
+            ActorId::from(1),
+            r#"{"key":"spectra"}"#,
+            at(1_000),
+        )
         .await
         .unwrap();
     repo.finish(
@@ -277,7 +283,13 @@ async fn filters_tasks_by_json_field() {
     let (app, artifacts, token) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let spectra = repo
-        .create("download", None, None, r#"{"key":"spectra"}"#, at(1_000))
+        .create(
+            "download",
+            None,
+            ActorId::from(1),
+            r#"{"key":"spectra"}"#,
+            at(1_000),
+        )
         .await
         .unwrap();
     repo.finish(
@@ -290,7 +302,13 @@ async fn filters_tasks_by_json_field() {
     .await
     .unwrap();
     let other = repo
-        .create("download", None, None, r#"{"key":"other"}"#, at(1_100))
+        .create(
+            "download",
+            None,
+            ActorId::from(1),
+            r#"{"key":"other"}"#,
+            at(1_100),
+        )
         .await
         .unwrap();
     repo.finish(other, TaskStatus::Failed, at(1_150), None, Some("boom"))
