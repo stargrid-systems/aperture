@@ -29,6 +29,9 @@ use crate::sql::{Columns, ToSql, get};
 pub struct ActorId(DbId);
 
 impl ActorId {
+    /// The well-known system actor (id 1). Seeded by the initial migration.
+    pub const SYSTEM: Self = Self(DbId::from_i64(1));
+
     pub const fn get(self) -> i64 {
         self.0.get()
     }

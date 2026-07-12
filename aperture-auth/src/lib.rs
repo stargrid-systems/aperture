@@ -349,19 +349,6 @@ impl AuthHandle {
         Ok(())
     }
 
-    /// Ensures a system actor exists. Returns its id.
-    pub async fn ensure_system_actor(&self) -> Result<ActorId> {
-        let actors = self.storage.actors()?;
-        let existing = actors.list_by_kind(ActorKind::System).await?;
-        if let Some(actor) = existing.into_iter().next() {
-            return Ok(actor.id);
-        }
-        let now = Timestamp::now();
-        let actor = actors.create(ActorKind::System, "system", now).await?;
-        tracing::info!(actor = actor.id.get(), "created system actor");
-        Ok(actor.id)
-    }
-
     /// Returns true when no users exist yet (first-run setup needed).
     pub async fn is_setup_required(&self) -> Result<bool> {
         let users = self.storage.users()?;

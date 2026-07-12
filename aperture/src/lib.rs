@@ -7,7 +7,7 @@ use std::sync::Arc;
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
-use aperture_storage::Storage;
+use aperture_storage::{ActorId, Storage};
 use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
@@ -30,12 +30,8 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
 
     artifacts.sync().await.into_diagnostic()?;
 
-    // Auth: build enforcer, seed policies, ensure system actor.
+    // Auth: build enforcer, seed policies.
     let auth = AuthHandle::new(storage.clone())
-        .await
-        .map_err(|e| miette::miette!("{e:#}"))?;
-    let system_actor = auth
-        .ensure_system_actor()
         .await
         .map_err(|e| miette::miette!("{e:#}"))?;
 
@@ -50,7 +46,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
-        system_actor,
+        ActorId::SYSTEM,
     );
     // Open a cached frontend right away. A missing one is fetched lazily on the
     // first request.

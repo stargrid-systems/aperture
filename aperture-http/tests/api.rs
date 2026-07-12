@@ -57,13 +57,12 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, Storage, String) {
     let auth = aperture_auth::AuthHandle::new(storage.clone())
         .await
         .unwrap();
-    let system_actor = auth.ensure_system_actor().await.unwrap();
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
-        system_actor,
+        ActorId::SYSTEM,
     );
 
     let password = aperture_auth::generate_session_token();
