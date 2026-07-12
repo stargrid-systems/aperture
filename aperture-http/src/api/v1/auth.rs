@@ -22,6 +22,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(login))
         .routes(routes!(logout))
         .routes(routes!(change_password))
+        .routes(routes!(setup_status))
+        .routes(routes!(setup))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -125,6 +127,70 @@ async fn change_password(
         .change_password(user.id, &request.new_password)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SetupStatusResponse {
+    setup_required: bool,
+}
+
+/// Returns whether initial setup (creating the first admin user) is needed.
+#[utoipa::path(
+    get,
+    path = "/setup-status",
+    operation_id = operation_ids::SETUP_STATUS,
+    responses((status = 200, description = "Setup status", body = SetupStatusResponse)),
+)]
+async fn setup_status(
+    State(state): State<AppState>,
+) -> Result<Json<SetupStatusResponse>, ApiError> {
+    let setup_required = state.auth().is_setup_required().await?;
+    Ok(Json(SetupStatusResponse { setup_required }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetupRequest {
+    username: String,
+    password: String,
+}
+
+/// Creates the initial admin user. Only available when no users exist.
+#[utoipa::path(
+    post,
+    path = "/setup",
+    operation_id = operation_ids::SETUP,
+    request_body = SetupRequest,
+    responses(
+        (status = 200, description = "Setup complete, session created", body = LoginResponse),
+        (status = 409, description = "Setup already complete"),
+    ),
+)]
+async fn setup(
+    State(state): State<AppState>,
+    Json(request): Json<SetupRequest>,
+) -> Result<Response, ApiError> {
+    if !state.auth().is_setup_required().await? {
+        return Err(ApiError::CONFLICT);
+    }
+    let result = state
+        .auth()
+        .setup_admin(&request.username, &request.password)
+        .await?;
+    let cookie = Cookie::build((SESSION_COOKIE, result.token))
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .path("/")
+        .max_age(CookieDuration::days(7))
+        .build();
+    let mut response = Json(LoginResponse {
+        must_change_password: result.must_change_password,
+    })
+    .into_response();
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        cookie.to_string().parse().expect("valid header value"),
+    );
+    Ok(response)
 }
 
 /// Extracts the raw session token from the `Cookie` header, if present.

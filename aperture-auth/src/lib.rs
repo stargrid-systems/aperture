@@ -373,19 +373,20 @@ impl AuthHandle {
         Ok(actor.id)
     }
 
-    /// Bootstraps the admin user if no users exist. Returns the generated
-    /// password if a new admin was created.
-    pub async fn bootstrap_admin(&self) -> Result<Option<String>> {
+    /// Returns true when no users exist yet (first-run setup needed).
+    pub async fn is_setup_required(&self) -> Result<bool> {
         let users = self.storage.users()?;
-        if users.count().await? > 0 {
-            return Ok(None);
-        }
-        let password = generate_session_token();
-        let now = Timestamp::now();
-        let actor = self.create_user("admin", &password, Some(now)).await?;
+        Ok(users.count().await? == 0)
+    }
+
+    /// Creates the initial admin user and returns a login result with a
+    /// session token. Only succeeds when no users exist. The caller is
+    /// responsible for checking [`Self::is_setup_required`] first.
+    pub async fn setup_admin(&self, username: &str, password: &str) -> Result<LoginResult> {
+        let actor = self.create_user(username, password, None).await?;
         let subject = actor_subject(actor.id);
         self.assign_role(&subject, roles::ADMIN).await?;
-        tracing::info!(actor = actor.id.get(), "bootstrapped admin user");
-        Ok(Some(password))
+        tracing::info!(actor = actor.id.get(), "setup admin user");
+        self.login(username, password).await
     }
 }

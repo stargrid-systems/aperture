@@ -62,6 +62,12 @@ pub const LOGOUT: &str = "logout";
 /// `POST /api/v1/auth/change-password`
 pub const CHANGE_PASSWORD: &str = "changePassword";
 
+/// `GET /api/v1/auth/setup-status`
+pub const SETUP_STATUS: &str = "getSetupStatus";
+
+/// `POST /api/v1/auth/setup`
+pub const SETUP: &str = "setup";
+
 /// `GET /api/v1/users`
 pub const LIST_USERS: &str = "listUsers";
 

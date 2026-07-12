@@ -30,8 +30,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
 
     let storage = artifacts.storage().clone();
 
-    // Auth: build enforcer, seed policies, ensure system actor, bootstrap
-    // admin.
+    // Auth: build enforcer, seed policies, ensure system actor.
     let auth = AuthHandle::new(storage.clone())
         .await
         .map_err(|e| miette::miette!("{e:#}"))?;
@@ -39,16 +38,6 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .ensure_system_actor()
         .await
         .map_err(|e| miette::miette!("{e:#}"))?;
-    match auth.bootstrap_admin().await {
-        Ok(Some(password)) => {
-            eprintln!("--- Admin bootstrap ---");
-            eprintln!("Username: admin");
-            eprintln!("Password: {password}");
-            eprintln!("------------------------");
-        }
-        Ok(None) => {}
-        Err(e) => return Err(miette::miette!("{e:#}")),
-    }
 
     // Register the task kinds and mark any invocations a previous run left
     // active as interrupted.
