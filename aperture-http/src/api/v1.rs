@@ -14,8 +14,6 @@ pub mod operation_ids;
 mod tasks;
 mod users;
 
-pub(crate) use auth::extract_session_token;
-
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_gateway_version))

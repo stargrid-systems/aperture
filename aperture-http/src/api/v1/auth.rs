@@ -12,10 +12,8 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::auth::{SESSION_COOKIE, clear_session_cookie, extract_session_token};
 use crate::error::ApiError;
-
-/// Name of the session cookie.
-const SESSION_COOKIE: &str = "aperture_session";
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -194,28 +192,4 @@ async fn setup(
         cookie.to_string().parse().expect("valid header value"),
     );
     Ok(response)
-}
-
-/// Extracts the raw session token from the `Cookie` header, if present.
-pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::COOKIE)?;
-    let header_str = value.to_str().ok()?;
-    for pair in header_str.split(';') {
-        let pair = pair.trim();
-        if let Some(rest) = pair.strip_prefix(&format!("{SESSION_COOKIE}=")) {
-            return Some(rest.to_owned());
-        }
-    }
-    None
-}
-
-/// Sets a removal cookie for the session.
-pub(crate) fn clear_session_cookie() -> String {
-    Cookie::build((SESSION_COOKIE, ""))
-        .http_only(true)
-        .same_site(SameSite::Strict)
-        .path("/")
-        .max_age(CookieDuration::seconds(0))
-        .build()
-        .to_string()
 }
