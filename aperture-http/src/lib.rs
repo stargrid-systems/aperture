@@ -21,7 +21,7 @@ use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
-use self::api::v1::auth::extract_session_token;
+use self::api::v1::extract_session_token;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};

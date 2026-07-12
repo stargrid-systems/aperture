@@ -49,10 +49,10 @@ impl AuthError {
         }
         AuthError::Policy(err.into())
     }
-}
 
-impl From<password_hash::Error> for AuthError {
-    fn from(err: password_hash::Error) -> Self {
+    /// Converts a password hashing error into an [`AuthError`] without
+    /// leaking the underlying crate type.
+    pub(crate) fn from_password_hash(err: password_hash::Error) -> Self {
         AuthError::PasswordHash(err.to_string())
     }
 }

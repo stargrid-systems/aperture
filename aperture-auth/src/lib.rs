@@ -114,16 +114,12 @@ impl AuthHandle {
         &self.storage
     }
 
-    // ── Enforcement ──────────────────────────────────────────────────────
-
     /// Checks whether `subject` may perform `action` on `object`.
     pub async fn enforce(&self, subject: &str, obj: &str, act: &str) -> Result<bool> {
         let e = self.enforcer.read().await;
         e.enforce((subject, obj, act))
             .map_err(AuthError::from_casbin)
     }
-
-    // ── Policy management ────────────────────────────────────────────────
 
     /// Assigns `role` to `subject` (e.g. `"actor:1"` -> `"admin"`).
     pub async fn assign_role(&self, subject: &str, role: &str) -> Result<()> {
@@ -166,7 +162,6 @@ impl AuthHandle {
             .map_err(AuthError::from_casbin)?;
         Ok(())
     }
-    // ── Authentication: sessions ─────────────────────────────────────────
 
     /// Verifies `username` / `password` and creates a new session.
     /// Returns the raw token for the caller to set as a cookie.
@@ -255,8 +250,6 @@ impl AuthHandle {
         Ok(sessions.delete_expired(Timestamp::now()).await?)
     }
 
-    // ── Authentication: API keys ─────────────────────────────────────────
-
     /// Creates a new API key for `actor_id` with `name`. Returns the raw key
     /// (only visible at creation time). The caller should grant permissions or
     /// assign a role for the new key's subject.
@@ -302,8 +295,6 @@ impl AuthHandle {
             must_change_password: false,
         }))
     }
-
-    // ── User management ──────────────────────────────────────────────────
 
     /// Creates a new user actor and user record. Returns the actor.
     /// If `password_change_required_at` is `Some`, the user must change their
@@ -357,8 +348,6 @@ impl AuthHandle {
             .await?;
         Ok(())
     }
-
-    // ── Bootstrap ────────────────────────────────────────────────────────
 
     /// Ensures a system actor exists. Returns its id.
     pub async fn ensure_system_actor(&self) -> Result<ActorId> {

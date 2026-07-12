@@ -16,7 +16,7 @@ pub fn hash_password(password: &str) -> Result<String, AuthError> {
     let salt = SaltString::generate(&mut OsRng);
     let hash = argon2()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(AuthError::from)?;
+        .map_err(AuthError::from_password_hash)?;
     Ok(hash.to_string())
 }
 
@@ -24,11 +24,11 @@ pub fn hash_password(password: &str) -> Result<String, AuthError> {
 ///
 /// Returns `Ok(true)` on match, `Ok(false)` on mismatch.
 pub fn verify_password(password: &str, phc_hash: &str) -> Result<bool, AuthError> {
-    let parsed = PasswordHash::new(phc_hash).map_err(AuthError::from)?;
+    let parsed = PasswordHash::new(phc_hash).map_err(AuthError::from_password_hash)?;
     match argon2().verify_password(password.as_bytes(), &parsed) {
         Ok(()) => Ok(true),
         Err(Error::Password) => Ok(false),
-        Err(err) => Err(AuthError::from(err)),
+        Err(err) => Err(AuthError::from_password_hash(err)),
     }
 }
 
@@ -38,8 +38,9 @@ mod tests {
 
     #[test]
     fn hash_and_verify_roundtrip() {
-        let hash = hash_password("hunter2").unwrap();
-        assert!(verify_password("hunter2", &hash).unwrap());
+        let password = crate::generate_session_token();
+        let hash = hash_password(&password).unwrap();
+        assert!(verify_password(&password, &hash).unwrap());
         assert!(!verify_password("wrong", &hash).unwrap());
     }
 }
