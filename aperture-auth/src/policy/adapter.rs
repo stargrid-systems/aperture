@@ -24,8 +24,8 @@ impl Adapter for TursoAdapter {
     async fn load_policy(&mut self, m: &mut dyn Model) -> casbin::Result<()> {
         let rules = self.repo.load_all().await.map_err(map_storage_err)?;
         for rule in rules {
-            let sec = rule.ptype.as_db().chars().next().unwrap_or('p').to_string();
-            m.add_policy(&sec, rule.ptype.as_db(), rule.values);
+            let ptype = rule.ptype.as_db();
+            m.add_policy(ptype, ptype, rule.values);
         }
         Ok(())
     }

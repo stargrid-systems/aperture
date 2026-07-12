@@ -12,10 +12,10 @@ pub enum AuthError {
     Storage(#[from] aperture_storage::StorageError),
 
     #[error("policy error: {0}")]
-    Policy(anyhow::Error),
+    Policy(#[source] anyhow::Error),
 
     #[error("password hash error: {0}")]
-    PasswordHash(String),
+    PasswordHash(#[source] anyhow::Error),
 
     #[error("invalid credentials")]
     InvalidCredentials,
@@ -53,7 +53,7 @@ impl AuthError {
     /// Converts a password hashing error into an [`AuthError`] without
     /// leaking the underlying crate type.
     pub(crate) fn from_password_hash(err: password_hash::Error) -> Self {
-        AuthError::PasswordHash(err.to_string())
+        AuthError::PasswordHash(anyhow::Error::msg(err))
     }
 }
 
