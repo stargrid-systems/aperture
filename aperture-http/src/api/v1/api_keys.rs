@@ -1,4 +1,4 @@
-use aperture_auth::{AuthenticatedActor, RawApiKey};
+use aperture_auth::{AuthenticatedActor, RawApiKey, roles};
 use aperture_storage::ApiKeyId;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -92,6 +92,9 @@ async fn create_api_key(
         .create_api_key(auth.actor.id, &request.name)
         .await?;
     if let Some(role) = &request.role {
+        if !roles::is_valid(role) {
+            return Err(ApiError::BAD_REQUEST);
+        }
         let subject = aperture_auth::apikey_subject(api_key.id);
         state.auth().assign_role(&subject, role).await?;
     }

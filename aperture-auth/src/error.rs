@@ -20,6 +20,9 @@ pub enum AuthError {
     #[error("invalid credentials")]
     InvalidCredentials,
 
+    #[error("password must be at least 12 characters")]
+    PasswordTooShort,
+
     #[error("session not found")]
     SessionNotFound,
 

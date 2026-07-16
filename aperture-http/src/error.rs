@@ -74,6 +74,7 @@ impl From<AuthError> for ApiError {
             AuthError::InvalidCredentials
             | AuthError::SessionNotFound
             | AuthError::ApiKeyNotFound => StatusCode::UNAUTHORIZED,
+            AuthError::PasswordTooShort => StatusCode::BAD_REQUEST,
             AuthError::ActorDisabled => StatusCode::FORBIDDEN,
             AuthError::MustChangePassword => StatusCode::FORBIDDEN,
             AuthError::Forbidden => StatusCode::FORBIDDEN,

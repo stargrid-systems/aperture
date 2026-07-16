@@ -30,6 +30,11 @@ pub mod roles {
     pub const ADMIN: &str = "admin";
     pub const OPERATOR: &str = "operator";
     pub const VIEWER: &str = "viewer";
+
+    /// Returns true when `role` is a known built-in role name.
+    pub fn is_valid(role: &str) -> bool {
+        role == ADMIN || role == OPERATOR || role == VIEWER
+    }
 }
 
 /// Creates and returns the enforcer with the turso adapter, loading existing
@@ -60,31 +65,27 @@ pub(crate) async fn seed_builtin_policies(
 
     use casbin::MgmtApi;
 
-    // Admin: all permissions.
-    e.add_policy(vec![
-        roles::ADMIN.to_owned(),
-        "*".to_owned(),
-        "*".to_owned(),
-    ])
-    .await?;
-
-    // Operator: artifact, task, task-definition, log.
-    for obj in ["artifact", "task", "task-definition", "log"] {
-        e.add_policy(vec![
+    let policies = vec![
+        vec![roles::ADMIN.to_owned(), "*".to_owned(), "*".to_owned()],
+        vec![
             roles::OPERATOR.to_owned(),
-            obj.to_owned(),
+            "artifact".to_owned(),
             "*".to_owned(),
-        ])
-        .await?;
-    }
-
-    // Viewer: read-only on everything.
-    e.add_policy(vec![
-        roles::VIEWER.to_owned(),
-        "*".to_owned(),
-        "read".to_owned(),
-    ])
-    .await?;
+        ],
+        vec![
+            roles::OPERATOR.to_owned(),
+            "task".to_owned(),
+            "*".to_owned(),
+        ],
+        vec![
+            roles::OPERATOR.to_owned(),
+            "task-definition".to_owned(),
+            "*".to_owned(),
+        ],
+        vec![roles::OPERATOR.to_owned(), "log".to_owned(), "*".to_owned()],
+        vec![roles::VIEWER.to_owned(), "*".to_owned(), "read".to_owned()],
+    ];
+    e.add_policies(policies).await?;
 
     Ok(true)
 }

@@ -308,6 +308,7 @@ impl AuthHandle {
         password: &Password,
         password_change_required_at: Option<Timestamp>,
     ) -> Result<Actor> {
+        password.validate()?;
         let now = Timestamp::now();
         let hash = password.hash()?;
         let (actor, _user) = self
@@ -319,6 +320,7 @@ impl AuthHandle {
 
     /// Changes the password for user `user_id`.
     pub async fn change_password(&self, user_id: UserId, new_password: &Password) -> Result<()> {
+        new_password.validate()?;
         let hash = new_password.hash()?;
         let users = self.storage.users()?;
         users.update_password(user_id, &hash, None).await?;
@@ -350,32 +352,54 @@ impl AuthHandle {
         Ok(())
     }
 
-    /// Returns true when no users exist yet (first-run setup needed).
+    /// Returns true when no admin role is assigned (first-run setup needed).
     pub async fn is_setup_required(&self) -> Result<bool> {
-        let users = self.storage.users()?;
-        Ok(users.count().await? == 0)
+        let e = self.enforcer.read().await;
+        Ok(e.get_users_for_role(roles::ADMIN, None).is_empty())
     }
 
-    /// Creates the initial admin user when no users exist. The check and the
-    /// inserts run as one atomic storage transaction, so concurrent setup
-    /// attempts cannot both succeed. Returns `None` if a user already exists.
+    /// Creates the initial admin user when no admin role is assigned. The
+    /// check and inserts run as one atomic storage transaction, so concurrent
+    /// setup attempts cannot both succeed. Returns `None` if setup is already
+    /// complete (an admin role is assigned).
+    ///
+    /// If a previous setup was interrupted after user creation but before role
+    /// assignment, the recovery path re-assigns the admin role to the existing
+    /// user.
     pub async fn setup_admin(
         &self,
         username: &str,
         password: &Password,
     ) -> Result<Option<LoginResult>> {
+        password.validate()?;
         let now = Timestamp::now();
         let hash = password.hash()?;
-        let Some((actor, _user)) = self
+        let actor_id = match self
             .storage
             .create_initial_user(username, &hash, now)
             .await?
-        else {
-            return Ok(None);
+        {
+            Some((actor, _)) => actor.id,
+            None => {
+                let has_admin = {
+                    let e = self.enforcer.read().await;
+                    !e.get_users_for_role(roles::ADMIN, None).is_empty()
+                };
+                if has_admin {
+                    return Ok(None);
+                }
+                let users = self.storage.users()?;
+                let user = users
+                    .find_by_username(username)
+                    .await?
+                    .ok_or(AuthError::InvalidCredentials)?;
+                users.update_password(user.id, &hash, None).await?;
+                user.actor_id
+            }
         };
-        let subject = actor_subject(actor.id);
+        let subject = actor_subject(actor_id);
         self.assign_role(&subject, roles::ADMIN).await?;
-        tracing::info!(actor = actor.id.get(), "setup admin user");
+        tracing::info!(actor = actor_id.get(), "setup admin user");
         let login = self.login(username, password).await?;
         Ok(Some(login))
     }

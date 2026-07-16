@@ -133,6 +133,12 @@ pub async fn reset_password(username: &str, data_dir: &Path) -> miette::Result<(
         .update_password(user.id, &hash, Some(jiff::Timestamp::now()))
         .await
         .into_diagnostic()?;
+    storage
+        .sessions()
+        .into_diagnostic()?
+        .delete_for_actor(user.actor_id)
+        .await
+        .into_diagnostic()?;
     println!("{}", password.as_str());
     Ok(())
 }

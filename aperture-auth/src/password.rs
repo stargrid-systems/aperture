@@ -13,6 +13,9 @@ use serde::Deserialize;
 use crate::error::AuthError;
 use crate::token::random_hex;
 
+/// Minimum password length accepted at setup, creation, and change.
+const MIN_PASSWORD_LEN: usize = 12;
+
 /// Returns an Argon2id instance with production-safe default parameters.
 fn argon2() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default())
@@ -39,6 +42,14 @@ impl Password {
     /// Generates a random 32-byte hex password.
     pub fn generate() -> Self {
         Self(random_hex(32))
+    }
+
+    /// Validates the password against the minimum length policy.
+    pub fn validate(&self) -> Result<(), AuthError> {
+        if self.0.len() < MIN_PASSWORD_LEN {
+            return Err(AuthError::PasswordTooShort);
+        }
+        Ok(())
     }
 
     /// Hashes this password with Argon2id and a random salt.

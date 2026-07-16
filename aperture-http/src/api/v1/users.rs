@@ -1,4 +1,4 @@
-use aperture_auth::{AuthenticatedActor, Password};
+use aperture_auth::{AuthenticatedActor, Password, roles};
 use aperture_storage::UserId;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -86,6 +86,9 @@ async fn create_user(
         .create_user(&request.username, &request.password, None)
         .await?;
     if let Some(role) = &request.role {
+        if !roles::is_valid(role) {
+            return Err(ApiError::BAD_REQUEST);
+        }
         let subject = aperture_auth::actor_subject(actor.id);
         state.auth().assign_role(&subject, role).await?;
     }
