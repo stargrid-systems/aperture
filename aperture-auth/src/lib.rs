@@ -227,7 +227,9 @@ impl AuthHandle {
             false
         };
         let new_expiry = now + SESSION_TTL;
-        sessions.touch_expiry(session.id, new_expiry).await?;
+        if session.expires_at <= now + SESSION_TTL / 2 {
+            sessions.touch_expiry(session.id, new_expiry).await?;
+        }
         Ok(Some(AuthenticatedActor {
             actor,
             subject: actor_subject(session.actor_id),
@@ -336,10 +338,10 @@ impl AuthHandle {
     /// Deletes user `user_id` and disables the associated actor.
     pub async fn delete_user(&self, user_id: UserId, actor_id: ActorId) -> Result<()> {
         let now = Timestamp::now();
-        let users = self.storage.users()?;
-        users.delete(user_id).await?;
         let actors = self.storage.actors()?;
         actors.disable(actor_id, now).await?;
+        let users = self.storage.users()?;
+        users.delete(user_id).await?;
         let sessions = self.storage.sessions()?;
         sessions.delete_for_actor(actor_id).await?;
         self.revoke_permissions(&actor_subject(actor_id)).await?;
