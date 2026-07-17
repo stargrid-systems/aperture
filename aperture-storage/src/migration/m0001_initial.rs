@@ -37,6 +37,23 @@ pub(super) const SQL: &str = sql!(
     CREATE INDEX idx_tasks_status ON tasks (status);
     CREATE INDEX idx_tasks_parent ON tasks (parent_id);
 
+    // Periodic task schedules. Each row describes a task kind and JSON input
+    // that the scheduler re-runs at interval_ms cadence, advancing
+    // next_run_at after each spawn.
+    CREATE TABLE schedules (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,
+        input TEXT NOT NULL,
+        interval_ms INTEGER NOT NULL,
+        next_run_at INTEGER NOT NULL,
+        last_run_at INTEGER,
+        last_task_id INTEGER REFERENCES tasks (id),
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_schedules_kind ON schedules (kind);
+    CREATE INDEX idx_schedules_next_run ON schedules (next_run_at) WHERE enabled = 1;
+
     CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,
         tracing_id INTEGER NOT NULL,

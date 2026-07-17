@@ -16,6 +16,10 @@ pub use self::log::{
     BootResponse, LevelResponse, LogEventResponse, LogListParams, LogSpanDetailResponse,
     LogSpanListParams, LogSpanResponse, LogTargetListParams, boots_response, event_page, span_page,
 };
+pub use self::schedule::{
+    CreateScheduleRequest, ScheduleListParams, ScheduleResponse, UpdateScheduleRequest,
+    schedule_page,
+};
 pub use self::task::{
     CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
     task_page,
@@ -23,6 +27,7 @@ pub use self::task::{
 
 mod artifact;
 mod log;
+mod schedule;
 mod task;
 
 /// Deserializes either a single comma-separated string or a sequence of

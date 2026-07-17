@@ -38,6 +38,21 @@ pub const CANCEL_TASK: &str = "cancelTask";
 /// `GET /api/v1/task-definitions`
 pub const LIST_TASK_DEFINITIONS: &str = "listTaskDefinitions";
 
+/// `GET /api/v1/schedules`
+pub const LIST_SCHEDULES: &str = "listSchedules";
+
+/// `POST /api/v1/schedules`
+pub const CREATE_SCHEDULE: &str = "createSchedule";
+
+/// `GET /api/v1/schedules/{id}`
+pub const GET_SCHEDULE: &str = "getSchedule";
+
+/// `PATCH /api/v1/schedules/{id}`
+pub const UPDATE_SCHEDULE: &str = "updateSchedule";
+
+/// `DELETE /api/v1/schedules/{id}`
+pub const DELETE_SCHEDULE: &str = "deleteSchedule";
+
 /// `GET /api/v1/logs`
 pub const LIST_LOGS: &str = "listLogs";
 

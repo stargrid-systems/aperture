@@ -126,6 +126,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -3669,6 +3670,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
