@@ -1,10 +1,10 @@
 use aperture_artifacts::{ArtifactError, ArtifactKey};
 use axum::Json;
-use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::body::Body;
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use tokio::fs;
+use tokio_util::io::ReaderStream;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -16,6 +16,11 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
+/// Maximum size of a single artifact upload. The body is streamed to disk, so
+/// this is a backstop against runaway or malicious uploads filling the disk,
+/// not a memory cap. We can promote this to a runtime config later.
+const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
@@ -23,6 +28,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_versions))
         .routes(routes!(get_version, delete_version))
         .routes(routes!(download_artifact_blob))
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(
+            MAX_UPLOAD_BYTES,
+        ))
 }
 
 /// Lists stored artifact keys, each with its newest version.
@@ -169,15 +177,28 @@ async fn upload_artifact(
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
     headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<(StatusCode, Json<ArtifactVersionResponse>), ApiError> {
+    use std::io;
+
+    use futures_util::TryStreamExt;
+
     let media_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
+
+    // Stream the request body to the blob store without buffering the whole
+    // thing in memory. The body cap (`RequestBodyLimitLayer` installed on the
+    // artifacts router) rejects uploads above 2 GiB before they reach disk.
+    let stream = request
+        .into_body()
+        .into_data_stream()
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err));
+    let reader = tokio_util::io::StreamReader::new(stream);
     let artifact = state
         .spectra()
         .artifacts()
-        .put(&key, media_type, body.as_ref())
+        .put(&key, media_type, reader)
         .await?;
     Ok((StatusCode::CREATED, Json(artifact.into())))
 }
@@ -212,9 +233,19 @@ async fn download_artifact_blob(
         .locate_version(&key, &digest)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
-    let bytes = fs::read(&located.path).await.map_err(ArtifactError::from)?;
+    // Stream the blob straight from disk; never held in full in memory.
+    let file = tokio::fs::File::open(&located.path)
+        .await
+        .map_err(ArtifactError::from)?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
     let content_type = artifact
         .media_type
         .unwrap_or_else(|| "application/octet-stream".to_owned());
-    Ok(([(header::CONTENT_TYPE, content_type)], bytes).into_response())
+    let mut response = [(header::CONTENT_TYPE, content_type)].into_response();
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        artifact.size_bytes.to_string().parse().unwrap(),
+    );
+    Ok(response.map(move |_| body))
 }
