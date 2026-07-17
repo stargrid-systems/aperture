@@ -61,15 +61,11 @@ pub async fn serve(
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    tls::ensure_certificates(&artifacts, addr)
-        .await
-        .map_err(|e| miette::miette!("{e:#}"))?;
-    let initial_config = tls::load_server_config(&artifacts)
-        .await
-        .map_err(|e| miette::miette!("{e:#}"))?;
+    tls::ensure_certificates(&artifacts, addr).await.into_diagnostic()?;
+    let initial_config = tls::load_server_config(&artifacts).await.into_diagnostic()?;
     let shared_config = tls::shared_config(initial_config);
 
-    let (tls_reload_tx, mut tls_reload_rx) = watch::channel(false);
+    let (tls_reload_tx, mut tls_reload_rx) = watch::channel(());
     {
         let artifacts = Arc::clone(&artifacts);
         let config = shared_config.clone();
@@ -141,7 +137,7 @@ pub async fn serve(
 async fn rotation_loop(
     artifacts: Arc<Artifacts>,
     bind_addr: SocketAddr,
-    reload_tx: watch::Sender<bool>,
+    reload_tx: watch::Sender<()>,
 ) {
     loop {
         sleep(Duration::from_secs(24 * 60 * 60)).await;
@@ -150,7 +146,7 @@ async fn rotation_loop(
                 tracing::info!("rotating server certificate");
                 match tls::rotate_certificate(&artifacts, bind_addr).await {
                     Ok(()) => {
-                        let _ = reload_tx.send(true);
+                        let _ = reload_tx.send(());
                     }
                     Err(err) => {
                         tracing::error!(

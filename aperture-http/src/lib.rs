@@ -33,7 +33,7 @@ pub struct AppState {
     boot_id: Uuid,
     spectra: Spectra,
     tasks: Tasks,
-    tls_reload_tx: watch::Sender<bool>,
+        tls_reload_tx: watch::Sender<()>,
 }
 
 impl AppState {
@@ -44,7 +44,7 @@ impl AppState {
         boot_id: Uuid,
         spectra: Spectra,
         tasks: Tasks,
-        tls_reload_tx: watch::Sender<bool>,
+    tls_reload_tx: watch::Sender<()>,
     ) -> Self {
         Self {
             version,
@@ -71,7 +71,7 @@ impl AppState {
         &self.tasks
     }
 
-    pub(crate) fn tls_reload_tx(&self) -> &watch::Sender<bool> {
+    pub(crate) fn tls_reload_tx(&self) -> &watch::Sender<()> {
         &self.tls_reload_tx
     }
 

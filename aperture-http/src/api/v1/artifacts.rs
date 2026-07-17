@@ -180,7 +180,7 @@ async fn upload_artifact(
         .put(&key, media_type, body.as_ref())
         .await?;
     if key.starts_with("tls/") {
-        let _ = state.tls_reload_tx().send(true);
+        let _ = state.tls_reload_tx().send(());
     }
     Ok((StatusCode::CREATED, Json(artifact.into())))
 }

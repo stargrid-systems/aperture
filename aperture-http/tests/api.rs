@@ -59,7 +59,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
         tasks.clone(),
         SpectraConfig::default(),
     );
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks, watch::channel(false).0);
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks, watch::channel(()).0);
     (app(state), artifacts)
 }
 
