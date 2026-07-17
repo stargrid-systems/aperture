@@ -8,14 +8,14 @@ use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
-use aperture_tasks::{TaskRegistry, Tasks};
+use aperture_tasks::{NewSchedule, Scheduler, TaskRegistry, Tasks};
+use jiff::Timestamp;
 use miette::IntoDiagnostic;
 use rustls::crypto::ring;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
 use tokio::task::JoinSet;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -24,6 +24,14 @@ mod tls;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// How often the scheduler wakes to check for due schedules.
+const SCHEDULER_TICK: Duration = Duration::from_secs(60);
+
+/// Default rotation interval: the scheduler fires the rotate-certificate task
+/// once per day. The task itself is a no-op when the cert still has plenty of
+/// remaining validity.
+const CERT_ROTATION_INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// Runs the gateway HTTPS server until the process is terminated.
 ///
@@ -58,6 +66,8 @@ pub async fn serve(
     let tasks = Tasks::new(artifacts.storage().clone(), registry);
     tasks.reconcile().await.into_diagnostic()?;
 
+    let scheduler = Scheduler::new(artifacts.storage().clone(), tasks.clone());
+
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
         tasks.clone(),
@@ -72,15 +82,18 @@ pub async fn serve(
         .await
         .into_diagnostic()?;
 
-    // Check at boot: if the existing leaf is already past half-life (or
-    // expired), rotate before binding the listener so we never serve an
-    // expired cert while waiting for the daily rotation tick.
-    if tls::needs_rotation(&artifacts).await.into_diagnostic()? {
-        tracing::info!("server certificate needs rotation at boot; rotating");
-        tls::rotate_certificate(&artifacts, https_addr)
-            .await
-            .into_diagnostic()?;
-    }
+    // Install the default rotation schedule if no rotate-certificate schedule
+    // exists. The task itself is a no-op when the cert is fresh, so an eager
+    // next_run_at is safe: the first boot tick catches any expiry that
+    // happened while the gateway was down.
+    install_default_rotation_schedule(&scheduler, https_addr)
+        .await
+        .into_diagnostic()?;
+
+    // Run one scheduler tick at boot so any due rotation fires before we bind
+    // the listener. This closes the expired-cert-on-boot window without an
+    // ad-hoc startup check.
+    scheduler.tick().await.into_diagnostic()?;
 
     let initial_config = tls::load_server_config(&artifacts)
         .await
@@ -116,15 +129,11 @@ pub async fn serve(
         shutdown.clone(),
     ));
 
-    // Periodic certificate rotation. Coalesced into the scheduler in a later
-    // commit; for now the legacy loop stays.
-    bg.spawn(rotation_loop(
-        Arc::clone(&artifacts),
-        https_addr,
-        shutdown.clone(),
-    ));
+    // Periodic task scheduler: drives certificate rotation and any other
+    // registered periodic task. Replaces the old rotation_loop.
+    bg.spawn(scheduler.clone().run(SCHEDULER_TICK, shutdown.clone()));
 
-    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
+    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone(), scheduler.clone());
     let app = aperture_http::app(state);
 
     if let Some(http_addr) = http_addr {
@@ -194,36 +203,36 @@ pub async fn serve(
     Ok(())
 }
 
-/// Checks the server certificate daily and regenerates it at half-life. Reload
-/// of the live TLS listener is triggered by the artifact change feed, so this
-/// loop only writes the new cert.
-async fn rotation_loop(
-    artifacts: Arc<Artifacts>,
+/// Installs the default rotation schedule if no `rotate-certificate` schedule
+/// exists. Called once at boot.
+async fn install_default_rotation_schedule(
+    scheduler: &Scheduler,
     bind_addr: SocketAddr,
-    shutdown: CancellationToken,
-) {
-    loop {
-        tokio::select! {
-            biased;
-            () = shutdown.cancelled() => return,
-            () = sleep(Duration::from_secs(24 * 60 * 60)) => {}
-        }
-        match tls::needs_rotation(&artifacts).await {
-            Ok(true) => {
-                tracing::info!("rotating server certificate");
-                if let Err(err) = tls::rotate_certificate(&artifacts, bind_addr).await {
-                    tracing::error!(error = &err as &dyn StdError, "certificate rotation failed");
-                }
-            }
-            Ok(false) => {}
-            Err(err) => {
-                tracing::error!(
-                    error = &err as &dyn StdError,
-                    "certificate rotation check failed"
-                );
-            }
-        }
+) -> Result<(), aperture_tasks::SchedulerError> {
+    use aperture_tasks::TaskDefinition;
+    use tls::RotateCertificateDefinition;
+    let existing = scheduler
+        .repository()?
+        .find_by_kind(RotateCertificateDefinition::KIND)
+        .await?;
+    if !existing.is_empty() {
+        return Ok(());
     }
+    let input = serde_json::to_string(&tls::RotateCertificateInput {
+        bind_addr: bind_addr.to_string(),
+    })
+    .expect("bind_addr serializes");
+    let now = Timestamp::now();
+    scheduler
+        .create(NewSchedule {
+            kind: RotateCertificateDefinition::KIND.to_owned(),
+            input,
+            interval_ms: CERT_ROTATION_INTERVAL_MS,
+            next_run_at: now,
+            created_at: now,
+        })
+        .await?;
+    Ok(())
 }
 
 /// Window over which multiple artifact writes are coalesced into a single
@@ -332,7 +341,8 @@ pub async fn openapi() -> miette::Result<OpenApiSpec> {
 
 /// Registers every task kind the gateway supports.
 fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
-    registry.register(DownloadDefinition::new(artifacts));
+    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
+    registry.register(tls::RotateCertificateDefinition::new(artifacts));
 }
 
 /// Opens the storage database and blob store under `data_dir`.

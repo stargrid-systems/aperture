@@ -4,7 +4,7 @@ use std::error::Error;
 
 use aperture_artifacts::ArtifactError;
 use aperture_storage::StorageError;
-use aperture_tasks::TaskError;
+use aperture_tasks::{SchedulerError, TaskError};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
@@ -57,6 +57,19 @@ impl From<TaskError> for ApiError {
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = &err as &dyn Error, "task request failed");
+        }
+        Self(status)
+    }
+}
+
+impl From<SchedulerError> for ApiError {
+    fn from(err: SchedulerError) -> Self {
+        let status = match &err {
+            SchedulerError::Storage(StorageError::InvalidCursor(_)) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(error = &err as &dyn Error, "schedule request failed");
         }
         Self(status)
     }

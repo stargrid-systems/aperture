@@ -190,7 +190,9 @@ fn first_cert_der(pem: &str) -> Result<CertificateDer<'static>, TlsError> {
         .map_err(|e| TlsError::PemParse(format!("pem decode failed: {e}")))
 }
 
-/// Generates a new leaf certificate and stores it as artifacts.
+/// Generates a new leaf certificate and stores it as artifacts. Returns
+/// whether rotation actually occurred (the cert was past half-life and has
+/// been replaced).
 pub async fn rotate_certificate(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
@@ -199,6 +201,19 @@ pub async fn rotate_certificate(
     store_artifact(artifacts, &SERVER_CERT, &cert_pem).await?;
     store_artifact(artifacts, &SERVER_KEY, &key_pem).await?;
     Ok(())
+}
+
+/// regenerate_leaf + store, but reports whether the cert was actually due.
+/// Used by the rotation task to surface "no-op" runs in its output.
+pub async fn rotate_if_due(artifacts: &Artifacts, bind_addr: SocketAddr) -> Result<bool, TlsError> {
+    if !needs_rotation(artifacts).await? {
+        return Ok(false);
+    }
+    rotate_certificate(artifacts, bind_addr).await?;
+    // Live reload is triggered by the artifact change feed; nothing to do
+    // here. The change feed's debounce coalesces the cert+key writes into a
+    // single reload.
+    Ok(true)
 }
 
 /// Builds a `rustls::ServerConfig` from PEM-encoded cert and key.

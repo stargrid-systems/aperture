@@ -11,16 +11,15 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 pub use self::listener::TlsListener;
-pub use self::pki::{
-    ensure_certificates, load_server_config, needs_rotation, reload_certificates,
-    rotate_certificate,
-};
+pub use self::pki::{ensure_certificates, load_server_config, reload_certificates};
 pub use self::redirect::redirect_router;
+pub use self::rotate::{RotateCertificateDefinition, RotateCertificateInput};
 
 mod error;
 mod listener;
 mod pki;
 mod redirect;
+mod rotate;
 
 /// Shared, hot-swappable server configuration.
 pub type SharedConfig = Arc<ArcSwap<rustls::ServerConfig>>;

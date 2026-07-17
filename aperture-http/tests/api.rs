@@ -52,13 +52,14 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
     let mut registry = TaskRegistry::new();
     registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
     let tasks = Tasks::new(artifacts.storage().clone(), registry);
+    let scheduler = aperture_tasks::Scheduler::new(artifacts.storage().clone(), tasks.clone());
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
     );
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks);
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks, scheduler);
     (app(state), artifacts)
 }
 

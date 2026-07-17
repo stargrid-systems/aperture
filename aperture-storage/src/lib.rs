@@ -18,6 +18,7 @@ pub use self::log::{
     SpanParentFilter, SpanRecord,
 };
 pub use self::page::{ListQuery, Order, Page};
+pub use self::schedule::{NewSchedule, Schedule, SchedulePatch, ScheduleRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
     TaskRepository, TaskStatus,
@@ -31,6 +32,7 @@ mod log;
 mod macros;
 mod migration;
 mod page;
+mod schedule;
 mod sql;
 mod task;
 
@@ -87,6 +89,11 @@ impl Storage {
     /// Returns the repository over the task catalog.
     pub fn tasks(&self) -> Result<TaskRepository> {
         Ok(TaskRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the schedule catalog.
+    pub fn schedules(&self) -> Result<ScheduleRepository> {
+        Ok(ScheduleRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the structured log tables.
