@@ -30,6 +30,7 @@ thiserror = { workspace = true, features = ["std"] }
 time = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "fs", "sync", "time", "signal"] }
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi", "tracing-log"] }
 uuid = { workspace = true, features = ["std", "v4"] }

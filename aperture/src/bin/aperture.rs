@@ -31,13 +31,8 @@ struct RunArgs {
     https_addr: SocketAddr,
     /// Address for the HTTP listener (redirects to HTTPS by default).
     /// Pass an empty string to disable the HTTP listener entirely.
-    #[arg(
-        long,
-        env = "APERTURE_HTTP_ADDR",
-        default_value = "[::1]:8080",
-        value_parser = parse_optional_addr,
-    )]
-    http_addr: Option<SocketAddr>,
+    #[arg(long, env = "APERTURE_HTTP_ADDR", default_value = "[::1]:8080")]
+    http_addr: String,
     /// Serve the full API over plain HTTP instead of redirecting to HTTPS.
     /// Intended for certificate recovery only.
     #[arg(long, env = "APERTURE_INSECURE_HTTP", default_value_t = false)]
@@ -48,7 +43,7 @@ struct RunArgs {
 }
 
 /// Parses an HTTP listener address. An empty string means "no listener".
-fn parse_optional_addr(s: &str) -> Result<Option<SocketAddr>, miette::Report> {
+fn parse_optional_addr(s: &str) -> miette::Result<Option<SocketAddr>> {
     if s.is_empty() {
         return Ok(None);
     }
@@ -65,12 +60,15 @@ fn main() -> miette::Result<()> {
             Ok(())
         }
         Command::Openapi => block_on(emit_openapi()),
-        Command::Run(args) => block_on(aperture::serve(
-            args.https_addr,
-            args.http_addr,
-            args.insecure_http,
-            args.data_dir,
-        )),
+        Command::Run(args) => {
+            let http_addr = parse_optional_addr(&args.http_addr)?;
+            block_on(aperture::serve(
+                args.https_addr,
+                http_addr,
+                args.insecure_http,
+                args.data_dir,
+            ))
+        }
     }
 }
 

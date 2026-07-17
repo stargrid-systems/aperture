@@ -14,7 +14,9 @@ use rustls::crypto::ring;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
+use tokio::task::JoinSet;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod logging;
@@ -86,23 +88,41 @@ pub async fn serve(
     let shared_config: tls::SharedConfig =
         Arc::new(arc_swap::ArcSwap::from_pointee(initial_config));
 
+    // One token drives every shutdown path. The OS-signal handler task (in
+    // `bg`) cancels it on Ctrl+C or SIGTERM; every long-running task and
+    // every axum listener watches it so they all start their drain together.
+    let shutdown = CancellationToken::new();
+    let mut bg: JoinSet<()> = JoinSet::new();
+
+    // Install the OS-signal watcher. On Ctrl+C or SIGTERM it cancels the
+    // shared token, which simultaneously triggers graceful drain on every
+    // axum listener and signals the loops below to return.
+    {
+        let shutdown = shutdown.clone();
+        bg.spawn(async move {
+            shutdown_signal().await;
+            shutdown.cancel();
+        });
+    }
+
     // Live certificate reload. We subscribe to artifact changes and reload
     // whenever the server cert or key is written. A short debounce coalesces
     // back-to-back uploads of the cert and key halves (which arrive as two
     // separate writes) into one reload attempt; a failed reload (e.g. a
     // mismatched cert+key mid-upload) is logged and retried on the next event.
-    {
-        let artifacts = Arc::clone(&artifacts);
-        let config = shared_config.clone();
-        tokio::spawn(tls_reload_watcher(artifacts, config));
-    }
+    bg.spawn(tls_reload_watcher(
+        Arc::clone(&artifacts),
+        shared_config.clone(),
+        shutdown.clone(),
+    ));
 
     // Periodic certificate rotation. Coalesced into the scheduler in a later
     // commit; for now the legacy loop stays.
-    {
-        let artifacts = Arc::clone(&artifacts);
-        tokio::spawn(rotation_loop(artifacts, https_addr));
-    }
+    bg.spawn(rotation_loop(
+        Arc::clone(&artifacts),
+        https_addr,
+        shutdown.clone(),
+    ));
 
     let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
     let app = aperture_http::app(state);
@@ -112,9 +132,13 @@ pub async fn serve(
         if insecure_http {
             tracing::warn!(%http_addr, "serving full API over plain HTTP (insecure mode)");
             let http_app = app.clone();
-            tokio::spawn(async move {
+            let drain = {
+                let token = shutdown.clone();
+                async move { token.cancelled().await }
+            };
+            bg.spawn(async move {
                 if let Err(err) = axum::serve(http_listener, http_app)
-                    .with_graceful_shutdown(shutdown_signal())
+                    .with_graceful_shutdown(drain)
                     .await
                 {
                     tracing::error!(error = &err as &dyn StdError, "http server failed");
@@ -123,9 +147,13 @@ pub async fn serve(
         } else {
             tracing::info!(%http_addr, "http redirect listening");
             let redirect = tls::redirect_router(https_addr.port());
-            tokio::spawn(async move {
+            let drain = {
+                let token = shutdown.clone();
+                async move { token.cancelled().await }
+            };
+            bg.spawn(async move {
                 if let Err(err) = axum::serve(http_listener, redirect)
-                    .with_graceful_shutdown(shutdown_signal())
+                    .with_graceful_shutdown(drain)
                     .await
                 {
                     tracing::error!(error = &err as &dyn StdError, "http redirect failed");
@@ -137,12 +165,26 @@ pub async fn serve(
     let tcp_listener = TcpListener::bind(https_addr).await.into_diagnostic()?;
     let tls_listener = tls::TlsListener::new(tcp_listener, shared_config);
     tracing::info!(%https_addr, "aperture listening (https)");
+    let drain = {
+        let token = shutdown.clone();
+        async move { token.cancelled().await }
+    };
     let result = axum::serve(tls_listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(drain)
         .await
         .into_diagnostic();
 
     tracing::info!("aperture shutdown starting");
+    // Drain the background tasks. The signal handler returns as soon as it
+    // has fired the token; the axum listeners finish their graceful drain;
+    // the loops bail out via the cancelled token.
+    while let Some(res) = bg.join_next().await {
+        if let Err(err) = res
+            && !err.is_cancelled()
+        {
+            tracing::error!(error = %err, "background task panicked");
+        }
+    }
     tasks.shutdown().await;
     tracing::info!("aperture shutdown complete");
 
@@ -155,9 +197,17 @@ pub async fn serve(
 /// Checks the server certificate daily and regenerates it at half-life. Reload
 /// of the live TLS listener is triggered by the artifact change feed, so this
 /// loop only writes the new cert.
-async fn rotation_loop(artifacts: Arc<Artifacts>, bind_addr: SocketAddr) {
+async fn rotation_loop(
+    artifacts: Arc<Artifacts>,
+    bind_addr: SocketAddr,
+    shutdown: CancellationToken,
+) {
     loop {
-        sleep(Duration::from_secs(24 * 60 * 60)).await;
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => return,
+            () = sleep(Duration::from_secs(24 * 60 * 60)) => {}
+        }
         match tls::needs_rotation(&artifacts).await {
             Ok(true) => {
                 tracing::info!("rotating server certificate");
@@ -184,7 +234,11 @@ const TLS_RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
 /// Subscribes to artifact changes and reloads the live TLS config whenever the
 /// server certificate or key is written. Reload failures (e.g. a mismatched
 /// cert+key mid-upload) are logged; the next qualifying event retries.
-async fn tls_reload_watcher(artifacts: Arc<Artifacts>, config: tls::SharedConfig) {
+async fn tls_reload_watcher(
+    artifacts: Arc<Artifacts>,
+    config: tls::SharedConfig,
+    shutdown: CancellationToken,
+) {
     use aperture_artifacts::well_known::tls::{SERVER_CERT, SERVER_KEY};
     use aperture_artifacts::{ArtifactChange, ChangeKind};
     use tokio::time::Instant;
@@ -218,6 +272,7 @@ async fn tls_reload_watcher(artifacts: Arc<Artifacts>, config: tls::SharedConfig
             tokio::pin!(sleep);
             tokio::select! {
                 biased;
+                () = shutdown.cancelled() => return,
                 recv = rx.recv() => {
                     if !handle_change(recv, &mut deadline) { return; }
                 }
@@ -230,9 +285,12 @@ async fn tls_reload_watcher(artifacts: Arc<Artifacts>, config: tls::SharedConfig
                 }
             }
         } else {
-            let recv = rx.recv().await;
-            if !handle_change(recv, &mut deadline) {
-                return;
+            tokio::select! {
+                biased;
+                () = shutdown.cancelled() => return,
+                recv = rx.recv() => {
+                    if !handle_change(recv, &mut deadline) { return; }
+                }
             }
         }
     }
