@@ -295,8 +295,8 @@ impl LogRepository {
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
         filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(DbId::get));
         filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
-        filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_millisecond()));
+        filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_microsecond()));
+        filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_microsecond()));
 
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
@@ -325,7 +325,7 @@ impl LogRepository {
         }
         Ok(paginator.finish(items, |event| {
             (
-                CursorValue::Int(event.timestamp.as_millisecond()),
+                CursorValue::Int(event.timestamp.as_microsecond()),
                 event.id.get(),
             )
         }))
@@ -389,8 +389,8 @@ impl LogRepository {
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
         filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
-        filters.gte_int_opt(col::STARTED_AT, filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int_opt(col::STARTED_AT, filter.until.map(|ts| ts.as_millisecond()));
+        filters.gte_int_opt(col::STARTED_AT, filter.since.map(|ts| ts.as_microsecond()));
+        filters.lte_int_opt(col::STARTED_AT, filter.until.map(|ts| ts.as_microsecond()));
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
         }
@@ -415,7 +415,7 @@ impl LogRepository {
         }
         Ok(paginator.finish(items, |span| {
             (
-                CursorValue::Int(span.started_at.as_millisecond()),
+                CursorValue::Int(span.started_at.as_microsecond()),
                 span.id.get(),
             )
         }))
@@ -464,7 +464,7 @@ impl LogRepository {
         self.connection
             .execute(
                 sql!(UPDATE log_spans SET ended_at = ?1 WHERE ended_at IS NULL),
-                params_from_iter([Value::Integer(ended_at.as_millisecond())]),
+                params_from_iter([Value::Integer(ended_at.as_microsecond())]),
             )
             .await
             .map_err(StorageError::from_turso)
@@ -473,19 +473,19 @@ impl LogRepository {
     /// Deletes events and finished spans older than `before`. Returns the
     /// number of deleted events.
     pub async fn prune_before(&self, before: Timestamp) -> Result<u64> {
-        let millis = before.as_millisecond();
+        let micros = before.as_microsecond();
         let event_count = self
             .connection
             .execute(
                 sql!(DELETE FROM log_events WHERE timestamp < ?1),
-                params_from_iter([Value::Integer(millis)]),
+                params_from_iter([Value::Integer(micros)]),
             )
             .await
             .map_err(StorageError::from_turso)?;
         self.connection
             .execute(
                 sql!(DELETE FROM log_spans WHERE ended_at IS NOT NULL AND ended_at < ?1),
-                params_from_iter([Value::Integer(millis)]),
+                params_from_iter([Value::Integer(micros)]),
             )
             .await
             .map_err(StorageError::from_turso)?;

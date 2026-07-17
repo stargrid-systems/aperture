@@ -5,7 +5,6 @@
 
 use turso::{Connection, Value};
 
-use self::m0001_initial::STATEMENTS as M0001_INITIAL;
 use crate::error::{Result, StorageError};
 use crate::macros::sql;
 
@@ -16,14 +15,14 @@ mod m0001_initial;
 /// Normally 0. When old migrations are squashed into a single baseline, bump
 /// this to the version that baseline represents. The first entry then upgrades
 /// `BASE_VERSION` to `BASE_VERSION + 1` instead of `0` to `1`.
-const BASE_VERSION: i64 = 0;
+const BASE_VERSION: i64 = 1;
 
 /// Ordered list of migrations. Index `i` upgrades the schema from version
 /// `BASE_VERSION + i` to `BASE_VERSION + i + 1`. Each migration is a slice of
 /// statement chunks, run in order inside one transaction. Splitting a migration
 /// into chunks lets a single migration mix statement groups that need different
 /// quoting (e.g. `CREATE TYPE` with string literals alongside `CREATE TABLE`).
-const MIGRATIONS: &[&[&str]] = &[M0001_INITIAL];
+const MIGRATIONS: &[&[&str]] = &[m0001_initial::STATEMENTS];
 
 /// Applies all pending migrations to the database.
 pub(crate) async fn run(connection: &Connection) -> Result<()> {

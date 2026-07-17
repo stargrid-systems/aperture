@@ -6,6 +6,7 @@
 //! can list, create, and disable them.
 
 use jiff::Timestamp;
+use serde_json::{Map, Value};
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
@@ -20,7 +21,7 @@ mod col {
     pub const ENABLED: &str = "enabled";
     pub const ID: &str = "id";
     pub const INPUT: &str = "input";
-    pub const INTERVAL_MS: &str = "interval_ms";
+    pub const INTERVAL_US: &str = "interval_us";
     pub const KIND: &str = "kind";
     pub const LAST_RUN_AT: &str = "last_run_at";
     pub const LAST_TASK_ID: &str = "last_task_id";
@@ -32,7 +33,7 @@ const SCHEDULE_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KIND,
     col::INPUT,
-    col::INTERVAL_MS,
+    col::INTERVAL_US,
     col::NEXT_RUN_AT,
     col::LAST_RUN_AT,
     col::LAST_TASK_ID,
@@ -48,8 +49,8 @@ pub struct TaskSchedule {
     pub id: DbId,
     /// The kind of task to spawn, matching a registered definition.
     pub kind: String,
-    /// JSON-encoded task input.
-    pub input: String,
+    /// JSON object passed to each spawned invocation.
+    pub input: Map<String, Value>,
     /// Spawn cadence.
     pub interval: Interval,
     /// When the next spawn is due.
@@ -68,7 +69,7 @@ pub struct TaskSchedule {
 #[derive(Debug, Clone)]
 pub struct NewTaskSchedule {
     pub kind: String,
-    pub input: String,
+    pub input: Map<String, Value>,
     pub interval: Interval,
     pub next_run_at: Timestamp,
     pub created_at: Timestamp,
@@ -107,7 +108,7 @@ impl TaskScheduleRepository {
             .execute(
                 sql!(
                     INSERT INTO task_schedules
-                        (kind, input, interval_ms, next_run_at, created_at, enabled)
+                        (kind, input, interval_us, next_run_at, created_at, enabled)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ),
                 params,
@@ -176,7 +177,7 @@ impl TaskScheduleRepository {
     ) -> Result<Option<TaskSchedule>> {
         let mut sets: Vec<&'static str> = Vec::new();
         if patch.interval.is_some() {
-            sets.push("interval_ms = ?");
+            sets.push("interval_us = ?");
         }
         if patch.enabled.is_some() {
             sets.push("enabled = ?");
@@ -256,11 +257,11 @@ impl TaskScheduleRepository {
         last_task_id: Option<DbId>,
     ) -> Result<()> {
         // saturating_add turns overflow into i64::MAX, which is outside jiff's
-        // timestamp range, so from_millisecond reports InvalidTimestamp.
-        let next_millis = now.as_millisecond().saturating_add(interval.as_millis());
-        let next_run_at = Timestamp::from_millisecond(next_millis).map_err(|_| {
+        // timestamp range, so from_microsecond reports InvalidTimestamp.
+        let next_micros = now.as_microsecond().saturating_add(interval.as_micros());
+        let next_run_at = Timestamp::from_microsecond(next_micros).map_err(|_| {
             StorageError::InvalidTimestamp {
-                millis: next_millis,
+                micros: next_micros,
             }
         })?;
         self.connection
@@ -288,7 +289,7 @@ fn row_to_schedule(row: &Row) -> Result<TaskSchedule> {
         id: SCHEDULE_COLUMNS.extract(row, col::ID)?,
         kind: SCHEDULE_COLUMNS.extract(row, col::KIND)?,
         input: SCHEDULE_COLUMNS.extract(row, col::INPUT)?,
-        interval: SCHEDULE_COLUMNS.extract(row, col::INTERVAL_MS)?,
+        interval: SCHEDULE_COLUMNS.extract(row, col::INTERVAL_US)?,
         next_run_at: SCHEDULE_COLUMNS.extract(row, col::NEXT_RUN_AT)?,
         last_run_at: SCHEDULE_COLUMNS.extract(row, col::LAST_RUN_AT)?,
         last_task_id: SCHEDULE_COLUMNS.extract(row, col::LAST_TASK_ID)?,
@@ -301,19 +302,19 @@ fn row_to_schedule(row: &Row) -> Result<TaskSchedule> {
 mod tests {
     use super::*;
 
-    fn ts(millis: i64) -> Timestamp {
-        Timestamp::from_millisecond(millis).unwrap()
+    fn ts(micros: i64) -> Timestamp {
+        Timestamp::from_microsecond(micros).unwrap()
     }
 
-    fn interval(millis: i64) -> Interval {
-        Interval::from_millis(millis).unwrap()
+    fn interval(micros: i64) -> Interval {
+        Interval::from_micros(micros).unwrap()
     }
 
-    fn new_schedule(kind: &str, interval_millis: i64, next_run_at: i64) -> NewTaskSchedule {
+    fn new_schedule(kind: &str, interval_micros: i64, next_run_at: i64) -> NewTaskSchedule {
         NewTaskSchedule {
             kind: kind.to_owned(),
-            input: "{}".to_owned(),
-            interval: interval(interval_millis),
+            input: Map::new(),
+            interval: interval(interval_micros),
             next_run_at: ts(next_run_at),
             created_at: ts(0),
         }
@@ -325,12 +326,12 @@ mod tests {
         let repo = storage.task_schedules().unwrap();
 
         let id = repo
-            .create(&new_schedule("rotate-certificate", 86_400_000, 1_000))
+            .create(&new_schedule("rotate-certificate", 86_400_000_000, 1_000))
             .await
             .unwrap();
         let fetched = repo.get(id).await.unwrap().unwrap();
         assert_eq!(fetched.kind, "rotate-certificate");
-        assert_eq!(fetched.interval, interval(86_400_000));
+        assert_eq!(fetched.interval, interval(86_400_000_000));
         assert_eq!(fetched.next_run_at, ts(1_000));
         assert!(fetched.enabled);
 
@@ -342,14 +343,14 @@ mod tests {
                 id,
                 &TaskSchedulePatch {
                     enabled: Some(false),
-                    interval: Some(interval(60_000)),
+                    interval: Some(interval(60_000_000)),
                 },
             )
             .await
             .unwrap()
             .unwrap();
         assert!(!updated.enabled);
-        assert_eq!(updated.interval, interval(60_000));
+        assert_eq!(updated.interval, interval(60_000_000));
 
         assert!(repo.delete(id).await.unwrap());
         assert!(repo.get(id).await.unwrap().is_none());
@@ -386,16 +387,16 @@ mod tests {
         let storage = crate::Storage::open(":memory:").await.unwrap();
         let repo = storage.task_schedules().unwrap();
         let id = repo
-            .create(&new_schedule("a", 60_000, 1_000))
+            .create(&new_schedule("a", 60_000_000, 1_000))
             .await
             .unwrap();
-        repo.mark_run(id, ts(2_000), &interval(60_000), Some(DbId::from(42)))
+        repo.mark_run(id, ts(2_000), &interval(60_000_000), Some(DbId::from(42)))
             .await
             .unwrap();
         let fetched = repo.get(id).await.unwrap().unwrap();
         assert_eq!(fetched.last_run_at, Some(ts(2_000)));
         assert_eq!(fetched.last_task_id, Some(DbId::from(42)));
-        assert_eq!(fetched.next_run_at, ts(62_000));
+        assert_eq!(fetched.next_run_at, ts(60_002_000));
     }
 
     #[tokio::test]
@@ -403,14 +404,14 @@ mod tests {
         let storage = crate::Storage::open(":memory:").await.unwrap();
         let repo = storage.task_schedules().unwrap();
         let id = repo
-            .create(&new_schedule("a", 60_000, 1_000))
+            .create(&new_schedule("a", 60_000_000, 1_000))
             .await
             .unwrap();
-        repo.mark_run(id, ts(2_000), &interval(60_000), None)
+        repo.mark_run(id, ts(2_000), &interval(60_000_000), None)
             .await
             .unwrap();
         let fetched = repo.get(id).await.unwrap().unwrap();
         assert_eq!(fetched.last_task_id, None);
-        assert_eq!(fetched.next_run_at, ts(62_000));
+        assert_eq!(fetched.next_run_at, ts(60_002_000));
     }
 }

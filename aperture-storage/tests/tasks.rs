@@ -4,8 +4,8 @@ use aperture_storage::{
 };
 use jiff::Timestamp;
 
-fn at(millis: i64) -> Timestamp {
-    Timestamp::from_millisecond(millis).unwrap()
+fn at(micros: i64) -> Timestamp {
+    Timestamp::from_microsecond(micros).unwrap()
 }
 
 #[tokio::test]

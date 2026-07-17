@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use utoipa::ToSchema;
 
-fn at(millis: i64) -> Timestamp {
-    Timestamp::from_millisecond(millis).unwrap()
+fn at(micros: i64) -> Timestamp {
+    Timestamp::from_microsecond(micros).unwrap()
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]

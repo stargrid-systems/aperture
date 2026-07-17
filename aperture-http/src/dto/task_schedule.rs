@@ -4,7 +4,7 @@ use aperture_artifacts::{ListQuery, Page as StoragePage};
 use aperture_storage::{DbId, Interval, TaskSchedule};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::dto::{OrderParam, Page};
@@ -17,9 +17,8 @@ pub struct TaskScheduleResponse {
     /// The kind of task to spawn, matching a registered definition.
     pub kind: String,
     /// JSON input passed to each spawned invocation.
-    pub input: Value,
+    pub input: Map<String, Value>,
     /// Spawn cadence, as an ISO 8601 duration (e.g. `PT5M`).
-    #[schema(value_type = String, example = "PT5M")]
     pub interval: Interval,
     /// When the next spawn is due.
     pub next_run_at: Timestamp,
@@ -35,11 +34,10 @@ pub struct TaskScheduleResponse {
 
 impl From<TaskSchedule> for TaskScheduleResponse {
     fn from(schedule: TaskSchedule) -> Self {
-        let input = serde_json::from_str(&schedule.input).unwrap_or(Value::Null);
         Self {
             id: schedule.id,
             kind: schedule.kind,
-            input,
+            input: schedule.input,
             interval: schedule.interval,
             next_run_at: schedule.next_run_at,
             last_run_at: schedule.last_run_at,
@@ -56,10 +54,9 @@ pub struct CreateTaskScheduleRequest {
     /// The kind of task to spawn.
     pub kind: String,
     /// JSON input for each spawned invocation.
-    pub input: Value,
+    pub input: Map<String, Value>,
     /// Spawn cadence, as an ISO 8601 duration (e.g. `PT5M`). Must be positive
     /// and use fixed units (at most hours).
-    #[schema(value_type = String, example = "PT5M")]
     pub interval: Interval,
 }
 
@@ -67,7 +64,6 @@ pub struct CreateTaskScheduleRequest {
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct UpdateTaskScheduleRequest {
     /// New spawn cadence, as an ISO 8601 duration. Must be positive.
-    #[schema(value_type = Option<String>, example = json!("PT10M"))]
     pub interval: Option<Interval>,
     /// Whether the scheduler should fire this schedule.
     pub enabled: Option<bool>,

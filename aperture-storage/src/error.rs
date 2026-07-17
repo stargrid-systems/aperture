@@ -50,9 +50,9 @@ pub enum StorageError {
         target: &'static str,
     },
 
-    /// A timestamp stored as milliseconds could not be converted.
-    #[error("invalid timestamp {millis} ms")]
-    InvalidTimestamp { millis: i64 },
+    /// A timestamp stored as microseconds could not be converted.
+    #[error("invalid timestamp {micros} us")]
+    InvalidTimestamp { micros: i64 },
 
     /// A schedule interval stored as milliseconds could not be turned back into
     /// a valid [`Interval`](crate::Interval).

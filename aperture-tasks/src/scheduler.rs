@@ -5,9 +5,9 @@
 //! Schedules themselves are managed through the [`TaskScheduleRepository`];
 //! the scheduler is read-only with respect to which schedules exist.
 //!
-//! Errors during a single schedule spawn (unknown kind, decode failure, storage
-//! error) are logged and the schedule is advanced to its next interval; one bad
-//! schedule cannot stall the driver.
+//! Errors during a single schedule spawn (unknown kind, storage error) are
+//! logged and the schedule is advanced to its next interval; one bad schedule
+//! cannot stall the driver.
 //!
 //! [`Tasks::create`]: crate::Tasks::create
 //! [`TaskScheduleRepository`]: aperture_storage::TaskScheduleRepository
@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use aperture_storage::{NewTaskSchedule, Storage, TaskScheduleRepository};
 use jiff::Timestamp;
+use serde_json::Value;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -112,18 +113,7 @@ impl Scheduler {
         let due = repo.list_due(now, TICK_BATCH).await?;
         let mut spawned = 0;
         for schedule in due {
-            let input: serde_json::Value = match serde_json::from_str(&schedule.input) {
-                Ok(value) => value,
-                Err(err) => {
-                    tracing::error!(
-                        error = &err as &dyn Error,
-                        schedule_id = schedule.id.get(),
-                        kind = %schedule.kind,
-                        "schedule input is not valid JSON; advancing without spawning",
-                    );
-                    continue;
-                }
-            };
+            let input = Value::Object(schedule.input);
             match self.inner.tasks.create(&schedule.kind, input).await {
                 Ok(invocation) => {
                     spawned += 1;
@@ -148,9 +138,16 @@ impl Scheduler {
                     // Advance anyway so a permanently-broken schedule does not
                     // fire on every tick. No task was spawned, so leave
                     // last_task_id NULL.
-                    let _ = repo
+                    if let Err(err) = repo
                         .mark_run(schedule.id, now, &schedule.interval, None)
-                        .await;
+                        .await
+                    {
+                        tracing::error!(
+                            error = &err as &dyn Error,
+                            schedule_id = schedule.id.get(),
+                            "failed to advance schedule after spawn failure",
+                        );
+                    }
                 }
             }
         }
@@ -185,7 +182,7 @@ pub enum SchedulerError {
 #[cfg(test)]
 mod tests {
     use aperture_storage::{Interval, ListQuery, NewTaskSchedule, TaskSchedulePatch};
-    use serde_json::json;
+    use serde_json::Map;
 
     use super::*;
 
@@ -196,7 +193,7 @@ mod tests {
 
     impl crate::TaskDefinition for Ping {
         const KIND: &'static str = "ping";
-        type Input = serde_json::Value;
+        type Input = Value;
         type Output = ();
 
         fn capabilities(&self) -> crate::Capabilities {
@@ -215,12 +212,12 @@ mod tests {
         }
     }
 
-    fn ts(millis: i64) -> Timestamp {
-        Timestamp::from_millisecond(millis).unwrap()
+    fn ts(micros: i64) -> Timestamp {
+        Timestamp::from_microsecond(micros).unwrap()
     }
 
-    fn interval(millis: i64) -> Interval {
-        Interval::from_millis(millis).unwrap()
+    fn interval(micros: i64) -> Interval {
+        Interval::from_micros(micros).unwrap()
     }
 
     #[tokio::test]
@@ -231,13 +228,13 @@ mod tests {
         let tasks = Tasks::new(storage.clone(), registry);
         let scheduler = Scheduler::new(storage.clone(), tasks);
 
-        let now = Timestamp::now().as_millisecond();
+        let now = Timestamp::now().as_microsecond();
         let schedule = scheduler
             .create(NewTaskSchedule {
                 kind: "ping".to_owned(),
-                input: json!({}).to_string(),
-                interval: interval(60_000),
-                next_run_at: ts(now - 1_000),
+                input: Map::new(),
+                interval: interval(60_000_000),
+                next_run_at: ts(now - 1_000_000),
                 created_at: ts(now),
             })
             .await
@@ -263,13 +260,13 @@ mod tests {
         let tasks = Tasks::new(storage.clone(), registry);
         let scheduler = Scheduler::new(storage.clone(), tasks);
 
-        let now = Timestamp::now().as_millisecond();
+        let now = Timestamp::now().as_microsecond();
         let schedule = scheduler
             .create(NewTaskSchedule {
                 kind: "ping".to_owned(),
-                input: json!({}).to_string(),
-                interval: interval(60_000),
-                next_run_at: ts(now - 1_000),
+                input: Map::new(),
+                interval: interval(60_000_000),
+                next_run_at: ts(now - 1_000_000),
                 created_at: ts(now),
             })
             .await
@@ -297,13 +294,13 @@ mod tests {
         let tasks = Tasks::new(storage.clone(), registry);
         let scheduler = Scheduler::new(storage.clone(), tasks);
 
-        let now = Timestamp::now().as_millisecond();
+        let now = Timestamp::now().as_microsecond();
         let schedule = scheduler
             .create(NewTaskSchedule {
                 kind: "does-not-exist".to_owned(),
-                input: json!({}).to_string(),
-                interval: interval(60_000),
-                next_run_at: ts(now - 1_000),
+                input: Map::new(),
+                interval: interval(60_000_000),
+                next_run_at: ts(now - 1_000_000),
                 created_at: ts(now),
             })
             .await

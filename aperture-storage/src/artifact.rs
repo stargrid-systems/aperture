@@ -278,7 +278,7 @@ impl ArtifactRepository {
         }
         Ok(paginator.finish(items, |artifact| {
             let value = match sort {
-                VersionSort::DownloadedAt => artifact.downloaded_at.as_millisecond(),
+                VersionSort::DownloadedAt => artifact.downloaded_at.as_microsecond(),
                 VersionSort::SizeBytes => artifact.size_bytes as i64,
             };
             (CursorValue::Int(value), artifact.id.get())

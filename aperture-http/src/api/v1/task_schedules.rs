@@ -50,20 +50,19 @@ async fn list_task_schedules(
     request_body = CreateTaskScheduleRequest,
     responses(
         (status = 201, description = "Task schedule created", body = TaskScheduleResponse),
-        (status = 400, description = "Invalid input"),
+        (status = 422, description = "Invalid input"),
     ),
 )]
 async fn create_task_schedule(
     State(state): State<AppState>,
     Json(request): Json<CreateTaskScheduleRequest>,
 ) -> Result<(StatusCode, Json<TaskScheduleResponse>), ApiError> {
-    let input = serde_json::to_string(&request.input).map_err(|_| ApiError::BAD_REQUEST)?;
     let now = Timestamp::now();
     let schedule = state
         .scheduler()
         .create(NewTaskSchedule {
             kind: request.kind,
-            input,
+            input: request.input,
             interval: request.interval,
             next_run_at: now,
             created_at: now,

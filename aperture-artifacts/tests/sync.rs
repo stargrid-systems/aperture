@@ -27,7 +27,7 @@ async fn sync_removes_versions_without_blobs() {
         media_type: None,
         version: None,
         size_bytes: 10,
-        downloaded_at: Timestamp::from_millisecond(1_700_000_000_000).unwrap(),
+        downloaded_at: Timestamp::from_microsecond(1_700_000_000_000).unwrap(),
         verified_at: None,
     })
     .await

@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-fn at(millis: i64) -> Timestamp {
-    Timestamp::from_millisecond(millis).unwrap()
+fn at(micros: i64) -> Timestamp {
+    Timestamp::from_microsecond(micros).unwrap()
 }
 
 fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {

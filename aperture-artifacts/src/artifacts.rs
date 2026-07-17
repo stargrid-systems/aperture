@@ -26,7 +26,7 @@ use crate::progress::ProgressWriter;
 
 /// How long a resolved reference stays cached before it is re-checked against
 /// the registry.
-const RESOLUTION_TTL_MS: i64 = 5 * 60 * 1000;
+const RESOLUTION_TTL_US: i64 = 5 * 60 * 1_000_000;
 
 /// What a [`Artifacts::sync`] run removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +107,7 @@ struct Inner {
     blobs: BlobStore,
     oci: OciFetcher,
     /// Recent reference resolutions, so repeated downloads skip the manifest
-    /// lookup for up to [`RESOLUTION_TTL_MS`].
+    /// lookup for up to [`RESOLUTION_TTL_US`].
     resolutions: Mutex<HashMap<String, CachedResolution>>,
     /// One lock per content digest, so concurrent downloads of the same content
     /// collapse onto a single transfer instead of each pulling it.
@@ -483,7 +483,7 @@ impl Inner {
 
 /// Whether a resolution made at `resolved_at` is still fresh at `now`.
 fn is_fresh(resolved_at: Timestamp, now: Timestamp) -> bool {
-    now.as_millisecond() - resolved_at.as_millisecond() < RESOLUTION_TTL_MS
+    now.as_microsecond() - resolved_at.as_microsecond() < RESOLUTION_TTL_US
 }
 
 /// Builds a version record. Content is digest-addressed, so `at` stamps both
@@ -513,8 +513,8 @@ fn build_artifact(
 mod tests {
     use super::*;
 
-    fn at(millis: i64) -> Timestamp {
-        Timestamp::from_millisecond(millis).unwrap()
+    fn at(micros: i64) -> Timestamp {
+        Timestamp::from_microsecond(micros).unwrap()
     }
 
     fn oci_request(reference: &str, media_type: &str) -> FetchRequest {
@@ -531,8 +531,8 @@ mod tests {
     fn resolution_is_fresh_within_the_ttl() {
         let base = at(1_000_000);
         assert!(is_fresh(base, base));
-        assert!(is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS - 1)));
-        assert!(!is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS)));
+        assert!(is_fresh(base, at(1_000_000 + RESOLUTION_TTL_US - 1)));
+        assert!(!is_fresh(base, at(1_000_000 + RESOLUTION_TTL_US)));
     }
 
     #[test]

@@ -32,15 +32,15 @@ impl FromSql for Uuid {
 
 impl ToSql for Timestamp {
     fn to_sql(&self) -> Value {
-        Value::Integer(self.as_millisecond())
+        Value::Integer(self.as_microsecond())
     }
 }
 
 impl FromSql for Timestamp {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
-            Value::Integer(millis) => Timestamp::from_millisecond(millis)
-                .map_err(|_| StorageError::InvalidTimestamp { millis }),
+            Value::Integer(micros) => Timestamp::from_microsecond(micros)
+                .map_err(|_| StorageError::InvalidTimestamp { micros }),
             actual => Err(StorageError::ColumnTypeMismatch {
                 column: idx,
                 expected: "integer",
