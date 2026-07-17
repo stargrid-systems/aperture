@@ -1,0 +1,26 @@
+//! TLS infrastructure: PKI generation, certificate management, and the
+//! hot-swappable TLS listener.
+//!
+//! Certificates are stored as artifacts (`tls/ca-cert`, `tls/ca-key`,
+//! `tls/server-cert`, `tls/server-key`). On first run a self-signed CA and
+//! server certificate are generated automatically. New certificates uploaded
+//! via the artifact API trigger a live reload.
+
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+
+pub use self::listener::{TlsListener, shared_config};
+pub use self::pki::{
+    ensure_certificates, load_server_config, needs_rotation, reload_certificates,
+    rotate_certificate,
+};
+pub use self::redirect::redirect_router;
+
+mod error;
+mod listener;
+mod pki;
+mod redirect;
+
+/// Shared, hot-swappable server configuration.
+pub type SharedConfig = Arc<ArcSwap<rustls::ServerConfig>>;
