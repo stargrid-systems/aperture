@@ -34,6 +34,12 @@ pub async fn serve(
     insecure_http: bool,
     data_dir: PathBuf,
 ) -> miette::Result<()> {
+    if http_addr == Some(addr) {
+        return Err(miette::miette!(
+            "--https-addr and --http-addr must differ (both were {addr})"
+        ));
+    }
+
     ring::default_provider()
         .install_default()
         .expect("failed to install crypto provider");

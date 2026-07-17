@@ -1,8 +1,15 @@
 //! HTTP-to-HTTPS redirect router.
 //!
-//! All requests are answered with `308 Permanent Redirect` to the same URL
+//! All requests are answered with `307 Temporary Redirect` to the same URL
 //! over HTTPS. The HTTPS port is taken from the main listener. If the port is
 //! 443, it is omitted from the redirect URL.
+//!
+//! A `307` is used instead of a `308 Permanent Redirect` because the HTTPS
+//! port may be reconfigured at runtime, and a permanent redirect would be
+//! cached by clients past the reconfiguration.
+//!
+//! Requests without a usable `Host` header are rejected with `400 Bad Request`
+//! rather than guessed: there is no safe default the gateway can assume.
 
 use axum::Router;
 use axum::extract::Request;
@@ -20,8 +27,10 @@ fn redirect_to_https(https_port: u16, request: Request) -> Response {
         .headers()
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
-        .map(strip_port)
-        .unwrap_or("localhost");
+        .map(strip_port);
+    let Some(host) = host else {
+        return (StatusCode::BAD_REQUEST, "redirect requires a Host header").into_response();
+    };
     let path = request
         .uri()
         .path_and_query()
@@ -32,9 +41,72 @@ fn redirect_to_https(https_port: u16, request: Request) -> Response {
     } else {
         format!("https://{host}:{https_port}{path}")
     };
-    (StatusCode::PERMANENT_REDIRECT, [(header::LOCATION, target)]).into_response()
+    (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, target)]).into_response()
 }
 
+/// Strips the `:port` suffix from a Host header value. Handles bracketed IPv6
+/// hosts (`[::1]:8080` -> `[::1]`); bare-IPv6-without-port is not produced by
+/// HTTP/1.1 senders.
 fn strip_port(host: &str) -> &str {
     host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+
+    use super::*;
+
+    #[test]
+    fn strip_port_handles_bracketed_ipv6() {
+        assert_eq!(strip_port("[::1]:8080"), "[::1]");
+        assert_eq!(strip_port("example.com:8080"), "example.com");
+        assert_eq!(strip_port("example.com"), "example.com");
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_host_header() {
+        let req = HttpRequest::builder()
+            .uri("/path")
+            .body(Body::empty())
+            .unwrap();
+        let resp = redirect_to_https(8443, req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn redirects_with_temporary_redirect() {
+        let req = HttpRequest::builder()
+            .uri("/path")
+            .header("host", "example.com:8080")
+            .body(Body::empty())
+            .unwrap();
+        let resp = redirect_to_https(8443, req);
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        let location = resp
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(location, "https://example.com:8443/path");
+    }
+
+    #[tokio::test]
+    async fn omits_port_for_443() {
+        let req = HttpRequest::builder()
+            .uri("/p")
+            .header("host", "example.com")
+            .body(Body::empty())
+            .unwrap();
+        let resp = redirect_to_https(443, req);
+        let location = resp
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(location, "https://example.com/p");
+    }
 }

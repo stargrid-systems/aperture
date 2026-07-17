@@ -202,16 +202,23 @@ pub async fn rotate_certificate(
 }
 
 /// Builds a `rustls::ServerConfig` from PEM-encoded cert and key.
+///
+/// The config explicitly enables TLS 1.3 (preferred) and TLS 1.2 (for legacy
+/// client compatibility). TLS 1.1 and earlier are not negotiated.
 pub fn build_server_config(cert_pem: &str, key_pem: &str) -> Result<ServerConfig, TlsError> {
+    use rustls::version::{TLS12, TLS13};
+
     let cert_chain: Vec<CertificateDer<'static>> =
         rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
 
     let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())?
         .ok_or_else(|| TlsError::PemParse("no private key found in PEM".into()))?;
 
-    Ok(ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)?)
+    Ok(
+        ServerConfig::builder_with_protocol_versions(&[&TLS13, &TLS12])
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, key)?,
+    )
 }
 
 async fn store_artifact(
