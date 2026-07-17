@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
 use aperture_artifacts::well_known::tls::{CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY};
-use jiff::Timestamp;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose, SanType,
@@ -119,11 +118,19 @@ fn compute_sans(bind_addr: SocketAddr) -> Vec<SanType> {
 }
 
 /// Ensures TLS certificate artifacts exist, generating them on first run.
+///
+/// All four artifacts must be present together. If any is missing (e.g. from a
+/// partially-interrupted first run), the entire PKI is regenerated so the
+/// rotation code can rely on a complete set.
 pub async fn ensure_certificates(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
 ) -> Result<(), TlsError> {
-    if artifacts.locate(&SERVER_CERT).await?.is_some() {
+    if artifacts.locate(&CA_CERT).await?.is_some()
+        && artifacts.locate(&CA_KEY).await?.is_some()
+        && artifacts.locate(&SERVER_CERT).await?.is_some()
+        && artifacts.locate(&SERVER_KEY).await?.is_some()
+    {
         return Ok(());
     }
     tracing::info!("generating initial PKI");
@@ -153,15 +160,34 @@ pub async fn reload_certificates(
     Ok(())
 }
 
-/// Returns true when the server certificate is past half its lifetime.
+/// Returns true when the server certificate's remaining validity has dropped
+/// below half of the leaf's intended lifetime. This is robust against custom
+/// uploaded certs and against the artifact `downloaded_at` field being reset
+/// by unrelated re-fetches.
 pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
-    let Some(key) = artifacts.artifact(&SERVER_CERT).await? else {
-        return Ok(false);
+    let pem = read_artifact(artifacts, &SERVER_CERT).await?;
+    let der = first_cert_der(&pem)?;
+    let (_, cert) = x509_parser::parse_x509_certificate(&der)
+        .map_err(|e| TlsError::PemParse(format!("x509 parse failed: {e}")))?;
+    // `time_to_expiration` returns None when the cert is not currently valid
+    // (expired or not-yet-effective). Either way, rotation is wanted.
+    let remaining_seconds = cert
+        .validity()
+        .time_to_expiration()
+        .map(|d| d.whole_seconds());
+    let Some(remaining_seconds) = remaining_seconds else {
+        return Ok(true);
     };
-    let now = Timestamp::now();
-    let age_ms = (now.as_millisecond() - key.latest.downloaded_at.as_millisecond()).max(0);
-    let half_life_ms = (LEAF_VALIDITY_DAYS as i64) * 24 * 60 * 60 * 1000 / 2;
-    Ok(age_ms >= half_life_ms)
+    let half_life_seconds = (LEAF_VALIDITY_DAYS as i64) * 24 * 60 * 60 / 2;
+    Ok(remaining_seconds < half_life_seconds)
+}
+
+/// Extracts the first certificate's DER bytes from a PEM bundle.
+fn first_cert_der(pem: &str) -> Result<CertificateDer<'static>, TlsError> {
+    rustls_pemfile::certs(&mut pem.as_bytes())
+        .next()
+        .ok_or(TlsError::PemParse("no certificate in PEM".into()))?
+        .map_err(|e| TlsError::PemParse(format!("pem decode failed: {e}")))
 }
 
 /// Generates a new leaf certificate and stores it as artifacts.
@@ -211,4 +237,114 @@ async fn read_artifact(
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).await?;
     String::from_utf8(buf).map_err(|e| TlsError::PemParse(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use aperture_artifacts::well_known::tls::SERVER_CERT;
+    use aperture_storage::Storage;
+
+    use super::*;
+
+    /// A temporary blob store directory removed when dropped.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "aperture-tls-tests-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn fresh_store() -> (Artifacts, TempDir) {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let dir = TempDir::new();
+        let artifacts = Artifacts::new(storage, dir.0.clone());
+        (artifacts, dir)
+    }
+
+    #[tokio::test]
+    async fn fresh_cert_does_not_need_rotation() {
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+        assert!(!needs_rotation(&artifacts).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn expired_cert_needs_rotation() {
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+
+        // Generate a cert that is already expired and overwrite the artifact.
+        let ca_pem = read_artifact(&artifacts, &aperture_artifacts::well_known::tls::CA_CERT)
+            .await
+            .unwrap();
+        let ca_key_pem = read_artifact(&artifacts, &aperture_artifacts::well_known::tls::CA_KEY)
+            .await
+            .unwrap();
+        let ca_key = KeyPair::from_pem(&ca_key_pem).unwrap();
+        let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key).unwrap();
+
+        let mut params = CertificateParams::default();
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "expired");
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        // Already expired a day ago.
+        let now = time::OffsetDateTime::now_utc();
+        params.not_before = now - time::Duration::days(10);
+        params.not_after = now - time::Duration::days(1);
+        let key = KeyPair::generate().unwrap();
+        let expired = params.signed_by(&key, &issuer).unwrap();
+        store_artifact(&artifacts, &SERVER_CERT, &expired.pem())
+            .await
+            .unwrap();
+
+        assert!(needs_rotation(&artifacts).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn ensure_certificates_regenerates_when_any_artifact_missing() {
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+
+        // Sanity: complete set is in place.
+        assert!(artifacts.locate(&SERVER_CERT).await.unwrap().is_some());
+
+        // Drop the server key. ensure_certificates should regenerate the PKI
+        // (and a new server-cert/key pair along with it).
+        let latest = artifacts
+            .artifact(&SERVER_CERT)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
+        artifacts
+            .evict_version(&SERVER_CERT, &latest)
+            .await
+            .unwrap();
+
+        ensure_certificates(&artifacts, addr).await.unwrap();
+        assert!(artifacts.locate(&SERVER_CERT).await.unwrap().is_some());
+        assert!(artifacts.locate(&SERVER_KEY).await.unwrap().is_some());
+        assert!(artifacts.locate(&CA_CERT).await.unwrap().is_some());
+        assert!(artifacts.locate(&CA_KEY).await.unwrap().is_some());
+    }
 }

@@ -33,3 +33,4 @@ tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi", "tracing-log"] }
 uuid = { workspace = true, features = ["std", "v4"] }
+x509-parser = { workspace = true }

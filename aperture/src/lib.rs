@@ -63,6 +63,17 @@ pub async fn serve(
     tls::ensure_certificates(&artifacts, addr)
         .await
         .into_diagnostic()?;
+
+    // Check at boot: if the existing leaf is already past half-life (or
+    // expired), rotate before binding the listener so we never serve an
+    // expired cert while waiting for the daily rotation tick.
+    if tls::needs_rotation(&artifacts).await.into_diagnostic()? {
+        tracing::info!("server certificate needs rotation at boot; rotating");
+        tls::rotate_certificate(&artifacts, addr)
+            .await
+            .into_diagnostic()?;
+    }
+
     let initial_config = tls::load_server_config(&artifacts)
         .await
         .into_diagnostic()?;
