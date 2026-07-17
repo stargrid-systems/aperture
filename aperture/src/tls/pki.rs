@@ -20,7 +20,7 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 
 use super::SharedConfig;
-use crate::tls::error::TlsError;
+use super::error::TlsError;
 
 /// CA certificate validity in days (5 years).
 pub const CA_VALIDITY_DAYS: u64 = 365 * 5;

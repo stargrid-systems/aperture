@@ -8,16 +8,13 @@
 use std::error::Error as StdError;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 use axum::serve::Listener;
-use rustls::ServerConfig;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 
-use crate::tls::SharedConfig;
+use super::SharedConfig;
 
 /// A `TcpListener` that performs TLS on every accepted connection.
 pub struct TlsListener {
@@ -63,9 +60,4 @@ impl Listener for TlsListener {
     fn local_addr(&self) -> io::Result<Self::Addr> {
         self.inner.local_addr()
     }
-}
-
-/// Creates the initial shared config from a `ServerConfig`.
-pub fn shared_config(config: ServerConfig) -> SharedConfig {
-    Arc::new(ArcSwap::from_pointee(config))
 }

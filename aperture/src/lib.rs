@@ -63,7 +63,8 @@ pub async fn serve(
 
     tls::ensure_certificates(&artifacts, addr).await.into_diagnostic()?;
     let initial_config = tls::load_server_config(&artifacts).await.into_diagnostic()?;
-    let shared_config = tls::shared_config(initial_config);
+    let shared_config: tls::SharedConfig =
+        Arc::new(arc_swap::ArcSwap::from_pointee(initial_config));
 
     let (tls_reload_tx, mut tls_reload_rx) = watch::channel(());
     {

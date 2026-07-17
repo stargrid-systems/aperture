@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-pub use self::listener::{TlsListener, shared_config};
+pub use self::listener::TlsListener;
 pub use self::pki::{
     ensure_certificates, load_server_config, needs_rotation, reload_certificates,
     rotate_certificate,
