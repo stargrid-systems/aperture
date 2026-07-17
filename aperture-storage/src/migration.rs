@@ -15,7 +15,7 @@ mod m0001_initial;
 /// Normally 0. When old migrations are squashed into a single baseline, bump
 /// this to the version that baseline represents. The first entry then upgrades
 /// `BASE_VERSION` to `BASE_VERSION + 1` instead of `0` to `1`.
-const BASE_VERSION: i64 = 1;
+const BASE_VERSION: i64 = 0;
 
 /// Ordered list of migrations. Index `i` upgrades the schema from version
 /// `BASE_VERSION + i` to `BASE_VERSION + i + 1`. Each migration is a slice of
