@@ -3,10 +3,31 @@
 //! `boot_id` is stored as `BLOB` rather than the turso `uuid` custom type
 //! because the latter is broken in STRICT tables as of turso 0.6. See
 //! <https://github.com/tursodatabase/turso/issues/6221>. The way it's used now should hopefully be compatible with a future fix.
+//!
+//! The `CREATE TYPE` statements live in a separate raw string because the
+//! `sql!` macro stringifies Rust tokens and cannot contain SQL string literals
+//! (the `RAISE` message). They must run before the tables that use them.
 
 use crate::macros::sql;
 
-pub(super) const SQL: &str = sql!(
+/// Custom turso types shared across the schema. The `epoch_ms` and
+/// `duration_ms` types wrap integers so storage stays compact while carrying
+/// semantics; the interval type also rejects non-positive values at the storage
+/// layer.
+const CUSTOM_TYPES: &str = "\
+CREATE TYPE epoch_ms BASE integer
+    ENCODE value
+    DECODE value
+    OPERATOR '<'
+    OPERATOR '=';
+CREATE TYPE duration_ms BASE integer
+    ENCODE CASE WHEN value > 0 THEN value ELSE RAISE(ABORT, 'duration must be positive') END
+    DECODE value
+    OPERATOR '<'
+    OPERATOR '=';
+";
+
+const TABLES: &str = sql!(
     CREATE TABLE artifacts (
         id INTEGER PRIMARY KEY,
         key TEXT NOT NULL,
@@ -38,21 +59,22 @@ pub(super) const SQL: &str = sql!(
     CREATE INDEX idx_tasks_parent ON tasks (parent_id);
 
     // Periodic task schedules. Each row describes a task kind and JSON input
-    // that the scheduler re-runs at interval_ms cadence, advancing
-    // next_run_at after each spawn.
-    CREATE TABLE schedules (
+    // that the scheduler re-runs at a fixed interval, advancing next_run_at
+    // after each spawn. Timestamps and intervals use the integer-backed custom
+    // types defined above; input is stored as jsonb and enabled as a boolean.
+    CREATE TABLE task_schedules (
         id INTEGER PRIMARY KEY,
         kind TEXT NOT NULL,
-        input TEXT NOT NULL,
-        interval_ms INTEGER NOT NULL,
-        next_run_at INTEGER NOT NULL,
-        last_run_at INTEGER,
+        input jsonb NOT NULL,
+        interval_ms duration_ms NOT NULL,
+        next_run_at epoch_ms NOT NULL,
+        last_run_at epoch_ms,
         last_task_id INTEGER REFERENCES tasks (id),
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL
+        enabled boolean NOT NULL DEFAULT TRUE,
+        created_at epoch_ms NOT NULL
     ) STRICT;
-    CREATE INDEX idx_schedules_kind ON schedules (kind);
-    CREATE INDEX idx_schedules_next_run ON schedules (next_run_at) WHERE enabled = 1;
+    CREATE INDEX idx_task_schedules_kind ON task_schedules (kind);
+    CREATE INDEX idx_task_schedules_next_run ON task_schedules (next_run_at) WHERE enabled = TRUE;
 
     CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,
@@ -125,3 +147,8 @@ pub(super) const SQL: &str = sql!(
         ON log_events.span_tracing_id = span.tracing_id
         AND log_events.boot_id = span.boot_id;
 );
+
+/// Ordered chunks that make up migration 0001. Each chunk is run as a single
+/// `execute_batch` inside the migration transaction. Types must precede the
+/// tables that reference them.
+pub(super) const STATEMENTS: &[&str] = &[CUSTOM_TYPES, TABLES];

@@ -69,7 +69,7 @@ impl From<SchedulerError> for ApiError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(error = &err as &dyn Error, "schedule request failed");
+            tracing::error!(error = &err as &dyn Error, "task schedule request failed");
         }
         Self(status)
     }

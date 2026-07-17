@@ -1,7 +1,7 @@
-//! DTOs for the periodic schedule endpoints.
+//! DTOs for the periodic task schedule endpoints.
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{DbId, Schedule};
+use aperture_storage::{DbId, Interval, TaskSchedule};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,17 +9,18 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::dto::{OrderParam, Page};
 
-/// One periodic schedule, returned by the schedule endpoints.
+/// One periodic task schedule, returned by the schedule endpoints.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct ScheduleResponse {
+pub struct TaskScheduleResponse {
     /// Schedule id.
     pub id: DbId,
     /// The kind of task to spawn, matching a registered definition.
     pub kind: String,
     /// JSON input passed to each spawned invocation.
     pub input: Value,
-    /// Spawn cadence in milliseconds.
-    pub interval_ms: i64,
+    /// Spawn cadence, as an ISO 8601 duration (e.g. `PT5M`).
+    #[schema(value_type = String, example = "PT5M")]
+    pub interval: Interval,
     /// When the next spawn is due.
     pub next_run_at: Timestamp,
     /// When the most recent spawn fired, if any.
@@ -32,14 +33,14 @@ pub struct ScheduleResponse {
     pub created_at: Timestamp,
 }
 
-impl From<Schedule> for ScheduleResponse {
-    fn from(schedule: Schedule) -> Self {
+impl From<TaskSchedule> for TaskScheduleResponse {
+    fn from(schedule: TaskSchedule) -> Self {
         let input = serde_json::from_str(&schedule.input).unwrap_or(Value::Null);
         Self {
             id: schedule.id,
             kind: schedule.kind,
             input,
-            interval_ms: schedule.interval_ms,
+            interval: schedule.interval,
             next_run_at: schedule.next_run_at,
             last_run_at: schedule.last_run_at,
             last_task_id: schedule.last_task_id,
@@ -49,40 +50,43 @@ impl From<Schedule> for ScheduleResponse {
     }
 }
 
-/// Body for `POST /api/v1/schedules`.
+/// Body for `POST /api/v1/task-schedules`.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
-pub struct CreateScheduleRequest {
+pub struct CreateTaskScheduleRequest {
     /// The kind of task to spawn.
     pub kind: String,
     /// JSON input for each spawned invocation.
     pub input: Value,
-    /// Spawn cadence in milliseconds. Must be positive.
-    pub interval_ms: i64,
+    /// Spawn cadence, as an ISO 8601 duration (e.g. `PT5M`). Must be positive
+    /// and use fixed units (at most hours).
+    #[schema(value_type = String, example = "PT5M")]
+    pub interval: Interval,
 }
 
-/// Body for `PATCH /api/v1/schedules/{id}`. All fields optional.
+/// Body for `PATCH /api/v1/task-schedules/{id}`. All fields optional.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
-pub struct UpdateScheduleRequest {
-    /// New spawn cadence in milliseconds.
-    pub interval_ms: Option<i64>,
+pub struct UpdateTaskScheduleRequest {
+    /// New spawn cadence, as an ISO 8601 duration. Must be positive.
+    #[schema(value_type = Option<String>, example = json!("PT10M"))]
+    pub interval: Option<Interval>,
     /// Whether the scheduler should fire this schedule.
     pub enabled: Option<bool>,
 }
 
-impl UpdateScheduleRequest {
-    pub fn to_patch(&self) -> aperture_storage::SchedulePatch {
-        aperture_storage::SchedulePatch {
-            interval_ms: self.interval_ms,
+impl UpdateTaskScheduleRequest {
+    pub fn to_patch(&self) -> aperture_storage::TaskSchedulePatch {
+        aperture_storage::TaskSchedulePatch {
+            interval: self.interval.clone(),
             enabled: self.enabled,
         }
     }
 }
 
-/// Query params for `GET /api/v1/schedules`.
+/// Query params for `GET /api/v1/task-schedules`.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[serde(default)]
 #[into_params(parameter_in = Query)]
-pub struct ScheduleListParams {
+pub struct TaskScheduleListParams {
     /// Maximum rows to return. Defaults to 50.
     #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
@@ -92,7 +96,7 @@ pub struct ScheduleListParams {
     pub order: Option<OrderParam>,
 }
 
-impl ScheduleListParams {
+impl TaskScheduleListParams {
     pub fn to_query(&self) -> ListQuery {
         ListQuery {
             limit: self.limit,
@@ -103,6 +107,6 @@ impl ScheduleListParams {
 }
 
 /// Maps a storage page of schedules into the response envelope.
-pub fn schedule_page(page: StoragePage<Schedule>) -> Page<ScheduleResponse> {
-    Page::from_storage(page, ScheduleResponse::from)
+pub fn task_schedule_page(page: StoragePage<TaskSchedule>) -> Page<TaskScheduleResponse> {
+    Page::from_storage(page, TaskScheduleResponse::from)
 }

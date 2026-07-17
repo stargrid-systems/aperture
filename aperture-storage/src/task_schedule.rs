@@ -1,6 +1,6 @@
 //! Periodic task schedules.
 //!
-//! A schedule row describes a task kind and JSON input that the scheduler
+//! A task schedule row describes a task kind and JSON input that the scheduler
 //! should re-run on a fixed cadence. The scheduler advances `next_run_at`
 //! after each spawn. Schedules are exposed through the HTTP API so operators
 //! can list, create, and disable them.
@@ -10,6 +10,7 @@ use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
+use crate::interval::Interval;
 use crate::macros::sql;
 use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
 use crate::sql::{Columns, ToSql};
@@ -26,7 +27,7 @@ mod col {
     pub const NEXT_RUN_AT: &str = "next_run_at";
 }
 
-/// Columns selected for a [`Schedule`], in [`row_to_schedule`] order.
+/// Columns selected for a [`TaskSchedule`], in [`row_to_schedule`] order.
 const SCHEDULE_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KIND,
@@ -39,19 +40,19 @@ const SCHEDULE_COLUMNS: Columns = Columns::new(&[
     col::CREATED_AT,
 ]);
 
-/// A periodic schedule. The scheduler spawns `kind` with `input` every
-/// `interval_ms`, advancing `next_run_at` after each spawn.
+/// A periodic task schedule. The scheduler spawns `kind` with `input` every
+/// `interval`, advancing `next_run_at` after each spawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Schedule {
+pub struct TaskSchedule {
     /// Store-assigned id.
     pub id: DbId,
     /// The kind of task to spawn, matching a registered definition.
     pub kind: String,
     /// JSON-encoded task input.
     pub input: String,
-    /// Spawn cadence in milliseconds.
-    pub interval_ms: i64,
-    /// When the next spawn is due, in ms since the epoch.
+    /// Spawn cadence.
+    pub interval: Interval,
+    /// When the next spawn is due.
     pub next_run_at: Timestamp,
     /// When the most recent spawn fired, if any.
     pub last_run_at: Option<Timestamp>,
@@ -63,49 +64,49 @@ pub struct Schedule {
     pub created_at: Timestamp,
 }
 
-/// Payload for creating a new schedule.
+/// Payload for creating a new task schedule.
 #[derive(Debug, Clone)]
-pub struct NewSchedule {
+pub struct NewTaskSchedule {
     pub kind: String,
     pub input: String,
-    pub interval_ms: i64,
+    pub interval: Interval,
     pub next_run_at: Timestamp,
     pub created_at: Timestamp,
 }
 
-/// Payload for patching an existing schedule. `None` fields are left alone.
+/// Payload for patching an existing task schedule. `None` fields are left
+/// alone.
 #[derive(Debug, Clone, Default)]
-pub struct SchedulePatch {
-    pub interval_ms: Option<i64>,
+pub struct TaskSchedulePatch {
+    pub interval: Option<Interval>,
     pub enabled: Option<bool>,
 }
 
-/// Repository over the schedule catalog.
-pub struct ScheduleRepository {
+/// Repository over the task schedule catalog.
+pub struct TaskScheduleRepository {
     connection: Connection,
 }
 
-impl ScheduleRepository {
+impl TaskScheduleRepository {
     pub(crate) fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
-    /// Records a new schedule and returns its assigned id.
+    /// Records a new task schedule and returns its assigned id.
     #[tracing::instrument(level = "info", skip(self, new))]
-    pub async fn create(&self, new: &NewSchedule) -> Result<DbId> {
-        let enabled_int: i64 = 1;
+    pub async fn create(&self, new: &NewTaskSchedule) -> Result<DbId> {
         let params = params_from_iter([
             new.kind.to_sql(),
             new.input.to_sql(),
-            new.interval_ms.to_sql(),
+            new.interval.to_sql(),
             new.next_run_at.to_sql(),
             new.created_at.to_sql(),
-            enabled_int.to_sql(),
+            true.to_sql(),
         ]);
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO schedules
+                    INSERT INTO task_schedules
                         (kind, input, interval_ms, next_run_at, created_at, enabled)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ),
@@ -116,11 +117,11 @@ impl ScheduleRepository {
         Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
-    /// Returns the schedule with `id`, if it exists.
+    /// Returns the task schedule with `id`, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: DbId) -> Result<Option<Schedule>> {
+    pub async fn get(&self, id: DbId) -> Result<Option<TaskSchedule>> {
         let sql = format!(
-            sql!(SELECT {cols} FROM schedules WHERE id = ?1),
+            sql!(SELECT {cols} FROM task_schedules WHERE id = ?1),
             cols = SCHEDULE_COLUMNS
         );
         let mut rows = self
@@ -134,9 +135,9 @@ impl ScheduleRepository {
         }
     }
 
-    /// Lists schedules, oldest first by id.
+    /// Lists task schedules, oldest first by id.
     #[tracing::instrument(level = "info", skip(self, query))]
-    pub async fn list(&self, query: &ListQuery) -> Result<Page<Schedule>> {
+    pub async fn list(&self, query: &ListQuery) -> Result<Page<TaskSchedule>> {
         let paginator = Paginator::new(query, Order::Asc)?;
         let keyset = Keyset::unique(col::ID, paginator.query_order());
 
@@ -144,7 +145,7 @@ impl ScheduleRepository {
         filters.keyset(&keyset, &paginator);
 
         let sql = format!(
-            sql!(SELECT {cols} FROM schedules {where_clause} ORDER BY {order} LIMIT {limit}),
+            sql!(SELECT {cols} FROM task_schedules {where_clause} ORDER BY {order} LIMIT {limit}),
             cols = SCHEDULE_COLUMNS,
             where_clause = filters.where_clause(),
             order = keyset.order_by(),
@@ -165,12 +166,16 @@ impl ScheduleRepository {
         }))
     }
 
-    /// Applies `patch` to the schedule with `id`. Returns the updated row, or
-    /// `None` if no schedule has that id.
+    /// Applies `patch` to the task schedule with `id`. Returns the updated row,
+    /// or `None` if no schedule has that id.
     #[tracing::instrument(level = "info", skip(self, patch))]
-    pub async fn update(&self, id: DbId, patch: &SchedulePatch) -> Result<Option<Schedule>> {
+    pub async fn update(
+        &self,
+        id: DbId,
+        patch: &TaskSchedulePatch,
+    ) -> Result<Option<TaskSchedule>> {
         let mut sets: Vec<&'static str> = Vec::new();
-        if patch.interval_ms.is_some() {
+        if patch.interval.is_some() {
             sets.push("interval_ms = ?");
         }
         if patch.enabled.is_some() {
@@ -180,13 +185,13 @@ impl ScheduleRepository {
             return self.get(id).await;
         }
         let set_clause = sets.join(", ");
-        let sql = format!("UPDATE schedules SET {set_clause} WHERE id = ?");
+        let sql = format!("UPDATE task_schedules SET {set_clause} WHERE id = ?");
         let mut params: Vec<turso::Value> = Vec::new();
-        if let Some(interval_ms) = patch.interval_ms {
-            params.push(interval_ms.to_sql());
+        if let Some(interval) = &patch.interval {
+            params.push(interval.to_sql());
         }
         if let Some(enabled) = patch.enabled {
-            params.push((if enabled { 1i64 } else { 0 }).to_sql());
+            params.push(enabled.to_sql());
         }
         params.push(id.to_sql());
         self.connection
@@ -196,14 +201,14 @@ impl ScheduleRepository {
         self.get(id).await
     }
 
-    /// Deletes the schedule with `id`. Returns whether a row was removed.
+    /// Deletes the task schedule with `id`. Returns whether a row was removed.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete(&self, id: DbId) -> Result<bool> {
         let existed = self.get(id).await?.is_some();
         if existed {
             self.connection
                 .execute(
-                    sql!(DELETE FROM schedules WHERE id = ?1),
+                    sql!(DELETE FROM task_schedules WHERE id = ?1),
                     params_from_iter([id.to_sql()]),
                 )
                 .await
@@ -216,11 +221,11 @@ impl ScheduleRepository {
     /// ordered by `next_run_at` then `id`. `limit` caps the batch size so the
     /// scheduler cannot pin a tick on a runaway backlog.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn list_due(&self, now: Timestamp, limit: usize) -> Result<Vec<Schedule>> {
+    pub async fn list_due(&self, now: Timestamp, limit: usize) -> Result<Vec<TaskSchedule>> {
         let sql = format!(
             sql!(
-                SELECT {cols} FROM schedules
-                WHERE enabled = 1 AND next_run_at <= ?1
+                SELECT {cols} FROM task_schedules
+                WHERE enabled = TRUE AND next_run_at <= ?1
                 ORDER BY next_run_at, id LIMIT ?2
             ),
             cols = SCHEDULE_COLUMNS
@@ -240,21 +245,28 @@ impl ScheduleRepository {
 
     /// Records that the schedule with `id` fired at `now`, advancing
     /// `next_run_at` by one interval and pointing `last_task_id` at the
-    /// invocation that was spawned.
+    /// invocation that was spawned. Pass `None` for `last_task_id` when the
+    /// spawn failed so the column stays NULL.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn mark_run(
         &self,
         id: DbId,
         now: Timestamp,
-        interval_ms: i64,
-        last_task_id: DbId,
+        interval: &Interval,
+        last_task_id: Option<DbId>,
     ) -> Result<()> {
-        let next_run_at =
-            Timestamp::from_millisecond(now.as_millisecond() + interval_ms).unwrap_or(now);
+        // saturating_add turns overflow into i64::MAX, which is outside jiff's
+        // timestamp range, so from_millisecond reports InvalidTimestamp.
+        let next_millis = now.as_millisecond().saturating_add(interval.as_millis());
+        let next_run_at = Timestamp::from_millisecond(next_millis).map_err(|_| {
+            StorageError::InvalidTimestamp {
+                millis: next_millis,
+            }
+        })?;
         self.connection
             .execute(
                 sql!(
-                    UPDATE schedules
+                    UPDATE task_schedules
                     SET last_run_at = ?1, last_task_id = ?2, next_run_at = ?3
                     WHERE id = ?4
                 ),
@@ -269,39 +281,18 @@ impl ScheduleRepository {
             .map_err(StorageError::from_turso)?;
         Ok(())
     }
-
-    /// Returns the schedule for `kind` if exactly one exists. Used by the
-    /// boot-time installer to avoid creating duplicates.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn find_by_kind(&self, kind: &str) -> Result<Vec<Schedule>> {
-        let sql = format!(
-            sql!(SELECT {cols} FROM schedules WHERE kind = ?1 ORDER BY id),
-            cols = SCHEDULE_COLUMNS
-        );
-        let mut rows = self
-            .connection
-            .query(&sql, params_from_iter([kind.to_sql()]))
-            .await
-            .map_err(StorageError::from_turso)?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            out.push(row_to_schedule(&row)?);
-        }
-        Ok(out)
-    }
 }
 
-fn row_to_schedule(row: &Row) -> Result<Schedule> {
-    let enabled_int: i64 = SCHEDULE_COLUMNS.extract(row, col::ENABLED)?;
-    Ok(Schedule {
+fn row_to_schedule(row: &Row) -> Result<TaskSchedule> {
+    Ok(TaskSchedule {
         id: SCHEDULE_COLUMNS.extract(row, col::ID)?,
         kind: SCHEDULE_COLUMNS.extract(row, col::KIND)?,
         input: SCHEDULE_COLUMNS.extract(row, col::INPUT)?,
-        interval_ms: SCHEDULE_COLUMNS.extract(row, col::INTERVAL_MS)?,
+        interval: SCHEDULE_COLUMNS.extract(row, col::INTERVAL_MS)?,
         next_run_at: SCHEDULE_COLUMNS.extract(row, col::NEXT_RUN_AT)?,
         last_run_at: SCHEDULE_COLUMNS.extract(row, col::LAST_RUN_AT)?,
         last_task_id: SCHEDULE_COLUMNS.extract(row, col::LAST_TASK_ID)?,
-        enabled: enabled_int != 0,
+        enabled: SCHEDULE_COLUMNS.extract(row, col::ENABLED)?,
         created_at: SCHEDULE_COLUMNS.extract(row, col::CREATED_AT)?,
     })
 }
@@ -314,11 +305,15 @@ mod tests {
         Timestamp::from_millisecond(millis).unwrap()
     }
 
-    fn new_schedule(kind: &str, interval_ms: i64, next_run_at: i64) -> NewSchedule {
-        NewSchedule {
+    fn interval(millis: i64) -> Interval {
+        Interval::from_millis(millis).unwrap()
+    }
+
+    fn new_schedule(kind: &str, interval_millis: i64, next_run_at: i64) -> NewTaskSchedule {
+        NewTaskSchedule {
             kind: kind.to_owned(),
             input: "{}".to_owned(),
-            interval_ms,
+            interval: interval(interval_millis),
             next_run_at: ts(next_run_at),
             created_at: ts(0),
         }
@@ -327,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn create_get_list_update_delete() {
         let storage = crate::Storage::open(":memory:").await.unwrap();
-        let repo = storage.schedules().unwrap();
+        let repo = storage.task_schedules().unwrap();
 
         let id = repo
             .create(&new_schedule("rotate-certificate", 86_400_000, 1_000))
@@ -335,7 +330,7 @@ mod tests {
             .unwrap();
         let fetched = repo.get(id).await.unwrap().unwrap();
         assert_eq!(fetched.kind, "rotate-certificate");
-        assert_eq!(fetched.interval_ms, 86_400_000);
+        assert_eq!(fetched.interval, interval(86_400_000));
         assert_eq!(fetched.next_run_at, ts(1_000));
         assert!(fetched.enabled);
 
@@ -345,16 +340,16 @@ mod tests {
         let updated = repo
             .update(
                 id,
-                &SchedulePatch {
+                &TaskSchedulePatch {
                     enabled: Some(false),
-                    interval_ms: Some(60_000),
+                    interval: Some(interval(60_000)),
                 },
             )
             .await
             .unwrap()
             .unwrap();
         assert!(!updated.enabled);
-        assert_eq!(updated.interval_ms, 60_000);
+        assert_eq!(updated.interval, interval(60_000));
 
         assert!(repo.delete(id).await.unwrap());
         assert!(repo.get(id).await.unwrap().is_none());
@@ -364,7 +359,7 @@ mod tests {
     #[tokio::test]
     async fn list_due_returns_only_enabled_past_due() {
         let storage = crate::Storage::open(":memory:").await.unwrap();
-        let repo = storage.schedules().unwrap();
+        let repo = storage.task_schedules().unwrap();
         // Due, enabled.
         repo.create(&new_schedule("a", 1_000, 500)).await.unwrap();
         // Not yet due.
@@ -373,7 +368,7 @@ mod tests {
         let disabled_id = repo.create(&new_schedule("c", 1_000, 500)).await.unwrap();
         repo.update(
             disabled_id,
-            &SchedulePatch {
+            &TaskSchedulePatch {
                 enabled: Some(false),
                 ..Default::default()
             },
@@ -389,12 +384,12 @@ mod tests {
     #[tokio::test]
     async fn mark_run_advances_next_run_at() {
         let storage = crate::Storage::open(":memory:").await.unwrap();
-        let repo = storage.schedules().unwrap();
+        let repo = storage.task_schedules().unwrap();
         let id = repo
             .create(&new_schedule("a", 60_000, 1_000))
             .await
             .unwrap();
-        repo.mark_run(id, ts(2_000), 60_000, DbId::from(42))
+        repo.mark_run(id, ts(2_000), &interval(60_000), Some(DbId::from(42)))
             .await
             .unwrap();
         let fetched = repo.get(id).await.unwrap().unwrap();
@@ -404,13 +399,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_by_kind_returns_all_matches() {
+    async fn mark_run_stores_null_last_task_id_on_failure() {
         let storage = crate::Storage::open(":memory:").await.unwrap();
-        let repo = storage.schedules().unwrap();
-        repo.create(&new_schedule("a", 1_000, 0)).await.unwrap();
-        repo.create(&new_schedule("a", 2_000, 0)).await.unwrap();
-        repo.create(&new_schedule("b", 1_000, 0)).await.unwrap();
-        let matches = repo.find_by_kind("a").await.unwrap();
-        assert_eq!(matches.len(), 2);
+        let repo = storage.task_schedules().unwrap();
+        let id = repo
+            .create(&new_schedule("a", 60_000, 1_000))
+            .await
+            .unwrap();
+        repo.mark_run(id, ts(2_000), &interval(60_000), None)
+            .await
+            .unwrap();
+        let fetched = repo.get(id).await.unwrap().unwrap();
+        assert_eq!(fetched.last_task_id, None);
+        assert_eq!(fetched.next_run_at, ts(62_000));
     }
 }

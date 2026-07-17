@@ -12,27 +12,31 @@ use turso::{Builder, Connection, Database};
 pub use self::artifact::{Artifact, ArtifactKey, ArtifactRepository, VersionSort};
 pub use self::error::{Result, StorageError};
 pub use self::id::DbId;
+pub use self::interval::{Interval, InvalidInterval};
 pub use self::log::{
     BootInfo, Event, EventFilter, EventRecord, Level, LogBatch, LogRepository, Span, SpanFilter,
     SpanParentFilter, SpanRecord,
 };
 pub use self::page::{ListQuery, Order, Page};
-pub use self::schedule::{NewSchedule, Schedule, SchedulePatch, ScheduleRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
     TaskRepository, TaskStatus,
+};
+pub use self::task_schedule::{
+    NewTaskSchedule, TaskSchedule, TaskSchedulePatch, TaskScheduleRepository,
 };
 
 mod artifact;
 mod error;
 mod id;
+mod interval;
 mod log;
 mod macros;
 mod migration;
 mod page;
-mod schedule;
 mod sql;
 mod task;
+mod task_schedule;
 
 /// Busy timeout for write contention. turso uses WAL mode by default, but two
 /// writers still need to take turns. Without a timeout the second writer
@@ -89,9 +93,9 @@ impl Storage {
         Ok(TaskRepository::new(self.connect()?))
     }
 
-    /// Returns the repository over the schedule catalog.
-    pub fn schedules(&self) -> Result<ScheduleRepository> {
-        Ok(ScheduleRepository::new(self.connect()?))
+    /// Returns the repository over the task schedule catalog.
+    pub fn task_schedules(&self) -> Result<TaskScheduleRepository> {
+        Ok(TaskScheduleRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the structured log tables.
