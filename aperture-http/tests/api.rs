@@ -12,6 +12,7 @@ use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use jiff::Timestamp;
 use serde_json::{Value, json};
+use tokio::sync::watch;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -71,7 +72,15 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, Storage, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, roles::ADMIN).await.unwrap();
 
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks, auth, storage.clone());
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        spectra,
+        tasks,
+        auth,
+        storage.clone(),
+        watch::channel(false).0,
+    );
     (app(state), artifacts, storage, raw_key.as_str().to_owned())
 }
 
@@ -147,7 +156,15 @@ async fn app_with_role(role: &str) -> (Router, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, role).await.unwrap();
 
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks, auth, storage);
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        spectra,
+        tasks,
+        auth,
+        storage,
+        watch::channel(false).0,
+    );
     (app(state), raw_key.as_str().to_owned())
 }
 

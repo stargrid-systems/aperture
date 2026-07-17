@@ -57,6 +57,7 @@ async fn login(
         .await?;
     let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
         .http_only(true)
+        .secure(true)
         .same_site(SameSite::Strict)
         .path("/")
         .max_age(CookieDuration::days(7))
@@ -185,6 +186,7 @@ async fn setup(
     };
     let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
         .http_only(true)
+        .secure(true)
         .same_site(SameSite::Strict)
         .path("/")
         .max_age(CookieDuration::days(7))

@@ -23,6 +23,12 @@ pub const GET_ARTIFACT_VERSION: &str = "getArtifactVersion";
 /// `DELETE /api/v1/artifacts/{key}/versions/{digest}`
 pub const DELETE_ARTIFACT_VERSION: &str = "deleteArtifactVersion";
 
+/// `PUT /api/v1/artifacts/{key}`
+pub const UPLOAD_ARTIFACT: &str = "uploadArtifact";
+
+/// `GET /api/v1/artifacts/{key}/versions/{digest}/blob`
+pub const DOWNLOAD_ARTIFACT_BLOB: &str = "downloadArtifactBlob";
+
 /// `GET /api/v1/tasks`
 pub const LIST_TASKS: &str = "listTasks";
 

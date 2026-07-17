@@ -28,9 +28,16 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct RunArgs {
-    /// Address to bind the HTTP server to. Defaults to the IPv6 loopback.
+    /// Address to bind the HTTPS server.
     #[arg(long, env = "APERTURE_ADDR", default_value = "[::1]:8000")]
     addr: SocketAddr,
+    /// Address for the HTTP listener (redirects to HTTPS by default).
+    #[arg(long, env = "APERTURE_HTTP_ADDR", default_value = "[::1]:8080")]
+    http_addr: Option<SocketAddr>,
+    /// Serve the full API over plain HTTP instead of redirecting to HTTPS.
+    /// Intended for certificate recovery only.
+    #[arg(long, env = "APERTURE_INSECURE_HTTP", default_value_t = false)]
+    insecure_http: bool,
     /// Directory for runtime data and cached components.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
@@ -54,7 +61,12 @@ fn main() -> miette::Result<()> {
             Ok(())
         }
         Command::Openapi => block_on(emit_openapi()),
-        Command::Run(args) => block_on(aperture::serve(args.addr, args.data_dir)),
+        Command::Run(args) => block_on(aperture::serve(
+            args.addr,
+            args.http_addr,
+            args.insecure_http,
+            args.data_dir,
+        )),
         Command::ResetPassword(args) => {
             block_on(aperture::reset_password(&args.user, &args.data_dir))
         }

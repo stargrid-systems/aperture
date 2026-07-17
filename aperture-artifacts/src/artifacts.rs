@@ -14,6 +14,7 @@ use aperture_tasks::ProgressHandle;
 use jiff::Timestamp;
 use oci_client::Reference;
 use tokio::fs;
+use tokio::io::AsyncRead;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::blob::BlobStore;
@@ -186,6 +187,33 @@ impl Artifacts {
     /// references it. Returns whether the version existed.
     pub async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
         self.inner.evict_version(key, digest).await
+    }
+
+    /// Stores `reader` as a content-addressed blob and records it under `key`.
+    /// Returns the stored version.
+    pub async fn put<R>(&self, key: &str, media_type: Option<&str>, reader: R) -> Result<Artifact>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let (digest, size) = self.inner.blobs.put(reader).await?;
+        let now = Timestamp::now();
+        let artifact = Artifact {
+            id: ArtifactId::from(0),
+            key: key.to_owned(),
+            source: "upload".to_owned(),
+            digest: digest.to_string(),
+            media_type: media_type.map(|s| s.to_owned()),
+            version: None,
+            size_bytes: size,
+            downloaded_at: now,
+            verified_at: Some(now),
+        };
+        self.inner
+            .storage
+            .artifacts()?
+            .record_version(&artifact)
+            .await?;
+        Ok(artifact)
     }
 
     /// Ensures the artifact in `request` is present, downloading it if needed,

@@ -8,6 +8,7 @@ use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use axum::{Json, Router};
+use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
@@ -36,6 +37,7 @@ pub struct AppState {
     tasks: Tasks,
     auth: aperture_auth::AuthHandle,
     storage: Storage,
+    tls_reload_tx: watch::Sender<bool>,
 }
 
 impl AppState {
@@ -46,6 +48,7 @@ impl AppState {
         tasks: Tasks,
         auth: aperture_auth::AuthHandle,
         storage: Storage,
+        tls_reload_tx: watch::Sender<bool>,
     ) -> Self {
         Self {
             version,
@@ -54,6 +57,7 @@ impl AppState {
             tasks,
             auth,
             storage,
+            tls_reload_tx,
         }
     }
 
@@ -79,6 +83,10 @@ impl AppState {
 
     pub(crate) fn storage(&self) -> &Storage {
         &self.storage
+    }
+
+    pub(crate) fn tls_reload_tx(&self) -> &watch::Sender<bool> {
+        &self.tls_reload_tx
     }
 
     /// Returns the repository over the structured log tables for this request.

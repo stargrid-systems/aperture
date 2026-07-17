@@ -118,6 +118,7 @@ pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
 pub(crate) fn clear_session_cookie() -> String {
     Cookie::build((SESSION_COOKIE, ""))
         .http_only(true)
+        .secure(true)
         .same_site(SameSite::Strict)
         .path("/")
         .max_age(CookieDuration::seconds(0))

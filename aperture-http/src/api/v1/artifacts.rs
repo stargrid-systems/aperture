@@ -1,7 +1,11 @@
+use aperture_artifacts::ArtifactError;
 use aperture_auth::AuthenticatedActor;
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use tokio::fs;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -16,9 +20,10 @@ use crate::error::ApiError;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
-        .routes(routes!(get_artifact))
+        .routes(routes!(upload_artifact, get_artifact))
         .routes(routes!(list_versions))
         .routes(routes!(get_version, delete_version))
+        .routes(routes!(download_artifact_blob))
 }
 
 /// Lists stored artifact keys, each with its newest version.
@@ -169,4 +174,87 @@ async fn delete_version(
     } else {
         Err(ApiError::NOT_FOUND)
     }
+}
+
+/// Uploads a new artifact version. The request body is stored as a
+/// content-addressed blob.
+#[utoipa::path(
+    put,
+    path = "/{key}",
+    operation_id = operation_ids::UPLOAD_ARTIFACT,
+    params(("key" = String, Path, description = "Artifact key")),
+    request_body(
+        content_type = "application/octet-stream",
+        description = "Raw artifact bytes to store",
+    ),
+    responses(
+        (status = 201, description = "Version stored", body = ArtifactVersionResponse),
+        (status = 403, description = "Insufficient permissions"),
+    ),
+)]
+async fn upload_artifact(
+    auth: AuthenticatedActor,
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<ArtifactVersionResponse>), ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, "artifact", "write")
+        .await?;
+    let media_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
+    let artifact = state
+        .spectra()
+        .artifacts()
+        .put(&key, media_type, body.as_ref())
+        .await?;
+    if key.starts_with("tls/") {
+        let _ = state.tls_reload_tx().send(true);
+    }
+    Ok((StatusCode::CREATED, Json(artifact.into())))
+}
+
+/// Downloads the blob content of one stored version.
+#[utoipa::path(
+    get,
+    path = "/{key}/versions/{digest}/blob",
+    operation_id = operation_ids::DOWNLOAD_ARTIFACT_BLOB,
+    params(
+        ("key" = String, Path, description = "Artifact key"),
+        ("digest" = String, Path, description = "Content digest"),
+    ),
+    responses(
+        (status = 200, description = "Blob content"),
+        (status = 404, description = "Unknown version"),
+    ),
+)]
+async fn download_artifact_blob(
+    auth: AuthenticatedActor,
+    State(state): State<AppState>,
+    Path((key, digest)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, "artifact", "read")
+        .await?;
+    let artifact = state
+        .spectra()
+        .artifacts()
+        .version(&key, &digest)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    let located = state
+        .spectra()
+        .artifacts()
+        .locate_version(&key, &digest)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    let bytes = fs::read(&located.path).await.map_err(ArtifactError::from)?;
+    let content_type = artifact
+        .media_type
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    Ok(([(header::CONTENT_TYPE, content_type)], bytes).into_response())
 }
