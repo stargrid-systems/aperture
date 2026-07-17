@@ -11,6 +11,7 @@ pub use aperture_storage::{
 
 pub use self::artifacts::{Artifacts, FetchRequest, FetchSource, Located, SyncReport};
 pub use self::blob::BlobStore;
+pub use self::change::{ArtifactChange, ChangeKind};
 pub use self::digest::{Digest, DigestAlgorithm};
 pub use self::download::{DownloadDefinition, DownloadInput, DownloadOutput, DownloadSource};
 pub use self::error::{ArtifactError, Result};
@@ -20,6 +21,7 @@ pub mod well_known;
 
 mod artifacts;
 mod blob;
+mod change;
 mod digest;
 mod download;
 mod error;

@@ -179,9 +179,6 @@ async fn upload_artifact(
         .artifacts()
         .put(&key, media_type, body.as_ref())
         .await?;
-    if key.as_str().starts_with("tls/") {
-        let _ = state.tls_reload_tx().send(());
-    }
     Ok((StatusCode::CREATED, Json(artifact.into())))
 }
 

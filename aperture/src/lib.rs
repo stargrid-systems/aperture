@@ -14,7 +14,6 @@ use rustls::crypto::ring;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
-use tokio::sync::watch;
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -70,27 +69,25 @@ pub async fn serve(
     let shared_config: tls::SharedConfig =
         Arc::new(arc_swap::ArcSwap::from_pointee(initial_config));
 
-    let (tls_reload_tx, mut tls_reload_rx) = watch::channel(());
+    // Live certificate reload. We subscribe to artifact changes and reload
+    // whenever the server cert or key is written. A short debounce coalesces
+    // back-to-back uploads of the cert and key halves (which arrive as two
+    // separate writes) into one reload attempt; a failed reload (e.g. a
+    // mismatched cert+key mid-upload) is logged and retried on the next event.
     {
         let artifacts = Arc::clone(&artifacts);
         let config = shared_config.clone();
-        tokio::spawn(async move {
-            while tls_reload_rx.changed().await.is_ok() {
-                tracing::info!("TLS reload requested");
-                if let Err(err) = tls::reload_certificates(&artifacts, &config).await {
-                    tracing::error!(error = &err as &dyn StdError, "TLS reload failed");
-                }
-            }
-        });
+        tokio::spawn(tls_reload_watcher(artifacts, config));
     }
 
+    // Periodic certificate rotation. Coalesced into the scheduler in a later
+    // commit; for now the legacy loop stays.
     {
         let artifacts = Arc::clone(&artifacts);
-        let reload_tx = tls_reload_tx.clone();
-        tokio::spawn(rotation_loop(artifacts, addr, reload_tx));
+        tokio::spawn(rotation_loop(artifacts, addr));
     }
 
-    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone(), tls_reload_tx);
+    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
     let app = aperture_http::app(state);
 
     if let Some(http_addr) = http_addr {
@@ -138,27 +135,17 @@ pub async fn serve(
     Ok(())
 }
 
-/// Checks the server certificate daily and regenerates it at half-life.
-async fn rotation_loop(
-    artifacts: Arc<Artifacts>,
-    bind_addr: SocketAddr,
-    reload_tx: watch::Sender<()>,
-) {
+/// Checks the server certificate daily and regenerates it at half-life. Reload
+/// of the live TLS listener is triggered by the artifact change feed, so this
+/// loop only writes the new cert.
+async fn rotation_loop(artifacts: Arc<Artifacts>, bind_addr: SocketAddr) {
     loop {
         sleep(Duration::from_secs(24 * 60 * 60)).await;
         match tls::needs_rotation(&artifacts).await {
             Ok(true) => {
                 tracing::info!("rotating server certificate");
-                match tls::rotate_certificate(&artifacts, bind_addr).await {
-                    Ok(()) => {
-                        let _ = reload_tx.send(());
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            error = &err as &dyn StdError,
-                            "certificate rotation failed"
-                        );
-                    }
+                if let Err(err) = tls::rotate_certificate(&artifacts, bind_addr).await {
+                    tracing::error!(error = &err as &dyn StdError, "certificate rotation failed");
                 }
             }
             Ok(false) => {}
@@ -167,6 +154,68 @@ async fn rotation_loop(
                     error = &err as &dyn StdError,
                     "certificate rotation check failed"
                 );
+            }
+        }
+    }
+}
+
+/// Window over which multiple artifact writes are coalesced into a single
+/// reload attempt. Long enough that a cert+key pair uploaded as two separate
+/// requests collapses into one reload.
+const TLS_RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// Subscribes to artifact changes and reloads the live TLS config whenever the
+/// server certificate or key is written. Reload failures (e.g. a mismatched
+/// cert+key mid-upload) are logged; the next qualifying event retries.
+async fn tls_reload_watcher(artifacts: Arc<Artifacts>, config: tls::SharedConfig) {
+    use aperture_artifacts::well_known::tls::{SERVER_CERT, SERVER_KEY};
+    use aperture_artifacts::{ArtifactChange, ChangeKind};
+    use tokio::time::Instant;
+
+    fn handle_change(
+        change: Result<ArtifactChange, tokio::sync::broadcast::error::RecvError>,
+        deadline: &mut Option<Instant>,
+    ) -> bool {
+        match change {
+            Ok(ArtifactChange {
+                key,
+                kind: ChangeKind::Written,
+            }) if key == *SERVER_CERT || key == *SERVER_KEY => {
+                let now = Instant::now();
+                *deadline = Some(deadline.map_or(now, |d| d.max(now)) + TLS_RELOAD_DEBOUNCE);
+            }
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                tracing::warn!("tls reload watcher lagged the artifact feed");
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+        }
+        true
+    }
+
+    let mut rx = artifacts.subscribe();
+    let mut deadline: Option<Instant> = None;
+    loop {
+        if let Some(when) = deadline {
+            let sleep = tokio::time::sleep_until(when);
+            tokio::pin!(sleep);
+            tokio::select! {
+                biased;
+                recv = rx.recv() => {
+                    if !handle_change(recv, &mut deadline) { return; }
+                }
+                _ = &mut sleep => {
+                    deadline = None;
+                    tracing::info!("TLS reload requested");
+                    if let Err(err) = tls::reload_certificates(&artifacts, &config).await {
+                        tracing::error!(error = &err as &dyn StdError, "TLS reload failed");
+                    }
+                }
+            }
+        } else {
+            let recv = rx.recv().await;
+            if !handle_change(recv, &mut deadline) {
+                return;
             }
         }
     }

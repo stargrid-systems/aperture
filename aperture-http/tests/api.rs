@@ -11,7 +11,6 @@ use axum::http::{Request, StatusCode};
 use axum::response::Response;
 use jiff::Timestamp;
 use serde_json::{Value, json};
-use tokio::sync::watch;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -59,7 +58,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>) {
         tasks.clone(),
         SpectraConfig::default(),
     );
-    let state = AppState::new("test", Uuid::nil(), spectra, tasks, watch::channel(()).0);
+    let state = AppState::new("test", Uuid::nil(), spectra, tasks);
     (app(state), artifacts)
 }
 

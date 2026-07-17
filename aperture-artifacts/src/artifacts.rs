@@ -17,15 +17,21 @@ use jiff::Timestamp;
 use oci_client::Reference;
 use tokio::fs;
 use tokio::io::AsyncRead;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
 use crate::blob::BlobStore;
+use crate::change::{ArtifactChange, ChangeKind};
 use crate::digest::Digest;
 use crate::error::{ArtifactError, Result};
 use crate::fetch::{FetchMeta, Fetched, OciFetcher, Resolved};
 use crate::hash_writer::HashWriter;
 use crate::media_type::MediaType;
 use crate::progress::ProgressWriter;
+
+/// Capacity of the in-process change feed. Events past this buffer (when no
+/// subscriber is keeping up) are dropped silently. The next subscriber-visible
+/// event still arrives.
+const CHANGE_FEED_CAPACITY: usize = 64;
 
 /// How long a resolved reference stays cached before it is re-checked against
 /// the registry.
@@ -115,11 +121,14 @@ struct Inner {
     /// One lock per content digest, so concurrent downloads of the same content
     /// collapse onto a single transfer instead of each pulling it.
     pull_locks: Mutex<HashMap<Digest, Weak<AsyncMutex<()>>>>,
+    /// Best-effort feed of artifact changes. See [`ArtifactChange`].
+    changes: broadcast::Sender<ArtifactChange>,
 }
 
 impl Artifacts {
     /// Creates a store backed by `storage`, keeping blobs under `store_root`.
     pub fn new(storage: Storage, store_root: PathBuf) -> Self {
+        let (changes, _) = broadcast::channel(CHANGE_FEED_CAPACITY);
         Self {
             inner: Arc::new(Inner {
                 storage,
@@ -127,6 +136,7 @@ impl Artifacts {
                 oci: OciFetcher::new(),
                 resolutions: Mutex::new(HashMap::new()),
                 pull_locks: Mutex::new(HashMap::new()),
+                changes,
             }),
         }
     }
@@ -141,6 +151,13 @@ impl Artifacts {
     /// Read access to the storage catalog.
     pub fn storage(&self) -> &Storage {
         &self.inner.storage
+    }
+
+    /// Subscribes to artifact changes. Late subscribers do not see events from
+    /// before they subscribed. The receiver stops receiving when all senders
+    /// are dropped, which happens only when the [`Artifacts`] is dropped.
+    pub fn subscribe(&self) -> broadcast::Receiver<ArtifactChange> {
+        self.inner.changes.subscribe()
     }
 
     /// Returns the blob of the newest stored version of `key`, if present on
@@ -200,7 +217,14 @@ impl Artifacts {
     /// Removes the `(key, digest)` version, and its blob if no other version
     /// references it. Returns whether the version existed.
     pub async fn evict_version(&self, key: &ArtifactKey, digest: &str) -> Result<bool> {
-        self.inner.evict_version(key, digest).await
+        let removed = self.inner.evict_version(key, digest).await?;
+        if removed {
+            self.inner.notify(ArtifactChange {
+                key: key.clone(),
+                kind: ChangeKind::Removed,
+            });
+        }
+        Ok(removed)
     }
 
     /// Stores `reader` as a content-addressed blob and records it under `key`.
@@ -232,6 +256,10 @@ impl Artifacts {
             .artifacts()?
             .record_version(&artifact)
             .await?;
+        self.inner.notify(ArtifactChange {
+            key: key.clone(),
+            kind: ChangeKind::Written,
+        });
         Ok(artifact)
     }
 
@@ -244,7 +272,12 @@ impl Artifacts {
         request: FetchRequest,
         progress: ProgressHandle,
     ) -> Result<Artifact> {
-        self.inner.download(&request, &progress).await
+        let artifact = self.inner.download(&request, &progress).await?;
+        self.inner.notify(ArtifactChange {
+            key: artifact.key.clone(),
+            kind: ChangeKind::Written,
+        });
+        Ok(artifact)
     }
 
     /// Reconciles the catalog with the blob store. Removes catalog entries
@@ -256,6 +289,12 @@ impl Artifacts {
 }
 
 impl Inner {
+    /// Publishes `change` to the feed. Late or lagging receivers are dropped:
+    /// a send error here is expected and silently ignored.
+    fn notify(&self, change: ArtifactChange) {
+        let _ = self.changes.send(change);
+    }
+
     async fn locate(&self, key: &ArtifactKey) -> Result<Option<Located>> {
         match self.storage.artifacts()?.latest(key).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,

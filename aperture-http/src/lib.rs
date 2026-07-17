@@ -7,7 +7,6 @@ use aperture_storage::LogRepository;
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::routing::get;
 use axum::{Json, Router};
-use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
@@ -33,25 +32,17 @@ pub struct AppState {
     boot_id: Uuid,
     spectra: Spectra,
     tasks: Tasks,
-    tls_reload_tx: watch::Sender<()>,
 }
 
 impl AppState {
-    /// Wraps the gateway version, boot id, Spectra frontend, task manager,
-    /// and TLS reload trigger for use as request state.
-    pub fn new(
-        version: &'static str,
-        boot_id: Uuid,
-        spectra: Spectra,
-        tasks: Tasks,
-        tls_reload_tx: watch::Sender<()>,
-    ) -> Self {
+    /// Wraps the gateway version, boot id, Spectra frontend, and task manager
+    /// for use as request state.
+    pub fn new(version: &'static str, boot_id: Uuid, spectra: Spectra, tasks: Tasks) -> Self {
         Self {
             version,
             boot_id,
             spectra,
             tasks,
-            tls_reload_tx,
         }
     }
 
@@ -69,10 +60,6 @@ impl AppState {
 
     pub(crate) fn tasks(&self) -> &Tasks {
         &self.tasks
-    }
-
-    pub(crate) fn tls_reload_tx(&self) -> &watch::Sender<()> {
-        &self.tls_reload_tx
     }
 
     /// Returns the repository over the structured log tables for this request.
