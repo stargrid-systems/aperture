@@ -27,10 +27,16 @@ enum Command {
 #[derive(Debug, Args)]
 struct RunArgs {
     /// Address to bind the HTTPS server.
-    #[arg(long, env = "APERTURE_ADDR", default_value = "[::1]:8000")]
-    addr: SocketAddr,
+    #[arg(long, env = "APERTURE_HTTPS_ADDR", default_value = "[::1]:8443")]
+    https_addr: SocketAddr,
     /// Address for the HTTP listener (redirects to HTTPS by default).
-    #[arg(long, env = "APERTURE_HTTP_ADDR", default_value = "[::1]:8080")]
+    /// Pass an empty string to disable the HTTP listener entirely.
+    #[arg(
+        long,
+        env = "APERTURE_HTTP_ADDR",
+        default_value = "[::1]:8080",
+        value_parser = parse_optional_addr,
+    )]
     http_addr: Option<SocketAddr>,
     /// Serve the full API over plain HTTP instead of redirecting to HTTPS.
     /// Intended for certificate recovery only.
@@ -39,6 +45,16 @@ struct RunArgs {
     /// Directory for runtime data and cached components.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
+}
+
+/// Parses an HTTP listener address. An empty string means "no listener".
+fn parse_optional_addr(s: &str) -> Result<Option<SocketAddr>, miette::Report> {
+    if s.is_empty() {
+        return Ok(None);
+    }
+    s.parse::<SocketAddr>()
+        .map(Some)
+        .map_err(|e| miette::miette!("invalid socket address {s:?}: {e}"))
 }
 
 fn main() -> miette::Result<()> {
@@ -50,7 +66,7 @@ fn main() -> miette::Result<()> {
         }
         Command::Openapi => block_on(emit_openapi()),
         Command::Run(args) => block_on(aperture::serve(
-            args.addr,
+            args.https_addr,
             args.http_addr,
             args.insecure_http,
             args.data_dir,

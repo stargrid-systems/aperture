@@ -25,18 +25,18 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Runs the gateway HTTPS server until the process is terminated.
 ///
-/// `addr` is the HTTPS listener. `http_addr`, if given, starts a second
+/// `https_addr` is the HTTPS listener. `http_addr`, if given, starts a second
 /// listener that either redirects to HTTPS (default) or serves the full API
 /// over plain HTTP when `insecure_http` is set (recovery mode).
 pub async fn serve(
-    addr: SocketAddr,
+    https_addr: SocketAddr,
     http_addr: Option<SocketAddr>,
     insecure_http: bool,
     data_dir: PathBuf,
 ) -> miette::Result<()> {
-    if http_addr == Some(addr) {
+    if http_addr == Some(https_addr) {
         return Err(miette::miette!(
-            "--https-addr and --http-addr must differ (both were {addr})"
+            "--https-addr and --http-addr must differ (both were {https_addr})"
         ));
     }
 
@@ -66,7 +66,7 @@ pub async fn serve(
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    tls::ensure_certificates(&artifacts, addr)
+    tls::ensure_certificates(&artifacts, https_addr)
         .await
         .into_diagnostic()?;
 
@@ -75,7 +75,7 @@ pub async fn serve(
     // expired cert while waiting for the daily rotation tick.
     if tls::needs_rotation(&artifacts).await.into_diagnostic()? {
         tracing::info!("server certificate needs rotation at boot; rotating");
-        tls::rotate_certificate(&artifacts, addr)
+        tls::rotate_certificate(&artifacts, https_addr)
             .await
             .into_diagnostic()?;
     }
@@ -101,7 +101,7 @@ pub async fn serve(
     // commit; for now the legacy loop stays.
     {
         let artifacts = Arc::clone(&artifacts);
-        tokio::spawn(rotation_loop(artifacts, addr));
+        tokio::spawn(rotation_loop(artifacts, https_addr));
     }
 
     let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
@@ -122,7 +122,7 @@ pub async fn serve(
             });
         } else {
             tracing::info!(%http_addr, "http redirect listening");
-            let redirect = tls::redirect_router(addr.port());
+            let redirect = tls::redirect_router(https_addr.port());
             tokio::spawn(async move {
                 if let Err(err) = axum::serve(http_listener, redirect)
                     .with_graceful_shutdown(shutdown_signal())
@@ -134,9 +134,9 @@ pub async fn serve(
         }
     }
 
-    let tcp_listener = TcpListener::bind(addr).await.into_diagnostic()?;
+    let tcp_listener = TcpListener::bind(https_addr).await.into_diagnostic()?;
     let tls_listener = tls::TlsListener::new(tcp_listener, shared_config);
-    tracing::info!(%addr, "aperture listening (https)");
+    tracing::info!(%https_addr, "aperture listening (https)");
     let result = axum::serve(tls_listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
