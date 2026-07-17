@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::{env, fs, process};
 
-use aperture_artifacts::{Artifact, Artifacts, ListQuery, Storage, VersionSort};
+use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, ListQuery, Storage, VersionSort};
 use aperture_storage::DbId;
 use jiff::Timestamp;
 
@@ -21,7 +21,7 @@ async fn sync_removes_versions_without_blobs() {
     // A catalog version whose blob never made it to disk.
     repo.record_version(&Artifact {
         id: DbId::from(0),
-        key: "spectra".to_owned(),
+        key: ArtifactKey::new("spectra").unwrap(),
         source: "src".to_owned(),
         digest: "sha256:deadbeef".to_owned(),
         media_type: None,
@@ -38,7 +38,7 @@ async fn sync_removes_versions_without_blobs() {
 
     let versions = repo
         .list_versions(
-            "spectra",
+            &ArtifactKey::new("spectra").unwrap(),
             VersionSort::DownloadedAt,
             None,
             None,

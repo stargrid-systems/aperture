@@ -5,7 +5,8 @@
 //! Downloading is driven by the task system through [`DownloadDefinition`].
 
 pub use aperture_storage::{
-    Artifact, ArtifactKey, ListQuery, Order, Page, Storage, StorageError, VersionSort,
+    Artifact, ArtifactKey, ArtifactKeyEntry, InvalidArtifactKey, ListQuery, Order, Page, Storage,
+    StorageError, VersionSort,
 };
 
 pub use self::artifacts::{Artifacts, FetchRequest, FetchSource, Located, SyncReport};
@@ -14,6 +15,8 @@ pub use self::digest::{Digest, DigestAlgorithm};
 pub use self::download::{DownloadDefinition, DownloadInput, DownloadOutput, DownloadSource};
 pub use self::error::{ArtifactError, Result};
 pub use self::media_type::MediaType;
+
+pub mod well_known;
 
 mod artifacts;
 mod blob;

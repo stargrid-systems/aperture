@@ -61,8 +61,12 @@ pub async fn serve(
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    tls::ensure_certificates(&artifacts, addr).await.into_diagnostic()?;
-    let initial_config = tls::load_server_config(&artifacts).await.into_diagnostic()?;
+    tls::ensure_certificates(&artifacts, addr)
+        .await
+        .into_diagnostic()?;
+    let initial_config = tls::load_server_config(&artifacts)
+        .await
+        .into_diagnostic()?;
     let shared_config: tls::SharedConfig =
         Arc::new(arc_swap::ArcSwap::from_pointee(initial_config));
 

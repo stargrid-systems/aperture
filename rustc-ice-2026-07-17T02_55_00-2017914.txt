@@ -1,0 +1,71 @@
+thread 'rustc' panicked at /rustc-dev/13f1859f2faf97a15664e655624baa7417fdc100/compiler/rustc_middle/src/verify_ich.rs:82:9:
+Found unstable fingerprints for evaluate_obligation(d720e60c3774085b-1cd523da1aca1598): Ok(EvaluatedToOk)
+stack backtrace:
+   0:     0x7f30e9cbacfb - <std[510a1a308a396355]::backtrace::Backtrace>::create
+   1:     0x7f30e9cbac45 - <std[510a1a308a396355]::backtrace::Backtrace>::force_capture
+   2:     0x7f30e8cc31ed - std[510a1a308a396355]::panicking::update_hook::<alloc[7e3139a9b6ccc374]::boxed::Box<rustc_driver_impl[98b146ff405b6486]::install_ice_hook::{closure#1}>>::{closure#0}
+   3:     0x7f30e9cce462 - std[510a1a308a396355]::panicking::panic_with_hook
+   4:     0x7f30e9cb06c2 - std[510a1a308a396355]::panicking::panic_handler::{closure#0}
+   5:     0x7f30e9ca4ba9 - std[510a1a308a396355]::sys::backtrace::__rust_end_short_backtrace::<std[510a1a308a396355]::panicking::panic_handler::{closure#0}, !>
+   6:     0x7f30e9cb212d - __rustc[83f113bfcd06fa54]::rust_begin_unwind
+   7:     0x7f30e6d808bc - core[dead8b94c8efb5fe]::panicking::panic_fmt
+   8:     0x7f30e92a0986 - rustc_middle[8c82ceeaed34a595]::verify_ich::incremental_verify_ich_failed
+   9:     0x7f30ea783ddc - rustc_middle[8c82ceeaed34a595]::verify_ich::incremental_verify_ich::<rustc_middle[8c82ceeaed34a595]::query::erase::ErasedData<[u8; 2usize]>>
+  10:     0x7f30eb190615 - rustc_query_impl[701d499d06323bb1]::execution::try_execute_query::<rustc_middle[8c82ceeaed34a595]::query::caches::DefaultCache<rustc_type_ir[3ccc9d90650f4bf0]::canonical::CanonicalQueryInput<rustc_middle[8c82ceeaed34a595]::ty::context::TyCtxt, rustc_middle[8c82ceeaed34a595]::ty::ParamEnvAnd<rustc_middle[8c82ceeaed34a595]::ty::predicate::Predicate>>, rustc_middle[8c82ceeaed34a595]::query::erase::ErasedData<[u8; 2usize]>>, true>
+  11:     0x7f30eb18ee96 - rustc_query_impl[701d499d06323bb1]::query_impl::evaluate_obligation::execute_query_incr::__rust_end_short_backtrace
+  12:     0x7f30eaac28ef - <rustc_trait_selection[1517a5a154f24a6b]::traits::fulfill::FulfillProcessor as rustc_data_structures[1e2b1c32dea679e7]::obligation_forest::ObligationProcessor>::process_obligation
+  13:     0x7f30ea405c11 - <rustc_data_structures[1e2b1c32dea679e7]::obligation_forest::ObligationForest<rustc_trait_selection[1517a5a154f24a6b]::traits::fulfill::PendingPredicateObligation>>::process_obligations::<rustc_trait_selection[1517a5a154f24a6b]::traits::fulfill::FulfillProcessor>
+  14:     0x7f30ea6ee136 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_argument_types
+  15:     0x7f30ea6981ba - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_method_call
+  16:     0x7f30ea6b8d7e - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  17:     0x7f30ea68c0a3 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_block
+  18:     0x7f30ea6b8dab - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  19:     0x7f30ea673b59 - rustc_hir_typeck[c6edbda2cf397870]::check::check_fn
+  20:     0x7f30eb08485d - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_closure
+  21:     0x7f30ea6bca99 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  22:     0x7f30ea6ee5c8 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_argument_types
+  23:     0x7f30ea6981ba - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_method_call
+  24:     0x7f30ea6b8d7e - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  25:     0x7f30ea680a84 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_decl
+  26:     0x7f30ea68ca2c - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_block
+  27:     0x7f30ea6b8dab - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  28:     0x7f30ea6ee5c8 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_argument_types
+  29:     0x7f30ea6981ba - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_method_call
+  30:     0x7f30ea6b8d7e - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  31:     0x7f30ea6978d2 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_method_call
+  32:     0x7f30ea6b8d7e - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  33:     0x7f30ea6978d2 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_method_call
+  34:     0x7f30ea6b8d7e - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  35:     0x7f30ea6978d2 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_method_call
+  36:     0x7f30ea6b8d7e - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  37:     0x7f30ea6978d2 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_method_call
+  38:     0x7f30ea6b8d7e - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  39:     0x7f30ea68c0a3 - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_block
+  40:     0x7f30ea6b8dab - <rustc_hir_typeck[c6edbda2cf397870]::fn_ctxt::FnCtxt>::check_expr_with_expectation_and_args
+  41:     0x7f30ea673b59 - rustc_hir_typeck[c6edbda2cf397870]::check::check_fn
+  42:     0x7f30eb5e809c - rustc_hir_typeck[c6edbda2cf397870]::typeck_with_inspect::{closure#0}
+  43:     0x7f30eb5e6a30 - rustc_query_impl[701d499d06323bb1]::query_impl::typeck_root::invoke_provider_fn::__rust_begin_short_backtrace
+  44:     0x7f30ea76dd72 - rustc_query_impl[701d499d06323bb1]::execution::try_execute_query::<rustc_data_structures[1e2b1c32dea679e7]::vec_cache::VecCache<rustc_span[8cbe8aac731c2b5d]::def_id::LocalDefId, rustc_middle[8c82ceeaed34a595]::query::erase::ErasedData<[u8; 8usize]>, rustc_middle[8c82ceeaed34a595]::dep_graph::graph::DepNodeIndex>, true>
+  45:     0x7f30ea76d1ee - rustc_query_impl[701d499d06323bb1]::query_impl::typeck_root::execute_query_incr::__rust_end_short_backtrace
+  46:     0x7f30eaae162d - <rustc_middle[8c82ceeaed34a595]::ty::context::TyCtxt>::par_hir_body_owners::<rustc_hir_analysis[7a5860ec34d5845b]::check_crate::{closure#1}>::{closure#0}
+  47:     0x7f30eaae1021 - rustc_hir_analysis[7a5860ec34d5845b]::check_crate
+  48:     0x7f30eaae4bba - rustc_interface[f28dd7f8f39e9b18]::passes::analysis
+  49:     0x7f30eb649a03 - rustc_query_impl[701d499d06323bb1]::execution::try_execute_query::<rustc_middle[8c82ceeaed34a595]::query::caches::SingleCache<rustc_middle[8c82ceeaed34a595]::query::erase::ErasedData<[u8; 0usize]>>, true>
+  50:     0x7f30eb649337 - rustc_query_impl[701d499d06323bb1]::query_impl::analysis::execute_query_incr::__rust_end_short_backtrace
+  51:     0x7f30eb56a900 - rustc_interface[f28dd7f8f39e9b18]::interface::run_compiler::<(), rustc_driver_impl[98b146ff405b6486]::run_compiler::{closure#0}>::{closure#1}
+  52:     0x7f30eb5b147a - std[510a1a308a396355]::sys::backtrace::__rust_begin_short_backtrace::<rustc_interface[f28dd7f8f39e9b18]::util::run_in_thread_with_globals<rustc_interface[f28dd7f8f39e9b18]::util::run_in_thread_pool_with_globals<rustc_interface[f28dd7f8f39e9b18]::interface::run_compiler<(), rustc_driver_impl[98b146ff405b6486]::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>
+  53:     0x7f30eb5b122d - <std[510a1a308a396355]::thread::lifecycle::spawn_unchecked<rustc_interface[f28dd7f8f39e9b18]::util::run_in_thread_with_globals<rustc_interface[f28dd7f8f39e9b18]::util::run_in_thread_pool_with_globals<rustc_interface[f28dd7f8f39e9b18]::interface::run_compiler<(), rustc_driver_impl[98b146ff405b6486]::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>::{closure#1} as core[dead8b94c8efb5fe]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  54:     0x7f30eb5a7750 - <std[510a1a308a396355]::sys::thread::unix::Thread>::new::thread_start
+  55:     0x7f30e5079d19 - start_thread
+  56:     0x7f30e50fd64c - __clone3
+  57:                0x0 - <unknown>
+
+
+rustc version: 1.98.0-nightly (13f1859f2 2026-06-27)
+platform: x86_64-unknown-linux-gnu
+
+query stack during panic:
+#0 [evaluate_obligation] evaluating trait selection obligation `std::sync::once_lock::OnceLock<turso_core::io::completions::Completion>: core::marker::Send`
+#1 [typeck_root] type-checking `api::v1::artifacts::router`
+#2 [analysis] running analysis passes on crate `aperture_http`
+end of query stack

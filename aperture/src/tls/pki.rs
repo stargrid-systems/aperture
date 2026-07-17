@@ -9,6 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
+use aperture_artifacts::well_known::tls::{CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY};
 use jiff::Timestamp;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
@@ -27,12 +28,6 @@ pub const CA_VALIDITY_DAYS: u64 = 365 * 5;
 
 /// Leaf certificate validity in days (short-lived, ACME-style).
 pub const LEAF_VALIDITY_DAYS: u64 = 14;
-
-/// Artifact keys for TLS certificates.
-pub const CA_CERT_KEY: &str = "tls/ca-cert";
-pub const CA_KEY_KEY: &str = "tls/ca-key";
-pub const SERVER_CERT_KEY: &str = "tls/server-cert";
-pub const SERVER_KEY_KEY: &str = "tls/server-key";
 
 /// Generated PKI material, PEM-encoded.
 pub struct Pki {
@@ -73,8 +68,8 @@ pub async fn regenerate_leaf(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
 ) -> Result<(String, String), TlsError> {
-    let ca_cert_pem = read_artifact(artifacts, CA_CERT_KEY).await?;
-    let ca_key_pem = read_artifact(artifacts, CA_KEY_KEY).await?;
+    let ca_cert_pem = read_artifact(artifacts, &CA_CERT).await?;
+    let ca_key_pem = read_artifact(artifacts, &CA_KEY).await?;
 
     let ca_key = KeyPair::from_pem(&ca_key_pem)?;
     let issuer = Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key)?;
@@ -128,22 +123,22 @@ pub async fn ensure_certificates(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
 ) -> Result<(), TlsError> {
-    if artifacts.locate(SERVER_CERT_KEY).await?.is_some() {
+    if artifacts.locate(&SERVER_CERT).await?.is_some() {
         return Ok(());
     }
     tracing::info!("generating initial PKI");
     let pki = generate_pki(bind_addr)?;
-    store_artifact(artifacts, CA_CERT_KEY, &pki.ca_cert_pem).await?;
-    store_artifact(artifacts, CA_KEY_KEY, &pki.ca_key_pem).await?;
-    store_artifact(artifacts, SERVER_CERT_KEY, &pki.server_cert_pem).await?;
-    store_artifact(artifacts, SERVER_KEY_KEY, &pki.server_key_pem).await?;
+    store_artifact(artifacts, &CA_CERT, &pki.ca_cert_pem).await?;
+    store_artifact(artifacts, &CA_KEY, &pki.ca_key_pem).await?;
+    store_artifact(artifacts, &SERVER_CERT, &pki.server_cert_pem).await?;
+    store_artifact(artifacts, &SERVER_KEY, &pki.server_key_pem).await?;
     Ok(())
 }
 
 /// Loads the server certificate from artifacts and builds a `ServerConfig`.
 pub async fn load_server_config(artifacts: &Artifacts) -> Result<ServerConfig, TlsError> {
-    let cert_pem = read_artifact(artifacts, SERVER_CERT_KEY).await?;
-    let key_pem = read_artifact(artifacts, SERVER_KEY_KEY).await?;
+    let cert_pem = read_artifact(artifacts, &SERVER_CERT).await?;
+    let key_pem = read_artifact(artifacts, &SERVER_KEY).await?;
     build_server_config(&cert_pem, &key_pem)
 }
 
@@ -160,7 +155,7 @@ pub async fn reload_certificates(
 
 /// Returns true when the server certificate is past half its lifetime.
 pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
-    let Some(key) = artifacts.artifact(SERVER_CERT_KEY).await? else {
+    let Some(key) = artifacts.artifact(&SERVER_CERT).await? else {
         return Ok(false);
     };
     let now = Timestamp::now();
@@ -175,8 +170,8 @@ pub async fn rotate_certificate(
     bind_addr: SocketAddr,
 ) -> Result<(), TlsError> {
     let (cert_pem, key_pem) = regenerate_leaf(artifacts, bind_addr).await?;
-    store_artifact(artifacts, SERVER_CERT_KEY, &cert_pem).await?;
-    store_artifact(artifacts, SERVER_KEY_KEY, &key_pem).await?;
+    store_artifact(artifacts, &SERVER_CERT, &cert_pem).await?;
+    store_artifact(artifacts, &SERVER_KEY, &key_pem).await?;
     Ok(())
 }
 
@@ -193,14 +188,21 @@ pub fn build_server_config(cert_pem: &str, key_pem: &str) -> Result<ServerConfig
         .with_single_cert(cert_chain, key)?)
 }
 
-async fn store_artifact(artifacts: &Artifacts, key: &str, pem: &str) -> Result<(), TlsError> {
+async fn store_artifact(
+    artifacts: &Artifacts,
+    key: &aperture_artifacts::ArtifactKey,
+    pem: &str,
+) -> Result<(), TlsError> {
     artifacts
         .put(key, Some("application/x-pem-file"), pem.as_bytes())
         .await?;
     Ok(())
 }
 
-async fn read_artifact(artifacts: &Artifacts, key: &str) -> Result<String, TlsError> {
+async fn read_artifact(
+    artifacts: &Artifacts,
+    key: &aperture_artifacts::ArtifactKey,
+) -> Result<String, TlsError> {
     let located = artifacts
         .locate(key)
         .await?

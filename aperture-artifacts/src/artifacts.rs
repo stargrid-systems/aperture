@@ -9,7 +9,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
-use aperture_storage::{Artifact, ArtifactKey, DbId, ListQuery, Page, Storage, VersionSort};
+use aperture_storage::{
+    Artifact, ArtifactKey, ArtifactKeyEntry, DbId, ListQuery, Page, Storage, VersionSort,
+};
 use aperture_tasks::ProgressHandle;
 use jiff::Timestamp;
 use oci_client::Reference;
@@ -51,7 +53,7 @@ pub struct Located {
 #[derive(Debug, Clone)]
 pub struct FetchRequest {
     /// Logical key to record the artifact under.
-    pub key: String,
+    pub key: ArtifactKey,
     /// Where and how to fetch it from.
     pub source: FetchSource,
 }
@@ -143,12 +145,12 @@ impl Artifacts {
 
     /// Returns the blob of the newest stored version of `key`, if present on
     /// disk.
-    pub async fn locate(&self, key: &str) -> Result<Option<Located>> {
+    pub async fn locate(&self, key: &ArtifactKey) -> Result<Option<Located>> {
         self.inner.locate(key).await
     }
 
     /// Returns the blob of the `(key, digest)` version, if present on disk.
-    pub async fn locate_version(&self, key: &str, digest: &str) -> Result<Option<Located>> {
+    pub async fn locate_version(&self, key: &ArtifactKey, digest: &str) -> Result<Option<Located>> {
         self.inner.locate_version(key, digest).await
     }
 
@@ -158,12 +160,12 @@ impl Artifacts {
         &self,
         q: Option<&str>,
         query: &ListQuery,
-    ) -> Result<Page<ArtifactKey>> {
+    ) -> Result<Page<ArtifactKeyEntry>> {
         Ok(self.inner.storage.artifacts()?.list_keys(q, query).await?)
     }
 
     /// Returns one artifact key with its newest version and version count.
-    pub async fn artifact(&self, key: &str) -> Result<Option<ArtifactKey>> {
+    pub async fn artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactKeyEntry>> {
         Ok(self.inner.storage.artifacts()?.get_key(key).await?)
     }
 
@@ -171,7 +173,7 @@ impl Artifacts {
     /// `media_type` and `version`.
     pub async fn list_versions(
         &self,
-        key: &str,
+        key: &ArtifactKey,
         sort: VersionSort,
         media_type: Option<&str>,
         version: Option<&str>,
@@ -186,7 +188,7 @@ impl Artifacts {
     }
 
     /// Returns the `(key, digest)` version, if stored.
-    pub async fn version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
+    pub async fn version(&self, key: &ArtifactKey, digest: &str) -> Result<Option<Artifact>> {
         Ok(self
             .inner
             .storage
@@ -197,13 +199,18 @@ impl Artifacts {
 
     /// Removes the `(key, digest)` version, and its blob if no other version
     /// references it. Returns whether the version existed.
-    pub async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
+    pub async fn evict_version(&self, key: &ArtifactKey, digest: &str) -> Result<bool> {
         self.inner.evict_version(key, digest).await
     }
 
     /// Stores `reader` as a content-addressed blob and records it under `key`.
     /// Returns the stored version.
-    pub async fn put<R>(&self, key: &str, media_type: Option<&str>, reader: R) -> Result<Artifact>
+    pub async fn put<R>(
+        &self,
+        key: &ArtifactKey,
+        media_type: Option<&str>,
+        reader: R,
+    ) -> Result<Artifact>
     where
         R: AsyncRead + Unpin,
     {
@@ -211,7 +218,7 @@ impl Artifacts {
         let now = Timestamp::now();
         let artifact = Artifact {
             id: DbId::from(0),
-            key: key.to_owned(),
+            key: key.clone(),
             source: "upload".to_owned(),
             digest: digest.to_string(),
             media_type: media_type.map(|s| s.to_owned()),
@@ -249,14 +256,14 @@ impl Artifacts {
 }
 
 impl Inner {
-    async fn locate(&self, key: &str) -> Result<Option<Located>> {
+    async fn locate(&self, key: &ArtifactKey) -> Result<Option<Located>> {
         match self.storage.artifacts()?.latest(key).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,
             None => Ok(None),
         }
     }
 
-    async fn locate_version(&self, key: &str, digest: &str) -> Result<Option<Located>> {
+    async fn locate_version(&self, key: &ArtifactKey, digest: &str) -> Result<Option<Located>> {
         match self.storage.artifacts()?.get_version(key, digest).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,
             None => Ok(None),
@@ -276,7 +283,7 @@ impl Inner {
 
     /// Removes a stored version, and its blob when no other version still
     /// references that digest. Returns whether the version existed.
-    async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
+    async fn evict_version(&self, key: &ArtifactKey, digest: &str) -> Result<bool> {
         let repository = self.storage.artifacts()?;
         let Some(artifact) = repository.get_version(key, digest).await? else {
             return Ok(false);
@@ -547,7 +554,7 @@ mod tests {
 
     fn oci_request(reference: &str, media_type: &str) -> FetchRequest {
         FetchRequest {
-            key: "spectra".to_owned(),
+            key: ArtifactKey::new("spectra").expect("valid key"),
             source: FetchSource::Oci {
                 reference: reference.to_owned(),
                 media_type: MediaType::from(media_type),

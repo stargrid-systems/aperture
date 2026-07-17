@@ -57,6 +57,10 @@ pub enum StorageError {
     /// A JSON column value could not be deserialized.
     #[error("invalid JSON at column {column}: {error}")]
     InvalidJson { column: usize, error: String },
+
+    /// An artifact key failed validation.
+    #[error("invalid artifact key: {0}")]
+    InvalidArtifactKey(#[from] crate::key::InvalidArtifactKey),
 }
 
 impl StorageError {

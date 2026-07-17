@@ -1,16 +1,20 @@
 use std::{env, fs};
 
-use aperture_storage::{Artifact, DbId, ListQuery, Storage, VersionSort};
+use aperture_storage::{Artifact, ArtifactKey, DbId, ListQuery, Storage, VersionSort};
 use jiff::Timestamp;
 
 fn at(millis: i64) -> Timestamp {
     Timestamp::from_millisecond(millis).unwrap()
 }
 
-fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
+fn key(s: &str) -> ArtifactKey {
+    ArtifactKey::new(s).unwrap()
+}
+
+fn version(key_str: &str, digest: &str, downloaded_at: i64) -> Artifact {
     Artifact {
         id: DbId::from(0),
-        key: key.to_owned(),
+        key: key(key_str),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
         digest: digest.to_owned(),
         media_type: Some("application/vnd.spectra.tar+gzip".to_owned()),
@@ -26,7 +30,7 @@ async fn record_latest_and_get_version() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.artifacts().unwrap();
 
-    assert!(repo.latest("spectra").await.unwrap().is_none());
+    assert!(repo.latest(&key("spectra")).await.unwrap().is_none());
 
     repo.record_version(&version("spectra", "sha256:aaa", 1_000))
         .await
@@ -35,18 +39,18 @@ async fn record_latest_and_get_version() {
         .await
         .unwrap();
 
-    let latest = repo.latest("spectra").await.unwrap().unwrap();
+    let latest = repo.latest(&key("spectra")).await.unwrap().unwrap();
     assert_eq!(latest.digest, "sha256:bbb");
 
     let specific = repo
-        .get_version("spectra", "sha256:aaa")
+        .get_version(&key("spectra"), "sha256:aaa")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(specific.digest, "sha256:aaa");
 
     assert!(
-        repo.get_version("spectra", "missing")
+        repo.get_version(&key("spectra"), "missing")
             .await
             .unwrap()
             .is_none()
@@ -67,7 +71,7 @@ async fn record_version_is_idempotent_per_digest() {
 
     let versions = repo
         .list_versions(
-            "spectra",
+            &key("spectra"),
             VersionSort::DownloadedAt,
             None,
             None,
@@ -98,9 +102,9 @@ async fn list_keys_returns_latest_and_count() {
     let keys = repo.list_keys(None, &ListQuery::default()).await.unwrap();
     assert_eq!(keys.items.len(), 2);
     // Ordered by key ascending.
-    assert_eq!(keys.items[0].latest.key, "firmware");
+    assert_eq!(keys.items[0].latest.key, key("firmware"));
     assert_eq!(keys.items[0].version_count, 1);
-    assert_eq!(keys.items[1].latest.key, "spectra");
+    assert_eq!(keys.items[1].latest.key, key("spectra"));
     assert_eq!(keys.items[1].version_count, 2);
     assert_eq!(keys.items[1].latest.digest, "sha256:bbb");
 }
@@ -224,7 +228,7 @@ async fn list_versions_sorts_and_paginates() {
     // Default order is downloaded_at descending.
     let first = repo
         .list_versions(
-            "spectra",
+            &key("spectra"),
             VersionSort::DownloadedAt,
             None,
             None,
@@ -247,7 +251,7 @@ async fn list_versions_sorts_and_paginates() {
 
     let second = repo
         .list_versions(
-            "spectra",
+            &key("spectra"),
             VersionSort::DownloadedAt,
             None,
             None,
@@ -281,11 +285,13 @@ async fn delete_version_removes_only_that_version() {
         .await
         .unwrap();
 
-    repo.delete_version("spectra", "sha256:aaa").await.unwrap();
+    repo.delete_version(&key("spectra"), "sha256:aaa")
+        .await
+        .unwrap();
 
     let versions = repo
         .list_versions(
-            "spectra",
+            &key("spectra"),
             VersionSort::DownloadedAt,
             None,
             None,
@@ -324,7 +330,7 @@ async fn persists_and_migrations_are_idempotent() {
             storage
                 .artifacts()
                 .unwrap()
-                .latest("spectra")
+                .latest(&key("spectra"))
                 .await
                 .unwrap()
                 .is_some()

@@ -12,7 +12,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-aperture-storage = { workspace = true }
+aperture-storage = { workspace = true, features = ["schema"] }
 aperture-tasks = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std"] }

@@ -33,7 +33,7 @@ pub struct AppState {
     boot_id: Uuid,
     spectra: Spectra,
     tasks: Tasks,
-        tls_reload_tx: watch::Sender<()>,
+    tls_reload_tx: watch::Sender<()>,
 }
 
 impl AppState {
@@ -44,7 +44,7 @@ impl AppState {
         boot_id: Uuid,
         spectra: Spectra,
         tasks: Tasks,
-    tls_reload_tx: watch::Sender<()>,
+        tls_reload_tx: watch::Sender<()>,
     ) -> Self {
         Self {
             version,

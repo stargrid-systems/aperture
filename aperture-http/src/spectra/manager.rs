@@ -43,7 +43,7 @@ impl Spectra {
     /// Opens the frontend if its blob is already cached, without downloading.
     /// Returns whether a cached blob was found and opened.
     pub async fn activate_if_present(&self) -> anyhow::Result<bool> {
-        if let Some(located) = self.artifacts.locate(&self.config.name).await? {
+        if let Some(located) = self.artifacts.locate(self.config.key).await? {
             let image = open_image(located.path, located.digest.to_string()).await?;
             self.set(Arc::new(image));
             return Ok(true);
@@ -80,7 +80,7 @@ impl Spectra {
 
     async fn prepare(&self) -> anyhow::Result<()> {
         let input = DownloadInput {
-            key: self.config.name.clone(),
+            key: self.config.key.clone(),
             source: DownloadSource::Oci {
                 reference: self.config.source.clone(),
                 media_type: self.config.media_type.as_str().to_owned(),
@@ -94,7 +94,7 @@ impl Spectra {
         if !self.activate_if_present().await? {
             anyhow::bail!(
                 "spectra artifact {:?} missing after download",
-                self.config.name
+                self.config.key
             );
         }
         Ok(())

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use aperture_storage::ArtifactKey;
 use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -13,7 +14,7 @@ use crate::media_type::MediaType;
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DownloadInput {
     /// Logical key to record the artifact under.
-    pub key: String,
+    pub key: ArtifactKey,
     /// Where and how to fetch it from.
     pub source: DownloadSource,
 }

@@ -1,6 +1,6 @@
 //! DTOs for the artifact catalog endpoints.
 
-use aperture_artifacts::{Artifact, ArtifactKey, ListQuery, Page as StoragePage, VersionSort};
+use aperture_artifacts::{Artifact, ArtifactKeyEntry, ListQuery, Page as StoragePage, VersionSort};
 use jiff::Timestamp;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -27,12 +27,12 @@ pub struct ArtifactSummaryResponse {
     pub downloaded_at: Timestamp,
 }
 
-impl From<ArtifactKey> for ArtifactSummaryResponse {
-    fn from(key: ArtifactKey) -> Self {
-        let latest = key.latest;
+impl From<ArtifactKeyEntry> for ArtifactSummaryResponse {
+    fn from(entry: ArtifactKeyEntry) -> Self {
+        let latest = entry.latest;
         Self {
-            key: latest.key,
-            version_count: key.version_count,
+            key: latest.key.to_string(),
+            version_count: entry.version_count,
             source: latest.source,
             digest: latest.digest,
             version: latest.version,
@@ -66,7 +66,7 @@ pub struct ArtifactVersionResponse {
 impl From<Artifact> for ArtifactVersionResponse {
     fn from(artifact: Artifact) -> Self {
         Self {
-            key: artifact.key,
+            key: artifact.key.to_string(),
             digest: artifact.digest,
             source: artifact.source,
             version: artifact.version,
@@ -160,7 +160,7 @@ impl VersionListParams {
 }
 
 /// Maps a storage page of keys into the response envelope.
-pub fn artifact_page(page: StoragePage<ArtifactKey>) -> Page<ArtifactSummaryResponse> {
+pub fn artifact_page(page: StoragePage<ArtifactKeyEntry>) -> Page<ArtifactSummaryResponse> {
     Page::from_storage(page, ArtifactSummaryResponse::from)
 }
 
