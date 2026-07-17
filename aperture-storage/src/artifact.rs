@@ -328,7 +328,7 @@ impl ArtifactRepository {
 
 fn row_to_artifact(row: &Row) -> Result<Artifact> {
     let key_str: String = ARTIFACT_COLUMNS.extract(row, col::KEY)?;
-    let key = ArtifactKey::new(key_str).map_err(|err| StorageError::InvalidArtifactKey(err))?;
+    let key = ArtifactKey::new(key_str).map_err(StorageError::InvalidArtifactKey)?;
     Ok(Artifact {
         id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
         key,

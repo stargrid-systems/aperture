@@ -22,15 +22,14 @@ use crate::error::ApiError;
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 pub fn router() -> OpenApiRouter<AppState> {
+    use tower_http::limit::RequestBodyLimitLayer;
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
         .routes(routes!(upload_artifact, get_artifact))
         .routes(routes!(list_versions))
         .routes(routes!(get_version, delete_version))
         .routes(routes!(download_artifact_blob))
-        .layer(tower_http::limit::RequestBodyLimitLayer::new(
-            MAX_UPLOAD_BYTES,
-        ))
+        .layer(RequestBodyLimitLayer::new(MAX_UPLOAD_BYTES))
 }
 
 /// Lists stored artifact keys, each with its newest version.
@@ -179,8 +178,6 @@ async fn upload_artifact(
     headers: HeaderMap,
     request: Request,
 ) -> Result<(StatusCode, Json<ArtifactVersionResponse>), ApiError> {
-    use std::io;
-
     use futures_util::TryStreamExt;
 
     let media_type = headers
@@ -193,7 +190,7 @@ async fn upload_artifact(
     let stream = request
         .into_body()
         .into_data_stream()
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err));
+        .map_err(std::io::Error::other);
     let reader = tokio_util::io::StreamReader::new(stream);
     let artifact = state
         .spectra()

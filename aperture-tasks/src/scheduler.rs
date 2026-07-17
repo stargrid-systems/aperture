@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use aperture_storage::{NewSchedule, ScheduleRepository, Storage};
 use jiff::Timestamp;
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use crate::Tasks;
@@ -162,7 +163,7 @@ impl Scheduler {
             tokio::select! {
                 biased;
                 () = shutdown.cancelled() => return,
-                () = tokio::time::sleep(tick_interval) => {}
+                () = sleep(tick_interval) => {}
             }
             if let Err(err) = self.tick().await {
                 tracing::error!(error = %err, "scheduler tick failed");

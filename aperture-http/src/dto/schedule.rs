@@ -34,7 +34,7 @@ pub struct ScheduleResponse {
 
 impl From<Schedule> for ScheduleResponse {
     fn from(schedule: Schedule) -> Self {
-        let input = serde_json::from_str(&schedule.input).unwrap_or_else(|_| Value::Null);
+        let input = serde_json::from_str(&schedule.input).unwrap_or(Value::Null);
         Self {
             id: schedule.id,
             kind: schedule.kind,
