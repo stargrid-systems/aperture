@@ -141,9 +141,7 @@ impl Artifacts {
         }
     }
 
-    /// Subscribes to artifact changes. Late subscribers do not see events from
-    /// before they subscribed. The receiver stops receiving when all senders
-    /// are dropped, which happens only when the [`Artifacts`] is dropped.
+    /// Subscribes to artifact changes.
     pub fn subscribe(&self) -> broadcast::Receiver<ArtifactChange> {
         self.inner.changes.subscribe()
     }
@@ -216,6 +214,7 @@ impl Artifacts {
     }
 
     /// Stores `reader` as a content-addressed blob and records it under `key`.
+    ///
     /// Returns the stored version.
     pub async fn put<R>(
         &self,
@@ -252,9 +251,10 @@ impl Artifacts {
     }
 
     /// Ensures the artifact in `request` is present, downloading it if needed,
-    /// and returns the stored version. If the newest version is already on disk
-    /// it is returned without fetching. Transferred bytes are reported into
-    /// `progress`.
+    /// and returns the stored version.
+    ///
+    /// If the newest version is already on disk it is returned without
+    /// fetching. Transferred bytes are reported into `progress`.
     pub async fn download(
         &self,
         request: FetchRequest,
@@ -268,16 +268,19 @@ impl Artifacts {
         Ok(artifact)
     }
 
-    /// Reconciles the catalog with the blob store. Removes catalog entries
-    /// whose blob is missing, removes blobs that no entry references, and
-    /// clears leftover temporary files.
+    /// Reconciles the catalog with the blob store.
+    ///
+    /// Removes catalog entries whose blob is missing, removes blobs that no
+    /// entry references, and clears leftover temporary files.
     pub async fn sync(&self) -> Result<SyncReport> {
         self.inner.sync().await
     }
 }
 
 impl Inner {
-    /// Publishes `change` to the feed. Late or lagging receivers are dropped:
+    /// Publishes `change` to the feed.
+    ///
+    /// Late or lagging receivers are dropped:
     /// a send error here is expected and silently ignored.
     fn notify(&self, change: ArtifactChange) {
         let _ = self.changes.send(change);

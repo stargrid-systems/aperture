@@ -17,8 +17,6 @@ pub use self::download::{DownloadDefinition, DownloadInput, DownloadOutput, Down
 pub use self::error::{ArtifactError, Result};
 pub use self::media_type::MediaType;
 
-pub mod well_known;
-
 mod artifacts;
 mod blob;
 mod change;
@@ -29,3 +27,4 @@ mod fetch;
 mod hash_writer;
 mod media_type;
 mod progress;
+pub mod well_known;

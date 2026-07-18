@@ -17,22 +17,29 @@ aperture-storage = { workspace = true }
 aperture-tasks = { workspace = true }
 
 anyhow = { workspace = true, features = ["std"] }
+arc-swap = { workspace = true }
 axum = { workspace = true, features = ["json", "query"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
 bytes = { workspace = true }
 futures-util = { workspace = true }
 jiff = { workspace = true, features = ["std", "serde"] }
 mime_guess = { workspace = true }
+rcgen = { workspace = true, features = ["pem", "ring", "x509-parser"] }
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+rustls-pemfile = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["rt", "sync", "time", "fs"] }
+time = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt", "net", "sync", "time", "fs"] }
+tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
 tokio-stream = { workspace = true }
-tokio-util = { workspace = true, features = ["io"] }
+tokio-util = { workspace = true, features = ["io", "rt"] }
 tower-http = { workspace = true, features = ["trace", "limit"] }
 tracing = { workspace = true }
 utoipa = { workspace = true, features = ["macros", "axum_extras", "jiff_0_2", "uuid"] }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["std", "serde"] }
+x509-parser = { workspace = true }
 
 [dev-dependencies]
 aperture-artifacts = { workspace = true }

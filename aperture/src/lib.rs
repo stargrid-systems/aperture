@@ -265,9 +265,9 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
 async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Arc<Artifacts>, Storage)> {
     fs::create_dir_all(data_dir).await?;
     let db_path = data_dir.join("aperture.db");
-    let db_path = db_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("data dir is not valid UTF-8: {}", data_dir.display()))?;
+    let db_path = db_path.to_str().ok_or_else(|| {
+        anyhow::format_err!("data dir is not valid UTF-8: {}", data_dir.display())
+    })?;
     let storage = Storage::open(db_path).await?;
     let artifacts = Arc::new(Artifacts::new(storage.clone(), data_dir.join("store")));
     Ok((artifacts, storage))

@@ -5,7 +5,9 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
+use futures_util::TryStreamExt as _;
+use jiff::fmt::strtime;
 use tokio::fs::File;
 use tokio_util::io::{ReaderStream, StreamReader};
 use utoipa_axum::router::OpenApiRouter;
@@ -19,9 +21,11 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
-/// Maximum size of a single artifact upload. The body is streamed to disk, so
-/// this is a backstop against runaway or malicious uploads filling the disk,
-/// not a memory cap. We can promote this to a runtime config later.
+/// Maximum size of a single artifact upload.
+///
+/// The body is streamed to disk, so this is a backstop against runaway or
+/// malicious uploads filling the disk, not a memory cap. We can promote this to
+/// a runtime config later.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -181,15 +185,9 @@ async fn upload_artifact(
     headers: HeaderMap,
     request: Request,
 ) -> Result<(StatusCode, Json<ArtifactVersionResponse>), ApiError> {
-    use futures_util::TryStreamExt;
-
     let media_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
-
-    // Stream the request body to the blob store without buffering the whole
-    // thing in memory. The body cap (`RequestBodyLimitLayer` installed on the
-    // artifacts router) rejects uploads above 2 GiB before they reach disk.
     let stream = request
         .into_body()
         .into_data_stream()
@@ -221,31 +219,35 @@ async fn download_artifact_blob(
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, String)>,
 ) -> Result<Response, ApiError> {
-    let artifact = state
-        .spectra()
-        .artifacts()
+    let artifacts = state.spectra().artifacts();
+    let artifact = artifacts
         .version(&key, &digest)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
-    let located = state
-        .spectra()
-        .artifacts()
+    let located = artifacts
         .locate_version(&key, &digest)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
-    // Stream the blob straight from disk; never held in full in memory.
     let file = File::open(&located.path)
         .await
         .map_err(ArtifactError::from)?;
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
     let content_type = artifact
         .media_type
         .unwrap_or_else(|| "application/octet-stream".to_owned());
-    let mut response = [(header::CONTENT_TYPE, content_type)].into_response();
-    response.headers_mut().insert(
-        header::CONTENT_LENGTH,
-        artifact.size_bytes.to_string().parse().unwrap(),
-    );
-    Ok(response.map(move |_| body))
+    // Do we really have to manually format this? Also, why is it fallible.
+    let last_modified = strtime::format("%a, %d %b %Y %H:%M:%S GMT", artifact.downloaded_at).ok();
+    let mut builder = Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, artifact.size_bytes)
+        .header(
+            header::ETAG,
+            format!("\"{digest}\"", digest = artifact.digest),
+        )
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+    if let Some(lm) = last_modified {
+        builder = builder.header(header::LAST_MODIFIED, lm);
+    }
+    builder
+        .body(Body::from_stream(ReaderStream::new(file)))
+        .map_err(ApiError::from)
 }

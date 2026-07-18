@@ -24,13 +24,13 @@ pub const MAX_LEN: usize = 1024;
 /// provided by `aperture_artifacts::well_known` and are validated once at
 /// first use.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ArtifactKey(String);
+pub struct ArtifactKey(Cow<'static, str>);
 
 impl ArtifactKey {
     /// Validates `key` and wraps it. Rejects empty, absolute paths, path
     /// traversal segments (`.` or `..`), NUL bytes, control characters, and
     /// keys longer than 1024 bytes.
-    pub fn new(key: impl Into<String>) -> Result<Self, InvalidArtifactKey> {
+    pub fn new(key: impl Into<Cow<'static, str>>) -> Result<Self, InvalidArtifactKey> {
         let key = key.into();
         validate(&key)?;
         Ok(Self(key))
@@ -52,7 +52,7 @@ impl FromStr for ArtifactKey {
     type Err = InvalidArtifactKey;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::new(s)
+        Self::new(s.to_owned())
     }
 }
 
@@ -64,10 +64,10 @@ impl TryFrom<String> for ArtifactKey {
     }
 }
 
-impl TryFrom<&str> for ArtifactKey {
+impl TryFrom<&'static str> for ArtifactKey {
     type Error = InvalidArtifactKey;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
+    fn try_from(value: &'static str) -> Result<Self, Self::Error> {
         Self::new(value)
     }
 }

@@ -7,11 +7,11 @@ fn at(micros: i64) -> Timestamp {
     Timestamp::from_microsecond(micros).unwrap()
 }
 
-fn key(s: &str) -> ArtifactKey {
+fn key(s: &'static str) -> ArtifactKey {
     ArtifactKey::new(s).unwrap()
 }
 
-fn version(key_str: &str, digest: &str, downloaded_at: i64) -> Artifact {
+fn version(key_str: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
     Artifact {
         id: DbId::from(0),
         key: key(key_str),

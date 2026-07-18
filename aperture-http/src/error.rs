@@ -1,11 +1,11 @@
 //! Maps storage, artifact-manager, and task errors onto HTTP status codes.
 
-use std::error::Error;
+use std::error::Error as StdError;
 
 use aperture_artifacts::ArtifactError;
 use aperture_storage::StorageError;
 use aperture_tasks::{SchedulerError, TaskError};
-use axum::http::StatusCode;
+use axum::http::{Error as HttpError, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 /// An error turned into an HTTP response. Server faults are logged.
@@ -28,7 +28,7 @@ impl From<ArtifactError> for ApiError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(error = &err as &dyn Error, "artifact request failed");
+            tracing::error!(error = &err as &dyn StdError, "artifact request failed");
         }
         Self(status)
     }
@@ -41,7 +41,7 @@ impl From<StorageError> for ApiError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(error = &err as &dyn Error, "storage request failed");
+            tracing::error!(error = &err as &dyn StdError, "storage request failed");
         }
         Self(status)
     }
@@ -57,7 +57,7 @@ impl From<TaskError> for ApiError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(error = &err as &dyn Error, "task request failed");
+            tracing::error!(error = &err as &dyn StdError, "task request failed");
         }
         Self(status)
     }
@@ -70,9 +70,16 @@ impl From<SchedulerError> for ApiError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(error = &err as &dyn Error, "schedule request failed");
+            tracing::error!(error = &err as &dyn StdError, "schedule request failed");
         }
         Self(status)
+    }
+}
+
+impl From<HttpError> for ApiError {
+    fn from(err: HttpError) -> Self {
+        tracing::error!(error = &err as &dyn StdError, "response build failed");
+        Self::INTERNAL
     }
 }
 
