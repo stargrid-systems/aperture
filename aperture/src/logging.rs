@@ -15,43 +15,39 @@
 //!
 //! [`DbLogLayer`]: layer::DbLogLayer
 
-use aperture_storage::LogRepository;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
-use uuid::Uuid;
 
-use self::layer::{DbLogLayer, LogWorker};
+use self::layer::{DbLogLayer, DeferredLogWorker};
 
 mod layer;
 
 /// Default console filter: aperture crates at INFO, everything else at WARN.
 const DEFAULT_FILTER: &str = "aperture=info,warn";
 
-/// Constructs the database log layer and its background worker. Hand the
-/// layer to [`init`] and hand the worker to a [`Supervisor`].
-///
-/// [`Supervisor`]: crate::runtime::Supervisor
-pub fn build(repo: LogRepository, boot_id: Uuid) -> (DbLogLayer, LogWorker) {
-    DbLogLayer::new(repo, boot_id)
-}
+/// Installs the tracing subscriber. The DB layer buffers records to a channel
+/// until [`DeferredLogWorker::connect`] produces a runnable worker. Call this
+/// as early as possible so startup is captured.
+pub fn init() -> DeferredLogWorker {
+    let (db_layer, deferred) = DbLogLayer::new();
 
-/// Installs `db_layer` (along with a stdout fmt layer) on the global
-/// subscriber. Must be called at most once per process.
-pub fn init(db_layer: DbLogLayer) {
     let console_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
     let fmt_layer = fmt::layer().with_filter(console_filter);
 
     let db_filter = Targets::new()
         .with_default(LevelFilter::TRACE)
+        // backhand doesn't really output anything useful at TRACE level.
         .with_target("backhand", LevelFilter::DEBUG)
+        // HACK: At DEBUG level we get a feedback loop :(
         .with_target("turso", LevelFilter::INFO);
-
     let db_layer = db_layer.with_filter(db_filter);
 
     tracing_subscriber::registry()
         .with(fmt_layer)
         .with(db_layer)
         .init();
+
+    deferred
 }

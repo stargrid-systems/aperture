@@ -85,15 +85,36 @@ struct EventMsg {
 /// A tracing layer that persists spans and events to the database.
 ///
 /// Cheap to clone: all clones share one channel sender and drop counter.
+/// Construct with [`DbLogLayer::new`], which also returns a
+/// [`DeferredLogWorker`] to swap in once a [`LogRepository`] is available.
 #[derive(Clone)]
 pub struct DbLogLayer {
     tx: mpsc::Sender<Record>,
     dropped: Arc<AtomicU64>,
 }
 
+/// The receiving end of a [`DbLogLayer`]'s channel, held until a
+/// [`LogRepository`] is available. Call [`connect`](Self::connect) to turn it
+/// into a runnable [`LogWorker`].
+pub struct DeferredLogWorker {
+    rx: mpsc::Receiver<Record>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl DeferredLogWorker {
+    pub fn connect(self, repo: LogRepository, boot_id: Uuid) -> LogWorker {
+        LogWorker {
+            rx: self.rx,
+            repo,
+            dropped: self.dropped,
+            boot_id,
+        }
+    }
+}
+
 /// Drains the layer's channel and batch-inserts records into the database.
-/// Produced by [`DbLogLayer::new`]; drive it via a [`Supervisor`] so it shuts
-/// down alongside the rest of the gateway.
+/// Produced by [`DeferredLogWorker::connect`]; drive it via a [`Supervisor`]
+/// so it shuts down alongside the rest of the gateway.
 ///
 /// [`Supervisor`]: crate::runtime::Supervisor
 pub struct LogWorker {
@@ -144,21 +165,19 @@ impl Worker for LogWorker {
 }
 
 impl DbLogLayer {
-    fn channel() -> (Self, mpsc::Receiver<Record>) {
+    /// Creates the layer and the matching deferred worker. The layer can be
+    /// installed in the tracing subscriber immediately; records buffer in the
+    /// channel until [`DeferredLogWorker::connect`] produces a runnable
+    /// [`LogWorker`].
+    pub fn new() -> (Self, DeferredLogWorker) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
-        (Self { tx, dropped }, rx)
-    }
-
-    pub fn new(repo: LogRepository, boot_id: Uuid) -> (Self, LogWorker) {
-        let (layer, rx) = Self::channel();
-        let worker = LogWorker {
-            rx,
-            repo,
-            dropped: Arc::clone(&layer.dropped),
-            boot_id,
+        let layer = Self {
+            tx,
+            dropped: Arc::clone(&dropped),
         };
-        (layer, worker)
+        let deferred = DeferredLogWorker { rx, dropped };
+        (layer, deferred)
     }
 
     fn try_send(&self, record: Record) {
@@ -413,7 +432,8 @@ mod tests {
     /// the DB engine emits events, those events would fill the channel.
     #[test]
     fn flush_span_filters_events_and_child_spans() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
@@ -468,7 +488,8 @@ mod tests {
     /// Events emitted outside any flush span are captured normally.
     #[test]
     fn normal_events_are_captured() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
@@ -487,7 +508,8 @@ mod tests {
     /// A span created within another span must record the parent's tracing id.
     #[test]
     fn parent_child_span_relationship() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -523,7 +545,8 @@ mod tests {
     /// A root span (no parent entered) must have `parent_tracing_id = None`.
     #[test]
     fn root_span_has_no_parent() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -547,7 +570,8 @@ mod tests {
     fn late_span_fields_are_captured() {
         use tracing::field;
 
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -604,7 +628,8 @@ mod tests {
     fn empty_only_span_produces_null_fields() {
         use tracing::field;
 
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 

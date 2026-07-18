@@ -6,7 +6,6 @@
 //! registration order.
 
 use std::future::Future;
-use std::mem;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -16,9 +15,11 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use tracing::error;
 
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often the scheduler wakes to check for due schedules.
+const SCHEDULER_TICK: Duration = Duration::from_secs(60);
 
 pub(crate) type Stop = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
@@ -53,7 +54,7 @@ impl Supervisor {
     }
 
     pub(crate) fn trigger(&mut self) {
-        for tx in mem::take(&mut self.triggers) {
+        for tx in self.triggers.drain(..) {
             let _ = tx.send(());
         }
     }
@@ -62,8 +63,8 @@ impl Supervisor {
         for (name, handle) in self.handles {
             match timeout(DRAIN_TIMEOUT, handle).await {
                 Ok(Ok(())) => {}
-                Ok(Err(err)) => error!(worker = name, error = %err, "worker panicked"),
-                Err(_) => error!(worker = name, "worker did not drain within 30s"),
+                Ok(Err(err)) => tracing::error!(worker = name, error = %err, "worker panicked"),
+                Err(_) => tracing::error!(worker = name, "worker did not drain within 30s"),
             }
         }
     }
@@ -76,7 +77,7 @@ impl Supervisor {
         let early_exit = async {
             for (name, handle) in &mut self.handles {
                 if let Err(err) = handle.await {
-                    error!(worker = name, error = %err, "worker exited unexpectedly");
+                    tracing::error!(worker = name, error = %err, "worker exited unexpectedly");
                     return;
                 }
             }
@@ -104,31 +105,29 @@ impl HttpWorker {
 
 impl Worker for HttpWorker {
     async fn run(self, stop: Stop) {
-        let _ = axum::serve(self.listener, self.app)
+        if let Err(err) = axum::serve(self.listener, self.app)
             .with_graceful_shutdown(stop)
-            .await;
+            .await
+        {
+            tracing::error!(error = %err, "http server exited with error");
+        }
     }
 }
 
 pub(crate) struct TasksWorker {
     scheduler: Scheduler,
     tasks: Tasks,
-    tick_interval: Duration,
 }
 
 impl TasksWorker {
-    pub(crate) fn new(scheduler: Scheduler, tasks: Tasks, tick_interval: Duration) -> Self {
-        Self {
-            scheduler,
-            tasks,
-            tick_interval,
-        }
+    pub(crate) fn new(scheduler: Scheduler, tasks: Tasks) -> Self {
+        Self { scheduler, tasks }
     }
 }
 
 impl Worker for TasksWorker {
     async fn run(self, stop: Stop) {
-        self.scheduler.run(self.tick_interval, stop).await;
+        self.scheduler.run(SCHEDULER_TICK, stop).await;
         self.tasks.shutdown().await;
     }
 }

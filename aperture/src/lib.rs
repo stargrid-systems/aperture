@@ -3,7 +3,6 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
@@ -23,17 +22,18 @@ mod runtime;
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const SCHEDULER_TICK: Duration = Duration::from_secs(60);
-
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let boot_id = Uuid::new_v4();
+
+    // Install the tracing subscriber before anything else so startup is
+    // captured. The DB side of the layer buffers to a channel; the worker is
+    // attached once storage is open below.
+    let deferred_log_worker = logging::init();
+
     let (artifacts, storage) = open_artifacts(&data_dir).await?;
-
-    let (log_layer, log_worker) = logging::build(storage.logs().into_diagnostic()?, boot_id);
-    logging::init(log_layer);
-
     artifacts.sync().await.into_diagnostic()?;
+    let log_worker = deferred_log_worker.connect(storage.logs().into_diagnostic()?, boot_id);
 
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
@@ -63,10 +63,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     // flushes last so shutdown logs land in the database.
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", HttpWorker::new(listener, app));
-    supervisor.spawn(
-        "tasks",
-        TasksWorker::new(scheduler, tasks.clone(), SCHEDULER_TICK),
-    );
+    supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
     supervisor.spawn("log", log_worker);
 
     supervisor.run_until_signal(shutdown_signal()).await;
