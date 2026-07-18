@@ -15,10 +15,10 @@ use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
 use uuid::Uuid;
 
+use self::runtime::{HttpWorker, Supervisor, TasksWorker};
+
 mod logging;
 mod runtime;
-
-use runtime::{HttpWorker, Supervisor, TasksWorker};
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -27,8 +27,8 @@ const SCHEDULER_TICK: Duration = Duration::from_secs(60);
 
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
-    let (artifacts, storage) = open_artifacts(&data_dir).await?;
     let boot_id = Uuid::new_v4();
+    let (artifacts, storage) = open_artifacts(&data_dir).await?;
 
     let (log_layer, log_worker) = logging::build(storage.logs().into_diagnostic()?, boot_id);
     logging::init(log_layer);
