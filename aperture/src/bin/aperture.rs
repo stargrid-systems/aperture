@@ -30,8 +30,13 @@ struct RunArgs {
     https_addr: SocketAddr,
     /// Address for the HTTP listener (redirects to HTTPS by default).
     /// Pass an empty string to disable the HTTP listener entirely.
-    #[arg(long, env = "APERTURE_HTTP_ADDR", default_value = "[::1]:8080")]
-    http_addr: String,
+    #[arg(
+        long,
+        env = "APERTURE_HTTP_ADDR",
+        default_value = "[::1]:8080",
+        value_parser = parse_optional_addr,
+    )]
+    http_addr: Option<SocketAddr>,
     /// Serve the full API over plain HTTP instead of redirecting to HTTPS.
     /// Intended for certificate recovery only.
     #[arg(long, env = "APERTURE_INSECURE_HTTP", default_value_t = false)]
@@ -48,7 +53,7 @@ fn parse_optional_addr(s: &str) -> anyhow::Result<Option<SocketAddr>> {
     }
     s.parse::<SocketAddr>()
         .map(Some)
-        .map_err(|e| anyhow::anyhow!("invalid socket address {s:?}: {e}"))
+        .map_err(|e| anyhow::format_err!("invalid socket address {s:?}: {e}"))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,15 +64,12 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Openapi => block_on(emit_openapi()),
-        Command::Run(args) => {
-            let http_addr = parse_optional_addr(&args.http_addr)?;
-            block_on(aperture::serve(
-                args.https_addr,
-                http_addr,
-                args.insecure_http,
-                args.data_dir,
-            ))
-        }
+        Command::Run(args) => block_on(aperture::serve(
+            args.https_addr,
+            args.http_addr,
+            args.insecure_http,
+            args.data_dir,
+        )),
     }
 }
 

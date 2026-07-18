@@ -43,7 +43,7 @@ impl Spectra {
     /// Opens the frontend if its blob is already cached, without downloading.
     /// Returns whether a cached blob was found and opened.
     pub async fn activate_if_present(&self) -> anyhow::Result<bool> {
-        if let Some(located) = self.artifacts.locate(self.config.key).await? {
+        if let Some(located) = self.artifacts.locate(&self.config.key).await? {
             let image = open_image(located.path, located.digest.to_string()).await?;
             self.set(Arc::new(image));
             return Ok(true);

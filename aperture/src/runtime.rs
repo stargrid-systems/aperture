@@ -91,12 +91,9 @@ impl Supervisor {
     }
 }
 
-/// Adapter so [`HttpServer`] fits the [`Worker`] trait.
-pub(crate) struct HttpServerWorker(pub(crate) HttpServer);
-
-impl Worker for HttpServerWorker {
+impl Worker for HttpServer {
     async fn run(self, stop: Stop) {
-        self.0.run(stop).await;
+        self.run(stop).await;
     }
 }
 

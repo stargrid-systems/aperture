@@ -26,16 +26,6 @@ mod rotate;
 /// Shared, hot-swappable server configuration.
 pub type SharedConfig = Arc<ArcSwap<rustls::ServerConfig>>;
 
-/// Installs the `ring` crypto provider as the process-wide default.
-///
-/// Must be called before any rustls operation. Safe to call multiple times:
-/// the second call returns `Err` which is treated as a no-op when the provider
-/// was already installed by us.
-pub fn init_crypto_provider() {
-    use rustls::crypto::ring;
-    let _ = ring::default_provider().install_default();
-}
-
 /// Loads the server config from artifacts and wraps it in a [`SharedConfig`]
 /// ready for hot-swapping.
 pub async fn load_shared_config(artifacts: &Artifacts) -> Result<SharedConfig, TlsError> {

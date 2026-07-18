@@ -7,7 +7,7 @@ use std::sync::Arc;
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::tls::{
     RotateCertificateDefinition, SharedConfig, TlsListener, TlsReload, ensure_certificates,
-    init_crypto_provider, load_shared_config, redirect_router,
+    load_shared_config, redirect_router,
 };
 use aperture_http::{AppState, HttpServer, OpenApiSpec, Spectra, SpectraConfig};
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
 use uuid::Uuid;
 
-use self::runtime::{HttpServerWorker, Supervisor, TasksWorker};
+use self::runtime::{Supervisor, TasksWorker};
 
 mod logging;
 mod runtime;
@@ -47,7 +47,6 @@ pub async fn serve(
     init_crypto_provider();
 
     let deferred_log_worker = logging::init();
-
     let boot_id = Uuid::new_v4();
     let (artifacts, storage) = open_artifacts(&data_dir).await?;
 
@@ -99,7 +98,7 @@ pub async fn serve(
     }
 
     let mut supervisor = Supervisor::new();
-    supervisor.spawn("http", HttpServerWorker(server));
+    supervisor.spawn("http", server);
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
     supervisor.spawn("log", log_worker);
 
@@ -137,6 +136,12 @@ async fn install_default_rotation_schedule(
     })
     .await?;
     Ok(())
+}
+
+/// Installs the `ring` crypto provider as the process-wide default.
+fn init_crypto_provider() {
+    use rustls::crypto::ring;
+    let _ = ring::default_provider().install_default();
 }
 
 /// Resolves when the process is asked to stop, via Ctrl+C or SIGTERM.
