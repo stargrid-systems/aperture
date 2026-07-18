@@ -23,7 +23,7 @@ const TABLES: &str = sql!(
         digest TEXT NOT NULL,
         media_type TEXT,
         version TEXT,
-        size_bytes INTEGER NOT NULL,
+        size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
         downloaded_at timestamp_us NOT NULL,
         verified_at timestamp_us,
         UNIQUE (key, digest)
