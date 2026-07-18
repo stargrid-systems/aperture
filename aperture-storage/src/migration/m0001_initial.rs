@@ -66,10 +66,10 @@ const TABLES: &str = sql!(
         parent_tracing_id INTEGER,
         boot_id uuid NOT NULL,
         name TEXT NOT NULL,
-        level INTEGER NOT NULL,
+        level INTEGER NOT NULL CHECK (level BETWEEN 0 AND 4),
         target TEXT NOT NULL,
         file TEXT,
-        line smallint,
+        line smallint CHECK (line IS NULL OR CAST(line AS INTEGER) > 0),
         started_at timestamp_us NOT NULL,
         ended_at timestamp_us,
         fields jsonb NOT NULL
@@ -83,12 +83,12 @@ const TABLES: &str = sql!(
         id INTEGER PRIMARY KEY,
         boot_id uuid NOT NULL,
         span_tracing_id INTEGER,
-        level INTEGER NOT NULL,
+        level INTEGER NOT NULL CHECK (level BETWEEN 0 AND 4),
         target TEXT NOT NULL,
         message TEXT,
         timestamp timestamp_us NOT NULL,
         file TEXT,
-        line smallint,
+        line smallint CHECK (line IS NULL OR CAST(line AS INTEGER) > 0),
         fields jsonb NOT NULL
     ) STRICT;
     CREATE INDEX idx_log_events_timestamp ON log_events (timestamp);
