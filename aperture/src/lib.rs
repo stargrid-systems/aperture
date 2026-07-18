@@ -12,7 +12,6 @@ use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod logging;
@@ -54,16 +53,8 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
 
-    // One token drives every shutdown path. The OS-signal handler cancels it,
-    // which triggers axum's graceful drain.
-    let shutdown = CancellationToken::new();
-
-    let shutdown_signal_token = shutdown.clone();
     let result = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            shutdown_signal_token.cancel();
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .into_diagnostic();
 
