@@ -19,7 +19,7 @@ use std::time::Duration;
 use aperture_storage::{NewTaskSchedule, TaskScheduleRepository};
 use jiff::Timestamp;
 use serde_json::Value;
-use tokio::time::sleep;
+use tokio::time::{MissedTickBehavior, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::Tasks;
@@ -143,11 +143,18 @@ impl Scheduler {
     /// cancelled. Errors inside a tick are logged, not surfaced: a single
     /// storage blip should not bring down the scheduler.
     pub async fn run(self, tick_interval: Duration, shutdown: CancellationToken) {
+        // First fire one full period out so a boot tick (run by the caller
+        // before `run`) doesn't get a follow-up immediately. Delay policy:
+        // when a tick overruns, the next fire is rescheduled from the
+        // overrun instant. This keeps the schedule stable under normal
+        // load and only drifts when a tick actually exceeds the period.
+        let mut ticker = interval_at(Instant::now() + tick_interval, tick_interval);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 biased;
                 () = shutdown.cancelled() => return,
-                () = sleep(tick_interval) => {}
+                _ = ticker.tick() => {}
             }
             if let Err(err) = self.tick().await {
                 tracing::error!(error = &err as &dyn Error, "scheduler tick failed");
