@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize, de};
 /// itself rather than scattered as free functions. Serializes as a string to
 /// keep the API representation opaque.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
+#[derive(utoipa::ToSchema)]
+#[schema(value_type = String)]
 pub struct DbId(i64);
 
 impl DbId {

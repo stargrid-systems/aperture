@@ -24,11 +24,8 @@ use crate::sql::{FromSql, ToSql};
 /// accepts its friendlier form (`5m`) on input. The OpenAPI schema advertises
 /// the `duration` format so consumers know to expect ISO 8601.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(
-    feature = "schema",
-    schema(value_type = String, format = Duration, example = "PT5M")
-)]
+#[derive(utoipa::ToSchema)]
+#[schema(value_type = String, format = Duration, example = "PT5M")]
 pub struct Interval(SignedDuration);
 
 /// Errors from constructing an [`Interval`].

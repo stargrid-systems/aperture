@@ -12,9 +12,6 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
-[features]
-schema = ["dep:utoipa"]
-
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std", "serde"] }
@@ -23,7 +20,7 @@ serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 turso = { workspace = true, features = ["fts"] }
-utoipa = { workspace = true, optional = true }
+utoipa = { workspace = true }
 uuid = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
