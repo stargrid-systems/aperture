@@ -18,10 +18,7 @@ mod m0001_initial;
 const BASE_VERSION: i64 = 0;
 
 /// Ordered list of migrations. Index `i` upgrades the schema from version
-/// `BASE_VERSION + i` to `BASE_VERSION + i + 1`. Each migration is a slice of
-/// statement chunks, run in order inside one transaction. Splitting a migration
-/// into chunks lets a single migration mix statement groups that need different
-/// quoting (e.g. `CREATE TYPE` with string literals alongside `CREATE TABLE`).
+/// `BASE_VERSION + i` to `BASE_VERSION + i + 1`.
 const MIGRATIONS: &[&[&str]] = &[m0001_initial::STATEMENTS];
 
 /// Applies all pending migrations to the database.

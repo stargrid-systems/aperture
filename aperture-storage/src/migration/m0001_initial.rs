@@ -3,12 +3,12 @@
 use crate::macros::sql;
 
 const CUSTOM_TYPES: &str = "\
-CREATE TYPE timestamp_us BASE integer
+CREATE TYPE timestamp_us BASE INTEGER
     ENCODE value
     DECODE value
     OPERATOR '<'
     OPERATOR '=';
-CREATE TYPE duration_us BASE integer
+CREATE TYPE duration_us BASE INTEGER
     ENCODE CASE WHEN value > 0 THEN value ELSE RAISE(ABORT, 'duration must be positive') END
     DECODE value
     OPERATOR '<'
