@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use aperture_storage::TaskScheduleRepository;
 use jiff::Timestamp;
-use tokio::time::{MissedTickBehavior, interval_at, Instant};
+use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_util::sync::CancellationToken;
 
 use crate::Tasks;
@@ -132,9 +132,7 @@ pub enum SchedulerError {
 
 #[cfg(test)]
 mod tests {
-    use aperture_storage::{
-        Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch,
-    };
+    use aperture_storage::{Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch};
     use serde_json::{Value, json};
 
     use super::*;
@@ -260,7 +258,13 @@ mod tests {
 
         // First tick sees the due schedule, fails to spawn, but advances it.
         assert_eq!(scheduler.tick().await.unwrap(), 0);
-        let advanced = storage.task_schedules().unwrap().get(id).await.unwrap().unwrap();
+        let advanced = storage
+            .task_schedules()
+            .unwrap()
+            .get(id)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(advanced.last_run_at.is_some());
         // A failed spawn leaves last_task_id NULL.
         assert!(advanced.last_task_id.is_none());

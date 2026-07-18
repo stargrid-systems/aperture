@@ -170,10 +170,7 @@ async fn spawn_and_wait_returns_decoded_output() {
 
     let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Succeeded);
-    assert_eq!(
-        recorded.output,
-        Some(serde_json::json!({"result": 42}))
-    );
+    assert_eq!(recorded.output, Some(serde_json::json!({"result": 42})));
 }
 
 #[tokio::test]

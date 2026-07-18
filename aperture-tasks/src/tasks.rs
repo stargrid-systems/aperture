@@ -14,8 +14,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::{
-    DbId, JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, TaskInvocation,
-    TaskRepository, TaskStatus,
+    DbId, JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, TaskInvocation, TaskRepository,
+    TaskStatus,
 };
 use jiff::Timestamp;
 use serde::de::DeserializeOwned;
@@ -110,7 +110,9 @@ impl Tasks {
         input: T::Input,
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
-        self.inner.spawn_value::<T::Output>(T::KIND, value, None).await
+        self.inner
+            .spawn_value::<T::Output>(T::KIND, value, None)
+            .await
     }
 
     /// Spawns a top-level task by kind string, validating `input` against the
@@ -282,7 +284,10 @@ impl TasksInner {
         definition.validate(&input)?;
 
         let now = Timestamp::now();
-        let id = self.tasks.create_running(kind, parent_id, &input, now).await?;
+        let id = self
+            .tasks
+            .create_running(kind, parent_id, &input, now)
+            .await?;
 
         let cancel = match parent_id.and_then(|parent| self.parent_token(parent)) {
             Some(parent) => parent.child_token(),

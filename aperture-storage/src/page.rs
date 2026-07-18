@@ -188,7 +188,11 @@ impl Keyset {
     /// The keyset `WHERE` condition that resumes from `cursor`, using bind
     /// params starting at `first_param`. Empty (and no params) without a
     /// cursor.
-    pub(crate) fn condition(&self, cursor: Option<&Cursor>, first_param: usize) -> (String, Vec<Value>) {
+    pub(crate) fn condition(
+        &self,
+        cursor: Option<&Cursor>,
+        first_param: usize,
+    ) -> (String, Vec<Value>) {
         let Some(cursor) = cursor else {
             return (String::new(), Vec::new());
         };

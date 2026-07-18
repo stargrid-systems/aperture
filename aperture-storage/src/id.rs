@@ -11,8 +11,7 @@ use serde::{Deserialize, Serialize, de};
 /// Wraps an [`i64`] so that parsing and display are centralized on the type
 /// itself rather than scattered as free functions. Serializes as a string to
 /// keep the API representation opaque.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[derive(utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, utoipa::ToSchema)]
 #[schema(value_type = String)]
 pub struct DbId(i64);
 

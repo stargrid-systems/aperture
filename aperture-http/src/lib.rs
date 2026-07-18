@@ -27,11 +27,9 @@ mod spectra;
 
 /// Shared application state handed to every request handler.
 ///
-/// Repositories that do not need stateful wrapping are opened per request via
-/// [`storage`]. The stateful services ([`Tasks`], [`Spectra`]) are stored once
-/// and shared across requests.
-///
-/// [`storage`]: Self::storage
+/// Repositories that do not need stateful wrapping are opened per request
+/// through the [`Storage`] handle. The stateful services ([`Tasks`],
+/// [`Spectra`]) are stored once and shared across requests.
 #[derive(Clone)]
 pub struct AppState {
     version: &'static str,

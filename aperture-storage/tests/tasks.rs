@@ -15,12 +15,7 @@ async fn create_then_finish_records_lifecycle() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create(
-            "download",
-            None,
-            &json!({"key": "spectra"}),
-            at(1_000),
-        )
+        .create("download", None, &json!({"key": "spectra"}), at(1_000))
         .await
         .unwrap();
 
@@ -55,12 +50,7 @@ async fn create_running_starts_in_running_state() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create_running(
-            "download",
-            None,
-            &json!({"key": "spectra"}),
-            at(1_000),
-        )
+        .create_running("download", None, &json!({"key": "spectra"}), at(1_000))
         .await
         .unwrap();
 
@@ -113,7 +103,10 @@ async fn list_filters_by_status_kind_and_parent() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.tasks().unwrap();
 
-    let parent = repo.create("update", None, &json!({}), at(1_000)).await.unwrap();
+    let parent = repo
+        .create("update", None, &json!({}), at(1_000))
+        .await
+        .unwrap();
     let download = repo
         .create("download", Some(parent), &json!({}), at(1_100))
         .await
@@ -201,12 +194,7 @@ async fn list_filters_by_json_input_and_output() {
     .await
     .unwrap();
     let other = repo
-        .create_running(
-            "download",
-            None,
-            &json!({"key": "other"}),
-            at(1_100),
-        )
+        .create_running("download", None, &json!({"key": "other"}), at(1_100))
         .await
         .unwrap();
     repo.finish(

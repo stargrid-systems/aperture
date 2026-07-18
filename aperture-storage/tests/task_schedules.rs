@@ -1,6 +1,4 @@
-use aperture_storage::{
-    DbId, Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch,
-};
+use aperture_storage::{DbId, Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch};
 use jiff::Timestamp;
 use serde_json::json;
 

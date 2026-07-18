@@ -23,8 +23,7 @@ use crate::sql::{FromSql, ToSql};
 /// On the wire an interval is an ISO 8601 duration such as `PT5M`; jiff also
 /// accepts its friendlier form (`5m`) on input. The OpenAPI schema advertises
 /// the `duration` format so consumers know to expect ISO 8601.
-#[derive(Debug, Clone)]
-#[derive(utoipa::ToSchema)]
+#[derive(Debug, Clone, utoipa::ToSchema)]
 #[schema(value_type = String, format = Duration, example = "PT5M")]
 pub struct Interval(SignedDuration);
 

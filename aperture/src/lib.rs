@@ -41,10 +41,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let tasks = Tasks::new(storage.tasks().into_diagnostic()?, registry);
     tasks.reconcile().await.into_diagnostic()?;
 
-    let scheduler = Scheduler::new(
-        storage.task_schedules().into_diagnostic()?,
-        tasks.clone(),
-    );
+    let scheduler = Scheduler::new(storage.task_schedules().into_diagnostic()?, tasks.clone());
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),

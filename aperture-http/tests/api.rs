@@ -245,12 +245,7 @@ async fn reads_recorded_tasks() {
     let (app, _artifacts, storage) = seeded_app().await;
     let repo = storage.tasks().unwrap();
     let id = repo
-        .create(
-            "download",
-            None,
-            &json!({"key": "spectra"}),
-            at(1_000),
-        )
+        .create("download", None, &json!({"key": "spectra"}), at(1_000))
         .await
         .unwrap();
     repo.finish(
@@ -280,12 +275,7 @@ async fn filters_tasks_by_json_field() {
     let (app, _artifacts, storage) = seeded_app().await;
     let repo = storage.tasks().unwrap();
     let spectra = repo
-        .create(
-            "download",
-            None,
-            &json!({"key": "spectra"}),
-            at(1_000),
-        )
+        .create("download", None, &json!({"key": "spectra"}), at(1_000))
         .await
         .unwrap();
     repo.finish(
@@ -298,12 +288,7 @@ async fn filters_tasks_by_json_field() {
     .await
     .unwrap();
     let other = repo
-        .create(
-            "download",
-            None,
-            &json!({"key": "other"}),
-            at(1_100),
-        )
+        .create("download", None, &json!({"key": "other"}), at(1_100))
         .await
         .unwrap();
     repo.finish(other, TaskStatus::Failed, at(1_150), None, Some("boom"))
@@ -435,12 +420,8 @@ async fn task_schedule_lifecycle() {
     assert_eq!(updated["enabled"], false);
 
     // Empty patch returns the row unchanged.
-    let (status, updated) = patch_json(
-        &app,
-        &format!("/api/v1/task-schedules/{id}"),
-        json!({}),
-    )
-    .await;
+    let (status, updated) =
+        patch_json(&app, &format!("/api/v1/task-schedules/{id}"), json!({})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["interval"], "PT1H");
     assert_eq!(updated["enabled"], false);
