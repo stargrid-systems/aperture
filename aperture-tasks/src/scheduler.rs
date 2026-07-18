@@ -16,7 +16,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aperture_storage::{NewTaskSchedule, Storage, TaskScheduleRepository};
+use aperture_storage::{NewTaskSchedule, TaskScheduleRepository};
 use jiff::Timestamp;
 use serde_json::Value;
 use tokio::time::sleep;
@@ -35,27 +35,17 @@ pub struct Scheduler {
 }
 
 struct Inner {
-    storage: Storage,
+    schedules: TaskScheduleRepository,
     tasks: Tasks,
 }
 
 impl Scheduler {
-    /// Creates a scheduler that drives `tasks` using `storage`'s task schedule
-    /// catalog.
-    pub fn new(storage: Storage, tasks: Tasks) -> Self {
+    /// Creates a scheduler that drives `tasks` using `schedules` as the
+    /// catalog of due work.
+    pub fn new(schedules: TaskScheduleRepository, tasks: Tasks) -> Self {
         Self {
-            inner: Arc::new(Inner { storage, tasks }),
+            inner: Arc::new(Inner { schedules, tasks }),
         }
-    }
-
-    /// Read access to the storage catalog (for the HTTP CRUD endpoints).
-    pub fn storage(&self) -> &Storage {
-        &self.inner.storage
-    }
-
-    /// Repository over the task schedule catalog.
-    pub fn repository(&self) -> Result<TaskScheduleRepository, aperture_storage::StorageError> {
-        self.inner.storage.task_schedules()
     }
 
     /// Creates a new task schedule row.
@@ -63,7 +53,7 @@ impl Scheduler {
         &self,
         new: NewTaskSchedule,
     ) -> Result<aperture_storage::TaskSchedule, SchedulerError> {
-        let repo = self.inner.storage.task_schedules()?;
+        let repo = &self.inner.schedules;
         let id = repo.create(&new).await?;
         let schedule = repo.get(id).await?.expect("just created");
         Ok(schedule)
@@ -74,7 +64,7 @@ impl Scheduler {
         &self,
         id: aperture_storage::DbId,
     ) -> Result<Option<aperture_storage::TaskSchedule>, SchedulerError> {
-        Ok(self.inner.storage.task_schedules()?.get(id).await?)
+        Ok(self.inner.schedules.get(id).await?)
     }
 
     /// Lists task schedules, oldest-first by id.
@@ -82,7 +72,7 @@ impl Scheduler {
         &self,
         query: &aperture_storage::ListQuery,
     ) -> Result<aperture_storage::Page<aperture_storage::TaskSchedule>, SchedulerError> {
-        Ok(self.inner.storage.task_schedules()?.list(query).await?)
+        Ok(self.inner.schedules.list(query).await?)
     }
 
     /// Updates a task schedule's interval and/or enabled flag.
@@ -91,17 +81,12 @@ impl Scheduler {
         id: aperture_storage::DbId,
         patch: aperture_storage::TaskSchedulePatch,
     ) -> Result<Option<aperture_storage::TaskSchedule>, SchedulerError> {
-        Ok(self
-            .inner
-            .storage
-            .task_schedules()?
-            .update(id, &patch)
-            .await?)
+        Ok(self.inner.schedules.update(id, &patch).await?)
     }
 
     /// Deletes the task schedule with `id`. Returns whether a row was removed.
     pub async fn delete(&self, id: aperture_storage::DbId) -> Result<bool, SchedulerError> {
-        Ok(self.inner.storage.task_schedules()?.delete(id).await?)
+        Ok(self.inner.schedules.delete(id).await?)
     }
 
     /// Runs one scheduler tick: queries due schedules and spawns each. Returns
@@ -109,7 +94,7 @@ impl Scheduler {
     /// a tick at boot to catch up after downtime.
     pub async fn tick(&self) -> Result<usize, SchedulerError> {
         let now = Timestamp::now();
-        let repo = self.inner.storage.task_schedules()?;
+        let repo = &self.inner.schedules;
         let due = repo.list_due(now, TICK_BATCH).await?;
         let mut spawned = 0;
         for schedule in due {
@@ -220,14 +205,18 @@ mod tests {
         Interval::from_micros(micros).unwrap()
     }
 
-    #[tokio::test]
-    async fn tick_spawns_due_schedules_and_advances_them() {
-        let storage = Storage::open(":memory:").await.unwrap();
+    async fn setup() -> Scheduler {
+        let storage = aperture_storage::Storage::open(":memory:").await.unwrap();
         let mut registry = crate::TaskRegistry::new();
         registry.register(Ping);
-        let tasks = Tasks::new(storage.clone(), registry);
-        let scheduler = Scheduler::new(storage.clone(), tasks);
+        let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+        let schedules = storage.task_schedules().unwrap();
+        Scheduler::new(schedules, tasks)
+    }
 
+    #[tokio::test]
+    async fn tick_spawns_due_schedules_and_advances_them() {
+        let scheduler = setup().await;
         let now = Timestamp::now().as_microsecond();
         let schedule = scheduler
             .create(NewTaskSchedule {
@@ -239,7 +228,6 @@ mod tests {
             })
             .await
             .unwrap();
-        let id = schedule.id;
 
         let spawned = scheduler.tick().await.unwrap();
         assert_eq!(spawned, 1);
@@ -249,17 +237,12 @@ mod tests {
         let advanced = &schedules.items[0];
         assert!(advanced.last_run_at.is_some());
         assert!(advanced.last_task_id.is_some());
-        let _ = id;
+        let _ = &schedule;
     }
 
     #[tokio::test]
     async fn tick_skips_disabled_schedules() {
-        let storage = Storage::open(":memory:").await.unwrap();
-        let mut registry = crate::TaskRegistry::new();
-        registry.register(Ping);
-        let tasks = Tasks::new(storage.clone(), registry);
-        let scheduler = Scheduler::new(storage.clone(), tasks);
-
+        let scheduler = setup().await;
         let now = Timestamp::now().as_microsecond();
         let schedule = scheduler
             .create(NewTaskSchedule {
@@ -288,12 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn tick_advances_past_unknown_kind_so_it_doesnt_loop() {
-        let storage = Storage::open(":memory:").await.unwrap();
-        let mut registry = crate::TaskRegistry::new();
-        registry.register(Ping);
-        let tasks = Tasks::new(storage.clone(), registry);
-        let scheduler = Scheduler::new(storage.clone(), tasks);
-
+        let scheduler = setup().await;
         let now = Timestamp::now().as_microsecond();
         let schedule = scheduler
             .create(NewTaskSchedule {

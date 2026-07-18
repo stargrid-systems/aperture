@@ -37,10 +37,13 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     // active as interrupted.
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
-    let tasks = Tasks::new(artifacts.storage().clone(), registry);
+    let tasks = Tasks::new(artifacts.storage().tasks().into_diagnostic()?, registry);
     tasks.reconcile().await.into_diagnostic()?;
 
-    let scheduler = Scheduler::new(artifacts.storage().clone(), tasks.clone());
+    let scheduler = Scheduler::new(
+        artifacts.storage().task_schedules().into_diagnostic()?,
+        tasks.clone(),
+    );
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),

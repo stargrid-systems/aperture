@@ -161,7 +161,7 @@ async fn spawn_and_wait_returns_decoded_output() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Double);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks.spawn::<Double>(DoubleIn { n: 21 }).await.unwrap();
     let id = handle.id();
@@ -179,7 +179,7 @@ async fn live_progress_is_visible_while_running() {
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let tasks = Tasks::new(storage, registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
     ready.notified().await;
@@ -202,7 +202,7 @@ async fn cancellable_task_records_cancelled() {
     let (probe, ready, _gate) = probe(true);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
     let id = handle.id();
@@ -222,7 +222,7 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let tasks = Tasks::new(storage, registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
     let id = handle.id();
@@ -247,7 +247,7 @@ async fn child_inherits_parent_cancellation() {
     let mut registry = TaskRegistry::new();
     registry.register(probe);
     registry.register(parent);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks.spawn::<Parent>(Empty {}).await.unwrap();
     let parent_id = handle.id();
@@ -272,7 +272,7 @@ async fn panicking_task_settles_as_failed() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Boom);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks.spawn::<Boom>(Empty {}).await.unwrap();
     let id = handle.id();
@@ -295,7 +295,7 @@ async fn failed_task_records_full_error_chain() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Fail);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks.spawn::<Fail>(Empty {}).await.unwrap();
     let id = handle.id();
@@ -315,7 +315,7 @@ async fn cancel_distinguishes_unknown_from_settled() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Double);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     // An unknown id is not found.
     let unknown = DbId::from(999);
@@ -349,7 +349,7 @@ async fn reconcile_marks_orphaned_invocations() {
         .await
         .unwrap();
 
-    let tasks = Tasks::new(storage.clone(), TaskRegistry::new());
+    let tasks = Tasks::new(storage.tasks().unwrap(), TaskRegistry::new());
     assert_eq!(tasks.reconcile().await.unwrap(), 1);
 
     let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
