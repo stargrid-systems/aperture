@@ -69,11 +69,11 @@ pub struct UpdateTaskScheduleRequest {
     pub enabled: Option<bool>,
 }
 
-impl UpdateTaskScheduleRequest {
-    pub fn to_patch(&self) -> aperture_storage::TaskSchedulePatch {
+impl From<UpdateTaskScheduleRequest> for aperture_storage::TaskSchedulePatch {
+    fn from(request: UpdateTaskScheduleRequest) -> Self {
         aperture_storage::TaskSchedulePatch {
-            interval: self.interval.clone(),
-            enabled: self.enabled,
+            interval: request.interval,
+            enabled: request.enabled,
         }
     }
 }

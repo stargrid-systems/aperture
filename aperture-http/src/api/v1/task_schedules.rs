@@ -113,7 +113,7 @@ async fn update_task_schedule(
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
     let schedule = state
         .scheduler()
-        .update(id, request.to_patch())
+        .update(id, request.into())
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
     Ok(Json(schedule.into()))
