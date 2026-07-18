@@ -1,13 +1,13 @@
 //! Periodic task scheduler driver.
 
 use std::error::Error;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use aperture_storage::TaskScheduleRepository;
 use jiff::Timestamp;
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
-use tokio_util::sync::CancellationToken;
 
 use crate::Tasks;
 
@@ -79,8 +79,11 @@ impl Scheduler {
     }
 
     /// Runs a boot tick immediately, then ticks at `tick_interval`. Exits when
-    /// `shutdown` is cancelled. Errors inside a tick are logged.
-    pub async fn run(self, tick_interval: Duration, shutdown: CancellationToken) {
+    /// `stop` resolves. Errors inside a tick are logged.
+    pub async fn run<F>(self, tick_interval: Duration, stop: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
         if let Err(err) = self.tick().await {
             tracing::error!(error = &err as &dyn Error, "scheduler boot tick failed");
         }
@@ -90,10 +93,11 @@ impl Scheduler {
         // overrun instant so a slow tick drifts rather than bunching up.
         let mut ticker = interval_at(Instant::now() + tick_interval, tick_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut stop = Box::pin(stop);
         loop {
             tokio::select! {
                 biased;
-                () = shutdown.cancelled() => return,
+                () = &mut stop => return,
                 _ = ticker.tick() => {}
             }
             if let Err(err) = self.tick().await {

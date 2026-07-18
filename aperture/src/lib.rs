@@ -13,10 +13,12 @@ use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod logging;
+mod runtime;
+
+use runtime::{HttpWorker, Supervisor, TasksWorker};
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -27,13 +29,12 @@ const SCHEDULER_TICK: Duration = Duration::from_secs(60);
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let (artifacts, storage) = open_artifacts(&data_dir).await?;
     let boot_id = Uuid::new_v4();
-    let log_repo = storage.logs().into_diagnostic()?;
-    let log_worker = logging::init(log_repo, boot_id);
+
+    let (log_layer, log_worker) = logging::build(storage.logs().into_diagnostic()?, boot_id);
+    logging::init(log_layer);
 
     artifacts.sync().await.into_diagnostic()?;
 
-    // Register the task kinds and mark any invocations a previous run left
-    // active as interrupted.
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
     let tasks = Tasks::new(storage.tasks().into_diagnostic()?, registry);
@@ -46,8 +47,6 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         tasks.clone(),
         SpectraConfig::default(),
     );
-    // Open a cached frontend right away. A missing one is fetched lazily on the
-    // first request.
     spectra
         .activate_if_present()
         .await
@@ -59,39 +58,18 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
 
-    let shutdown = CancellationToken::new();
+    // Drain order is registration order: HTTP stops accepting first, then the
+    // scheduler stops spawning and in-flight tasks drain, then the log worker
+    // flushes last so shutdown logs land in the database.
+    let mut supervisor = Supervisor::new();
+    supervisor.spawn("http", HttpWorker::new(listener, app));
+    supervisor.spawn(
+        "tasks",
+        TasksWorker::new(scheduler, tasks.clone(), SCHEDULER_TICK),
+    );
+    supervisor.spawn("log", log_worker);
 
-    let scheduler_task = {
-        let shutdown = shutdown.clone();
-        let scheduler = scheduler.clone();
-        tokio::spawn(async move {
-            scheduler.run(SCHEDULER_TICK, shutdown).await;
-        })
-    };
-
-    let shutdown_signal_token = shutdown.clone();
-    let result = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            shutdown_signal_token.cancel();
-        })
-        .await
-        .into_diagnostic();
-
-    // Stop spawning new periodic work before draining in-flight tasks.
-    let _ = scheduler_task.await;
-
-    // The server has stopped accepting requests.
-    tracing::info!("aperture shutdown starting");
-    tasks.shutdown().await;
-    tracing::info!("aperture shutdown complete");
-
-    // The log worker drains pending records, commits them, and closes any
-    // spans left open. close_open_spans runs inside the worker so it sees the
-    // final flush.
-    log_worker.shutdown().await;
-
-    result?;
+    supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())
 }
 

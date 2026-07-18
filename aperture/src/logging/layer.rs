@@ -6,15 +6,15 @@
 //! and a synthetic warning event is inserted to record how many were lost.
 
 use std::error::Error as StdError;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use aperture_storage::{EventRecord, Level, LogRepository, SpanRecord};
 use jiff::Timestamp;
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tokio::time::{MissedTickBehavior, interval, timeout};
+use tokio::sync::mpsc;
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId, Record as TracingRecord};
 use tracing::{Event, Level as TracingLevel, Subscriber};
 use tracing_subscriber::Layer;
@@ -23,6 +23,7 @@ use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
 
 use self::collector::FieldCollector;
+use crate::runtime::Worker;
 
 mod collector;
 
@@ -91,67 +92,75 @@ pub struct DbLogLayer {
     dropped: Arc<AtomicU64>,
 }
 
-/// Handle to the background writer task. Keep it alive for as long as the
-/// layer is active. Call [`shutdown`](Self::shutdown) for a clean flush
-/// before the process exits.
+/// Drains the layer's channel and batch-inserts records into the database.
+/// Produced by [`DbLogLayer::new`]; drive it via a [`Supervisor`] so it shuts
+/// down alongside the rest of the gateway.
 ///
-/// If this handle is dropped without calling `shutdown`, the writer task is
-/// aborted immediately and pending records may be lost.
-pub struct WorkerHandle {
-    join: Option<JoinHandle<()>>,
-    shutdown: Option<oneshot::Sender<()>>,
+/// [`Supervisor`]: crate::runtime::Supervisor
+pub struct LogWorker {
+    rx: mpsc::Receiver<Record>,
+    repo: LogRepository,
+    dropped: Arc<AtomicU64>,
+    boot_id: Uuid,
 }
 
-impl WorkerHandle {
-    /// Signals the writer to drain remaining records, flush to the database,
-    /// and exit. Waits up to 5 seconds for a clean exit, then aborts.
-    pub async fn shutdown(mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
-        }
-        if let Some(join) = self.join.take()
-            && timeout(Duration::from_secs(5), join).await.is_err()
-        {
-            tracing::warn!("log writer did not shut down within 5s");
-        }
-    }
-}
+impl Worker for LogWorker {
+    async fn run(mut self, stop: impl Future<Output = ()> + Send + 'static) {
+        let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
+        let mut interval = interval(FLUSH_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-impl Drop for WorkerHandle {
-    fn drop(&mut self) {
-        if let Some(join) = self.join.take() {
-            join.abort();
+        let mut stop = Box::pin(stop);
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut stop => {
+                    while let Ok(record) = self.rx.try_recv() {
+                        batch.push(record);
+                    }
+                    flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                    close_remaining_spans(&self.repo).await;
+                    break;
+                }
+                maybe_record = self.rx.recv() => {
+                    match maybe_record {
+                        Some(record) => batch.push(record),
+                        None => {
+                            flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                            close_remaining_spans(&self.repo).await;
+                            break;
+                        }
+                    }
+                    if batch.len() >= FLUSH_BATCH {
+                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                    }
+                }
+                _ = interval.tick() => {
+                    if !batch.is_empty() {
+                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                    }
+                }
+            }
         }
     }
 }
 
 impl DbLogLayer {
-    /// Creates the layer and a channel receiver for testing. The receiver
-    /// gets all records the layer produces.
     fn channel() -> (Self, mpsc::Receiver<Record>) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
         (Self { tx, dropped }, rx)
     }
 
-    /// Creates the layer and spawns the background writer task.
-    ///
-    /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
-    /// should be kept alive for the lifetime of the application. Call
-    /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
-    pub fn spawn(repo: LogRepository, boot_id: Uuid) -> (Self, WorkerHandle) {
+    pub fn new(repo: LogRepository, boot_id: Uuid) -> (Self, LogWorker) {
         let (layer, rx) = Self::channel();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let dropped_clone = Arc::clone(&layer.dropped);
-
-        let join = tokio::spawn(writer_task(repo, rx, dropped_clone, shutdown_rx, boot_id));
-
-        let handle = WorkerHandle {
-            join: Some(join),
-            shutdown: Some(shutdown_tx),
+        let worker = LogWorker {
+            rx,
+            repo,
+            dropped: Arc::clone(&layer.dropped),
+            boot_id,
         };
-
-        (layer, handle)
+        (layer, worker)
     }
 
     fn try_send(&self, record: Record) {
@@ -264,51 +273,6 @@ where
             tracing_id: id.into_u64(),
             fields,
         }));
-    }
-}
-
-/// Background writer task: drains the channel and batch-inserts records.
-async fn writer_task(
-    repo: LogRepository,
-    mut rx: mpsc::Receiver<Record>,
-    dropped: Arc<AtomicU64>,
-    mut shutdown: oneshot::Receiver<()>,
-    boot_id: Uuid,
-) {
-    let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
-    let mut interval = interval(FLUSH_INTERVAL);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! {
-            biased;
-            _ = &mut shutdown => {
-                while let Ok(record) = rx.try_recv() {
-                    batch.push(record);
-                }
-                flush(&repo, &mut batch, &dropped, boot_id).await;
-                close_remaining_spans(&repo).await;
-                break;
-            }
-            maybe_record = rx.recv() => {
-                match maybe_record {
-                    Some(record) => batch.push(record),
-                    None => {
-                        flush(&repo, &mut batch, &dropped, boot_id).await;
-                        close_remaining_spans(&repo).await;
-                        break;
-                    }
-                }
-                if batch.len() >= FLUSH_BATCH {
-                    flush(&repo, &mut batch, &dropped, boot_id).await;
-                }
-            }
-            _ = interval.tick() => {
-                if !batch.is_empty() {
-                    flush(&repo, &mut batch, &dropped, boot_id).await;
-                }
-            }
-        }
     }
 }
 
