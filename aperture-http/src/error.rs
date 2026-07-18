@@ -40,7 +40,7 @@ impl From<StorageError> for ApiError {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
-            tracing::error!(error = &err as &dyn Error, "log request failed");
+            tracing::error!(error = &err as &dyn Error, "storage request failed");
         }
         Self(status)
     }

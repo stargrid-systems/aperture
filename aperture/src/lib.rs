@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
+use aperture_storage::Storage;
 use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
@@ -20,9 +21,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
-    let artifacts = open_artifacts(&data_dir).await?;
+    let (artifacts, storage) = open_artifacts(&data_dir).await?;
     let boot_id = Uuid::new_v4();
-    let log_repo = artifacts.storage().logs().into_diagnostic()?;
+    let log_repo = storage.logs().into_diagnostic()?;
     let log_worker = logging::init(log_repo, boot_id);
 
     artifacts.sync().await.into_diagnostic()?;
@@ -31,7 +32,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     // active as interrupted.
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
-    let tasks = Tasks::new(artifacts.storage().clone(), registry);
+    let tasks = Tasks::new(storage.tasks().into_diagnostic()?, registry);
     tasks.reconcile().await.into_diagnostic()?;
 
     let spectra = Spectra::new(
@@ -46,11 +47,12 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone());
+    let state = AppState::new(VERSION, boot_id, storage, spectra, tasks.clone());
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
+
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
@@ -96,9 +98,8 @@ async fn shutdown_signal() {
 
 /// Returns the OpenAPI specification, with the task kinds projected in.
 pub async fn openapi() -> miette::Result<OpenApiSpec> {
-    let artifacts = Artifacts::open(":memory:", PathBuf::from("."))
-        .await
-        .into_diagnostic()?;
+    let storage = Storage::open(":memory:").await.into_diagnostic()?;
+    let artifacts = Artifacts::new(storage, PathBuf::from("."));
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::new(artifacts));
     Ok(aperture_http::openapi(&registry.descriptors()))
@@ -109,15 +110,16 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
     registry.register(DownloadDefinition::new(artifacts));
 }
 
-/// Opens the storage database and blob store under `data_dir`.
-async fn open_artifacts(data_dir: &Path) -> miette::Result<Arc<Artifacts>> {
+/// Opens the storage database and blob store under `data_dir`. Returns the
+/// artifact manager and the storage handle so callers can build their own
+/// repositories alongside it.
+async fn open_artifacts(data_dir: &Path) -> miette::Result<(Arc<Artifacts>, Storage)> {
     fs::create_dir_all(data_dir).await.into_diagnostic()?;
     let db_path = data_dir.join("aperture.db");
     let db_path = db_path
         .to_str()
         .ok_or_else(|| miette::miette!("data dir is not valid UTF-8: {}", data_dir.display()))?;
-    let artifacts = Artifacts::open(db_path, data_dir.join("store"))
-        .await
-        .into_diagnostic()?;
-    Ok(Arc::new(artifacts))
+    let storage = Storage::open(db_path).await.into_diagnostic()?;
+    let artifacts = Arc::new(Artifacts::new(storage.clone(), data_dir.join("store")));
+    Ok((artifacts, storage))
 }
