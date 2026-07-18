@@ -49,8 +49,8 @@ impl Scheduler {
     }
 
     /// Runs one scheduler tick: queries due schedules and spawns each. Returns
-    /// the number of tasks spawned. Exposed so callers (e.g. `serve`) can run
-    /// a tick at boot to catch up after downtime.
+    /// the number of tasks spawned. Invoked by [`run`](Self::run) on boot and
+    /// on each periodic fire; kept public for tests.
     pub async fn tick(&self) -> Result<usize, SchedulerError> {
         let now = Timestamp::now();
         let repo = &self.inner.schedules;
@@ -98,15 +98,20 @@ impl Scheduler {
         Ok(spawned)
     }
 
-    /// Long-running driver. Ticks at `tick_interval`, exits when `shutdown` is
-    /// cancelled. Errors inside a tick are logged, not surfaced: a single
-    /// storage blip should not bring down the scheduler.
+    /// Long-running driver. Runs one tick immediately (the boot tick, to
+    /// catch up after downtime), then ticks at `tick_interval`. Exits when
+    /// `shutdown` is cancelled. Errors inside a tick are logged, not
+    /// surfaced: a single storage blip should not bring down the scheduler.
     pub async fn run(self, tick_interval: Duration, shutdown: CancellationToken) {
-        // First fire one full period out so a boot tick (run by the caller
-        // before `run`) doesn't get a follow-up immediately. Delay policy:
-        // when a tick overruns, the next fire is rescheduled from the
-        // overrun instant. This keeps the schedule stable under normal
-        // load and only drifts when a tick actually exceeds the period.
+        if let Err(err) = self.tick().await {
+            tracing::error!(error = &err as &dyn Error, "scheduler boot tick failed");
+        }
+
+        // First periodic fire is one full `tick_interval` out from now so the
+        // boot tick doesn't get an immediate follow-up. Delay policy: when a
+        // tick overruns, the next fire is rescheduled from the overrun
+        // instant. This keeps the schedule stable under normal load and only
+        // drifts when a tick actually exceeds the period.
         let mut ticker = interval_at(Instant::now() + tick_interval, tick_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {

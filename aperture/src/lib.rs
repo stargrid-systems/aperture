@@ -1,6 +1,5 @@
 //! Aperture gateway: composes the HTTP layer with the artifact manager.
 
-use std::error::Error;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -66,16 +65,13 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let shutdown = CancellationToken::new();
 
     // Periodic task scheduler: spawns due schedules on each tick. Cancelled on
-    // shutdown so the driver returns during the drain. A boot tick runs first so
-    // schedules that came due while the gateway was down fire right away instead
-    // of waiting up to `SCHEDULER_TICK`.
+    // shutdown so the driver returns during the drain. The driver fires a boot
+    // tick first so schedules that came due while the gateway was down are
+    // caught up right away instead of waiting up to `SCHEDULER_TICK`.
     let scheduler_task = {
         let shutdown = shutdown.clone();
         let scheduler = scheduler.clone();
         tokio::spawn(async move {
-            if let Err(err) = scheduler.tick().await {
-                tracing::error!(error = &err as &dyn Error, "scheduler boot tick failed",);
-            }
             scheduler.run(SCHEDULER_TICK, shutdown).await;
         })
     };
