@@ -94,7 +94,6 @@ impl Storage {
         Ok(TaskRepository::new(self.connect()?))
     }
 
-    /// Returns the repository over the task schedule catalog.
     pub fn task_schedules(&self) -> Result<TaskScheduleRepository> {
         Ok(TaskScheduleRepository::new(self.connect()?))
     }

@@ -21,7 +21,6 @@ mod logging;
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// How often the scheduler wakes to check for due schedules.
 const SCHEDULER_TICK: Duration = Duration::from_secs(60);
 
 /// Runs the gateway HTTP server until the process is terminated.
@@ -60,14 +59,8 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
     tracing::info!(%addr, "aperture listening");
 
-    // One token drives every shutdown path. The OS-signal handler cancels it,
-    // which stops the scheduler driver and triggers axum's graceful drain.
     let shutdown = CancellationToken::new();
 
-    // Periodic task scheduler: spawns due schedules on each tick. Cancelled on
-    // shutdown so the driver returns during the drain. The driver fires a boot
-    // tick first so schedules that came due while the gateway was down are
-    // caught up right away instead of waiting up to `SCHEDULER_TICK`.
     let scheduler_task = {
         let shutdown = shutdown.clone();
         let scheduler = scheduler.clone();
@@ -85,7 +78,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .into_diagnostic();
 
-    // Stop accepting new periodic work before draining the task manager.
+    // Stop spawning new periodic work before draining in-flight tasks.
     let _ = scheduler_task.await;
 
     // The server has stopped accepting requests.

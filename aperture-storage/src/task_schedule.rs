@@ -1,9 +1,4 @@
 //! Periodic task schedules.
-//!
-//! A task schedule row describes a task kind and JSON input that the scheduler
-//! should re-run on a fixed cadence. The scheduler advances `next_run_at`
-//! after each spawn. Schedules are exposed through the HTTP API so operators
-//! can list, create, and disable them.
 
 use jiff::Timestamp;
 use serde_json::Value;
@@ -42,31 +37,20 @@ const SCHEDULE_COLUMNS: Columns = Columns::new(&[
     col::CREATED_AT,
 ]);
 
-/// A periodic task schedule. The scheduler spawns `kind` with `input` every
-/// `interval`, advancing `next_run_at` after each spawn.
+/// A periodic task schedule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSchedule {
-    /// Store-assigned id.
     pub id: DbId,
-    /// The kind of task to spawn, matching a registered definition.
     pub kind: String,
-    /// JSON value passed to each spawned invocation.
     pub input: Value,
-    /// Spawn cadence.
     pub interval: Interval,
-    /// When the next spawn is due.
     pub next_run_at: Timestamp,
-    /// When the most recent spawn fired, if any.
     pub last_run_at: Option<Timestamp>,
-    /// The id of the most recent spawned invocation, if any.
     pub last_task_id: Option<DbId>,
-    /// Whether the scheduler should fire this schedule.
     pub enabled: bool,
-    /// When the schedule was created.
     pub created_at: Timestamp,
 }
 
-/// Payload for creating a new task schedule.
 #[derive(Debug, Clone)]
 pub struct NewTaskSchedule {
     pub kind: String,
@@ -76,15 +60,12 @@ pub struct NewTaskSchedule {
     pub created_at: Timestamp,
 }
 
-/// Payload for patching an existing task schedule. `None` fields are left
-/// alone.
 #[derive(Debug, Clone, Default)]
 pub struct TaskSchedulePatch {
     pub interval: Option<Interval>,
     pub enabled: Option<bool>,
 }
 
-/// Repository over the task schedule catalog.
 pub struct TaskScheduleRepository {
     connection: Connection,
 }
@@ -94,7 +75,6 @@ impl TaskScheduleRepository {
         Self { connection }
     }
 
-    /// Records a new task schedule and returns its assigned id.
     #[tracing::instrument(level = "info", skip(self, new))]
     pub async fn create(&self, new: &NewTaskSchedule) -> Result<DbId> {
         let params = params_from_iter([
@@ -137,7 +117,7 @@ impl TaskScheduleRepository {
         }
     }
 
-    /// Lists task schedules, oldest first by id.
+    /// Oldest first by id.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list(&self, query: &ListQuery) -> Result<Page<TaskSchedule>> {
         let paginator = Paginator::new(query, Order::Asc)?;
@@ -168,8 +148,7 @@ impl TaskScheduleRepository {
         }))
     }
 
-    /// Applies `patch` to the task schedule with `id`. Returns the updated row,
-    /// or `None` if no schedule has that id.
+    /// Returns `None` if no schedule has `id`.
     #[tracing::instrument(level = "info", skip(self, patch))]
     pub async fn update(
         &self,
@@ -193,7 +172,7 @@ impl TaskScheduleRepository {
         self.get(id).await
     }
 
-    /// Deletes the task schedule with `id`. Returns whether a row was removed.
+    /// Returns whether a row was removed.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete(&self, id: DbId) -> Result<bool> {
         let existed = self.get(id).await?.is_some();
@@ -209,9 +188,8 @@ impl TaskScheduleRepository {
         Ok(existed)
     }
 
-    /// Returns enabled schedules whose `next_run_at` is at or before `now`,
-    /// ordered by `next_run_at` then `id`. `limit` caps the batch size so the
-    /// scheduler cannot pin a tick on a runaway backlog.
+    /// Enabled schedules whose `next_run_at` is at or before `now`, ordered by
+    /// `next_run_at` then `id`.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_due(&self, now: Timestamp, limit: usize) -> Result<Vec<TaskSchedule>> {
         let sql = format!(
@@ -235,10 +213,8 @@ impl TaskScheduleRepository {
         Ok(out)
     }
 
-    /// Records that the schedule with `id` fired at `now`, advancing
-    /// `next_run_at` by one interval and pointing `last_task_id` at the
-    /// invocation that was spawned. Pass `None` for `last_task_id` when the
-    /// spawn failed so the column stays NULL.
+    /// Advances `next_run_at` by one interval and records the spawn. Pass
+    /// `None` for `last_task_id` when the spawn failed.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn mark_run(
         &self,

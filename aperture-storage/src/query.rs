@@ -1,11 +1,4 @@
 //! SQL fragment builders that keep conditions and bind params in lockstep.
-//!
-//! [`Filters`] builds a `WHERE` body and [`Assignments`] builds a `SET` body.
-//! Both pair each fragment with its bind param at push time, so placeholder
-//! numbers can never drift out of sync with the param vector. [`EscapeLike`]
-//! is a small formatting helper for `LIKE` clauses. All three take column
-//! names from the calling query (never user input) since those names are
-//! interpolated verbatim into the generated SQL.
 
 use std::fmt::{self, Write};
 
@@ -222,9 +215,6 @@ impl fmt::Display for EscapeLike<'_> {
     }
 }
 
-/// Builds the `SET` body of an `UPDATE`, keeping each assignment and its bind
-/// param in lockstep so placeholder numbers can never drift. Column names come
-/// from the calling query, never user input, since they are written verbatim.
 pub(crate) struct Assignments {
     sql: String,
     params: Vec<Value>,
@@ -238,12 +228,10 @@ impl Assignments {
         }
     }
 
-    /// Whether no assignment has been pushed yet.
     pub(crate) fn is_empty(&self) -> bool {
         self.params.is_empty()
     }
 
-    /// Adds `column = ?` bound to `value`.
     pub(crate) fn set(&mut self, column: &str, value: &impl ToSql) {
         self.params.push(value.to_sql());
         if !self.sql.is_empty() {
@@ -252,20 +240,16 @@ impl Assignments {
         let _ = write!(self.sql, "{column} = ?{}", self.params.len());
     }
 
-    /// Like [`set`](Self::set), but skips the assignment when `None`.
     pub(crate) fn set_opt(&mut self, column: &str, value: Option<&impl ToSql>) {
         if let Some(value) = value {
             self.set(column, value);
         }
     }
 
-    /// The `SET` clause body (without the keyword), or an empty string when no
-    /// assignments have been pushed.
     pub(crate) fn set_clause(&self) -> &str {
         &self.sql
     }
 
-    /// The bind params, in placeholder order.
     pub(crate) fn into_params(self) -> Vec<Value> {
         self.params
     }
@@ -275,8 +259,6 @@ impl Assignments {
 mod tests {
     use super::*;
 
-    /// Wraps an `i64` so we can have a stable `ToSql` impl in tests without
-    /// leaning on a particular domain type.
     struct Int(i64);
     impl ToSql for Int {
         fn to_sql(&self) -> Value {

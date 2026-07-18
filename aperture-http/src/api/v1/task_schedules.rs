@@ -42,8 +42,7 @@ async fn list_task_schedules(
     Ok(Json(task_schedule_page(page)))
 }
 
-/// Creates a new periodic task schedule. The first spawn fires at
-/// `next_run_at`, which defaults to now.
+/// Creates a new periodic task schedule.
 #[utoipa::path(
     post,
     path = "",

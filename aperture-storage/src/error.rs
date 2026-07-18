@@ -54,8 +54,6 @@ pub enum StorageError {
     #[error("invalid timestamp {micros} us")]
     InvalidTimestamp { micros: i64 },
 
-    /// A schedule interval stored as milliseconds could not be turned back into
-    /// a valid [`Interval`](crate::Interval).
     #[error("invalid interval: {error}")]
     InvalidInterval { error: String },
 

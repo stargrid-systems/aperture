@@ -18,7 +18,6 @@ impl ApiError {
     pub(crate) const NOT_FOUND: Self = Self(StatusCode::NOT_FOUND);
     /// The request conflicts with the resource's current state.
     pub(crate) const CONFLICT: Self = Self(StatusCode::CONFLICT);
-    /// Something went wrong on the server.
     pub(crate) const INTERNAL: Self = Self(StatusCode::INTERNAL_SERVER_ERROR);
 }
 

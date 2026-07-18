@@ -1,17 +1,4 @@
 //! Periodic task scheduler driver.
-//!
-//! A scheduler owns a long-running driver that periodically queries the
-//! task schedule catalog for due rows and spawns each via [`Tasks::create`].
-//! The catalog itself (creating, listing, patching, deleting schedules) is
-//! managed through the [`TaskScheduleRepository`] in [`aperture-storage`];
-//! the scheduler is a pure runtime driver over that catalog.
-//!
-//! Errors during a single schedule spawn (unknown kind, storage error) are
-//! logged and the schedule is advanced to its next interval; one bad schedule
-//! cannot stall the driver.
-//!
-//! [`Tasks::create`]: crate::Tasks::create
-//! [`TaskScheduleRepository`]: aperture_storage::TaskScheduleRepository
 
 use std::error::Error;
 use std::sync::Arc;
@@ -24,11 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Tasks;
 
-/// Maximum number of due schedules processed in a single tick. Caps the work
-/// one tick can do so a runaway backlog cannot pin the driver.
 const TICK_BATCH: usize = 32;
 
-/// Spawns tasks according to the task schedule catalog.
 #[derive(Clone)]
 pub struct Scheduler {
     inner: Arc<Inner>,
@@ -40,17 +24,14 @@ struct Inner {
 }
 
 impl Scheduler {
-    /// Creates a scheduler that drives `tasks` using `schedules` as the
-    /// catalog of due work.
     pub fn new(schedules: TaskScheduleRepository, tasks: Tasks) -> Self {
         Self {
             inner: Arc::new(Inner { schedules, tasks }),
         }
     }
 
-    /// Runs one scheduler tick: queries due schedules and spawns each. Returns
-    /// the number of tasks spawned. Invoked by [`run`](Self::run) on boot and
-    /// on each periodic fire; kept public for tests.
+    /// Runs one tick. Kept public so tests can drive a single tick in
+    /// isolation.
     pub async fn tick(&self) -> Result<usize, SchedulerError> {
         let now = Timestamp::now();
         let repo = &self.inner.schedules;
@@ -80,8 +61,7 @@ impl Scheduler {
                         "schedule spawn failed; advancing to next interval",
                     );
                     // Advance anyway so a permanently-broken schedule does not
-                    // fire on every tick. No task was spawned, so leave
-                    // last_task_id NULL.
+                    // fire on every tick.
                     if let Err(err) = repo
                         .mark_run(schedule.id, now, &schedule.interval, None)
                         .await
@@ -98,20 +78,16 @@ impl Scheduler {
         Ok(spawned)
     }
 
-    /// Long-running driver. Runs one tick immediately (the boot tick, to
-    /// catch up after downtime), then ticks at `tick_interval`. Exits when
-    /// `shutdown` is cancelled. Errors inside a tick are logged, not
-    /// surfaced: a single storage blip should not bring down the scheduler.
+    /// Runs a boot tick immediately, then ticks at `tick_interval`. Exits when
+    /// `shutdown` is cancelled. Errors inside a tick are logged.
     pub async fn run(self, tick_interval: Duration, shutdown: CancellationToken) {
         if let Err(err) = self.tick().await {
             tracing::error!(error = &err as &dyn Error, "scheduler boot tick failed");
         }
 
-        // First periodic fire is one full `tick_interval` out from now so the
-        // boot tick doesn't get an immediate follow-up. Delay policy: when a
-        // tick overruns, the next fire is rescheduled from the overrun
-        // instant. This keeps the schedule stable under normal load and only
-        // drifts when a tick actually exceeds the period.
+        // First periodic fire is one full `tick_interval` out so the boot tick
+        // doesn't get an immediate follow-up. `Delay` reschedules from the
+        // overrun instant so a slow tick drifts rather than bunching up.
         let mut ticker = interval_at(Instant::now() + tick_interval, tick_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -127,10 +103,8 @@ impl Scheduler {
     }
 }
 
-/// Errors returned by the scheduler.
 #[derive(Debug, thiserror::Error)]
 pub enum SchedulerError {
-    /// A storage-layer error.
     #[error(transparent)]
     Storage(#[from] aperture_storage::StorageError),
 }
@@ -142,9 +116,6 @@ mod tests {
 
     use super::*;
 
-    /// A trivial task kind that always succeeds. The scheduler is agnostic to
-    /// the body, but we need one registered so `Tasks::create` accepts the
-    /// kind string.
     struct Ping;
 
     impl crate::TaskDefinition for Ping {
@@ -176,8 +147,6 @@ mod tests {
         Interval::from_micros(micros).unwrap()
     }
 
-    /// Bundles the scheduler with the storage it drives so tests can seed the
-    /// schedule catalog directly through the repository.
     struct Harness {
         scheduler: Scheduler,
         storage: Storage,
@@ -261,7 +230,6 @@ mod tests {
         let now = Timestamp::now().as_microsecond();
         let id = create_schedule(&storage, "does-not-exist", 60_000_000, now - 1_000_000).await;
 
-        // First tick sees the due schedule, fails to spawn, but advances it.
         assert_eq!(scheduler.tick().await.unwrap(), 0);
         let advanced = storage
             .task_schedules()
@@ -271,11 +239,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(advanced.last_run_at.is_some());
-        // A failed spawn leaves last_task_id NULL.
         assert!(advanced.last_task_id.is_none());
 
-        // Second tick (immediately) should not re-fire: next_run_at is in the
-        // future now.
         assert_eq!(scheduler.tick().await.unwrap(), 0);
     }
 }

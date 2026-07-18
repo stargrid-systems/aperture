@@ -1,7 +1,4 @@
 //! A strictly-positive time interval.
-//!
-//! [`Interval`] wraps a [`jiff::SignedDuration`] that is guaranteed to be
-//! positive and representable as a whole number of microseconds.
 
 use std::fmt;
 use std::result::Result as StdResult;
@@ -16,13 +13,8 @@ use crate::sql::{FromSql, ToSql};
 
 /// A strictly-positive span of time, stored as a whole number of microseconds.
 ///
-/// Construct with [`Interval::new`] (from a [`SignedDuration`]) or
-/// [`Interval::from_micros`]. Both reject zero and negative durations, and
-/// require the duration to fit in `i64` microseconds.
-///
 /// On the wire an interval is an ISO 8601 duration such as `PT5M`; jiff also
-/// accepts its friendlier form (`5m`) on input. The OpenAPI schema advertises
-/// the `duration` format so consumers know to expect ISO 8601.
+/// accepts its friendlier form (`5m`) on input.
 #[derive(Debug, Clone, PartialEq, Eq, utoipa::ToSchema)]
 #[schema(value_type = String, format = Duration, example = "PT5M")]
 pub struct Interval(SignedDuration);
@@ -30,17 +22,13 @@ pub struct Interval(SignedDuration);
 /// Errors from constructing an [`Interval`].
 #[derive(Debug, thiserror::Error)]
 pub enum InvalidInterval {
-    /// The duration was zero or negative.
     #[error("interval must be strictly positive")]
     NotPositive,
-    /// The duration is outside the supported range.
     #[error("interval is out of range")]
     OutOfRange,
 }
 
 impl Interval {
-    /// Creates an interval from a [`SignedDuration`], validating that it is
-    /// strictly positive and expressible as a whole number of microseconds.
     pub fn new(duration: SignedDuration) -> StdResult<Self, InvalidInterval> {
         if !duration.is_positive() {
             return Err(InvalidInterval::NotPositive);
@@ -49,7 +37,6 @@ impl Interval {
         Ok(Self(duration))
     }
 
-    /// Creates an interval from a positive number of microseconds.
     pub fn from_micros(micros: i64) -> StdResult<Self, InvalidInterval> {
         if micros <= 0 {
             return Err(InvalidInterval::NotPositive);
@@ -57,12 +44,10 @@ impl Interval {
         Ok(Self(SignedDuration::from_micros(micros)))
     }
 
-    /// The interval as a [`SignedDuration`], for datetime arithmetic.
     pub fn as_signed_duration(&self) -> &SignedDuration {
         &self.0
     }
 
-    /// The interval as a whole number of microseconds.
     pub fn as_micros(&self) -> i64 {
         i64::try_from(self.0.as_micros()).expect("validated at construction")
     }
@@ -132,18 +117,15 @@ mod tests {
     fn round_trips_through_micros() {
         let interval = Interval::from_micros(90_000_000).unwrap();
         assert_eq!(interval.as_micros(), 90_000_000);
-        // 90 seconds == 1m30s.
         let again = Interval::new(*interval.as_signed_duration()).unwrap();
         assert_eq!(again, interval);
     }
 
     #[test]
     fn serde_is_iso_8601() {
-        let interval = Interval::from_micros(300_000_000).unwrap(); // 5 minutes
+        let interval = Interval::from_micros(300_000_000).unwrap();
         let json = serde_json::to_string(&interval).unwrap();
         assert_eq!(json, "\"PT5M\"");
-        // Deserializing the equivalent 5-minute duration yields the same
-        // interval, whether written in ISO 8601 or jiff's friendly form.
         assert_eq!(
             serde_json::from_str::<Interval>("\"PT5M\"").unwrap(),
             interval
@@ -152,7 +134,6 @@ mod tests {
             serde_json::from_str::<Interval>("\"5m\"").unwrap(),
             interval
         );
-        // Round-trips through the serialized form.
         let back: Interval = serde_json::from_str(&json).unwrap();
         assert_eq!(back, interval);
     }
