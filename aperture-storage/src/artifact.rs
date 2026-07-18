@@ -93,12 +93,14 @@ impl ArtifactRepository {
         Self { connection }
     }
 
-    /// Records a stored version. If `(key, digest)` already exists its metadata
-    /// is refreshed. The `id` field of `artifact` is ignored.
+    /// Records a stored version.
+    ///
+    /// If `(key, digest)` already exists its metadata is refreshed. The `id`
+    /// field of `artifact` is ignored.
     #[tracing::instrument(level = "info", skip(self, artifact))]
     pub async fn record_version(&self, artifact: &Artifact) -> Result<()> {
         let params = params_from_iter([
-            artifact.key.as_str().to_sql(),
+            artifact.key.to_sql(),
             artifact.source.to_sql(),
             artifact.digest.to_sql(),
             artifact.media_type.to_sql(),
@@ -140,7 +142,7 @@ impl ArtifactRepository {
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([key.as_str().to_sql()]))
+            .query(&sql, params_from_iter([key.to_sql()]))
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
@@ -158,10 +160,7 @@ impl ArtifactRepository {
         );
         let mut rows = self
             .connection
-            .query(
-                &sql,
-                params_from_iter([key.as_str().to_sql(), digest.to_sql()]),
-            )
+            .query(&sql, params_from_iter([key.to_sql(), digest.to_sql()]))
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
@@ -185,7 +184,7 @@ impl ArtifactRepository {
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([key.as_str().to_sql()]))
+            .query(&sql, params_from_iter([key.to_sql()]))
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
@@ -319,7 +318,7 @@ impl ArtifactRepository {
         self.connection
             .execute(
                 sql!(DELETE FROM artifacts WHERE key = ?1 AND digest = ?2),
-                params_from_iter([key.as_str().to_sql(), digest.to_sql()]),
+                params_from_iter([key.to_sql(), digest.to_sql()]),
             )
             .await
             .map_err(StorageError::from_turso)?;
@@ -328,11 +327,9 @@ impl ArtifactRepository {
 }
 
 fn row_to_artifact(row: &Row) -> Result<Artifact> {
-    let key_str: String = ARTIFACT_COLUMNS.extract(row, col::KEY)?;
-    let key = ArtifactKey::new(key_str).map_err(StorageError::InvalidArtifactKey)?;
     Ok(Artifact {
         id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
-        key,
+        key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
         source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
         digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST)?,
         media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE)?,

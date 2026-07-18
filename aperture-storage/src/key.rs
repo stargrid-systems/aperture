@@ -11,9 +11,13 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::de::Error as DeError;
+use turso::Value;
 use utoipa::openapi::schema::Type;
 use utoipa::openapi::{ObjectBuilder, RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
+
+use crate::error::StorageError;
+use crate::sql::{FromSql, ToSql};
 
 /// Maximum byte length of an artifact key.
 pub const MAX_LEN: usize = 1024;
@@ -32,13 +36,37 @@ impl ArtifactKey {
     /// keys longer than 1024 bytes.
     pub fn new(key: impl Into<Cow<'static, str>>) -> Result<Self, InvalidArtifactKey> {
         let key = key.into();
-        validate(&key)?;
+        Self::validate(&key)?;
         Ok(Self(key))
     }
 
     /// The key as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    fn validate(s: &str) -> Result<(), InvalidArtifactKey> {
+        if s.is_empty() {
+            return Err(InvalidArtifactKey::Empty);
+        }
+        if s.starts_with('/') {
+            return Err(InvalidArtifactKey::AbsolutePath);
+        }
+        if s.contains('\0') {
+            return Err(InvalidArtifactKey::NulByte);
+        }
+        if s.bytes().any(|b| b < 0x20 || b == 0x7F) {
+            return Err(InvalidArtifactKey::ControlChar);
+        }
+        for segment in s.split('/') {
+            if segment == ".." || segment == "." {
+                return Err(InvalidArtifactKey::Traversal);
+            }
+        }
+        if s.len() > MAX_LEN {
+            return Err(InvalidArtifactKey::TooLong);
+        }
+        Ok(())
     }
 }
 
@@ -114,30 +142,6 @@ pub enum InvalidArtifactKey {
     TooLong,
 }
 
-fn validate(s: &str) -> Result<(), InvalidArtifactKey> {
-    if s.is_empty() {
-        return Err(InvalidArtifactKey::Empty);
-    }
-    if s.starts_with('/') {
-        return Err(InvalidArtifactKey::AbsolutePath);
-    }
-    if s.contains('\0') {
-        return Err(InvalidArtifactKey::NulByte);
-    }
-    if s.bytes().any(|b| b < 0x20 || b == 0x7F) {
-        return Err(InvalidArtifactKey::ControlChar);
-    }
-    for segment in s.split('/') {
-        if segment == ".." || segment == "." {
-            return Err(InvalidArtifactKey::Traversal);
-        }
-    }
-    if s.len() > MAX_LEN {
-        return Err(InvalidArtifactKey::TooLong);
-    }
-    Ok(())
-}
-
 impl PartialSchema for ArtifactKey {
     fn schema() -> RefOr<Schema> {
         ObjectBuilder::new()
@@ -153,6 +157,25 @@ impl PartialSchema for ArtifactKey {
 impl ToSchema for ArtifactKey {
     fn name() -> Cow<'static, str> {
         Cow::Borrowed("ArtifactKey")
+    }
+}
+
+impl ToSql for ArtifactKey {
+    fn to_sql(&self) -> Value {
+        Value::Text(self.0.to_string())
+    }
+}
+
+impl FromSql for ArtifactKey {
+    fn from_sql(value: Value, idx: usize) -> Result<Self, StorageError> {
+        match value {
+            Value::Text(s) => Self::new(s).map_err(StorageError::from),
+            actual => Err(StorageError::ColumnTypeMismatch {
+                column: idx,
+                expected: "text",
+                actual,
+            }),
+        }
     }
 }
 

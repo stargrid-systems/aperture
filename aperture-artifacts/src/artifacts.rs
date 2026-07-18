@@ -28,9 +28,7 @@ use crate::hash_writer::HashWriter;
 use crate::media_type::MediaType;
 use crate::progress::ProgressWriter;
 
-/// Capacity of the in-process change feed. Events past this buffer (when no
-/// subscriber is keeping up) are dropped silently. The next subscriber-visible
-/// event still arrives.
+/// Capacity of the in-process change feed.
 const CHANGE_FEED_CAPACITY: usize = 64;
 
 /// How long a resolved reference stays cached before it is re-checked against
