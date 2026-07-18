@@ -18,7 +18,7 @@ aperture-tasks = { workspace = true }
 
 anyhow = { workspace = true, features = ["std"] }
 arc-swap = { workspace = true }
-axum = { workspace = true, features = ["json", "query"] }
+axum = { workspace = true, features = ["json", "query", "tokio", "http1"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
 bytes = { workspace = true }
 futures-util = { workspace = true }
@@ -29,6 +29,7 @@ rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 rustls-pemfile = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
 time = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt", "net", "sync", "time", "fs"] }
 tokio-rustls = { workspace = true, features = ["ring", "tls12"] }

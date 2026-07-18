@@ -17,13 +17,16 @@ use uuid::Uuid;
 
 use self::api::router as api_routes;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
+pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
 
 mod api;
 mod dto;
 mod error;
+mod server;
 mod spectra;
+pub mod tls;
 
 /// Shared application state handed to every request handler.
 #[derive(Clone)]

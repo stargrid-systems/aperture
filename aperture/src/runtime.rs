@@ -9,14 +9,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use aperture_http::HttpServer;
 use aperture_tasks::{Scheduler, Tasks};
-use axum::Router;
-use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-
-use crate::tls::TlsListener;
 
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -94,47 +91,12 @@ impl Supervisor {
     }
 }
 
-pub(crate) struct HttpWorker {
-    listener: TcpListener,
-    app: Router,
-}
+/// Adapter so [`HttpServer`] fits the [`Worker`] trait.
+pub(crate) struct HttpServerWorker(pub(crate) HttpServer);
 
-impl HttpWorker {
-    pub(crate) fn new(listener: TcpListener, app: Router) -> Self {
-        Self { listener, app }
-    }
-}
-
-impl Worker for HttpWorker {
+impl Worker for HttpServerWorker {
     async fn run(self, stop: Stop) {
-        if let Err(err) = axum::serve(self.listener, self.app)
-            .with_graceful_shutdown(stop)
-            .await
-        {
-            tracing::error!(error = %err, "http server exited with error");
-        }
-    }
-}
-
-pub(crate) struct TlsHttpWorker {
-    listener: TlsListener,
-    app: Router,
-}
-
-impl TlsHttpWorker {
-    pub(crate) fn new(listener: TlsListener, app: Router) -> Self {
-        Self { listener, app }
-    }
-}
-
-impl Worker for TlsHttpWorker {
-    async fn run(self, stop: Stop) {
-        if let Err(err) = axum::serve(self.listener, self.app)
-            .with_graceful_shutdown(stop)
-            .await
-        {
-            tracing::error!(error = %err, "https server exited with error");
-        }
+        self.0.run(stop).await;
     }
 }
 
