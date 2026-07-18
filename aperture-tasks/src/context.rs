@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use aperture_storage::DbId;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::definition::TaskDefinition;
@@ -69,29 +69,18 @@ impl TaskContext {
     /// Spawns a sub-task of kind `T`, recorded as a child of this invocation.
     /// The child's cancellation is tied to this task's, so cancelling the
     /// parent cancels the child.
-    ///
-    /// `T::Input` must serialize as a JSON object. Types whose serialization
-    /// yields an array, scalar, or null are rejected as [`TaskError::EncodeInput`].
     pub async fn spawn_child<T: TaskDefinition>(
         &self,
         input: T::Input,
     ) -> Result<TaskHandle<T::Output>, TaskError> {
-        let value = serde_json::to_value(input).map_err(|e| TaskError::EncodeInput(e.into()))?;
-        let map = match value {
-            Value::Object(map) => map,
-            other => {
-                return Err(TaskError::EncodeInput(
-                    anyhow::format_err!("task input is not a JSON object: {other}"),
-                ))
-            }
-        };
+        let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
         self.inner
-            .spawn_value::<T::Output>(T::KIND, map, Some(self.id))
+            .spawn_value::<T::Output>(T::KIND, value, Some(self.id))
             .await
     }
 
     /// Records the task's terminal outcome and wakes anyone awaiting it.
-    pub(crate) async fn complete(self, outcome: Result<Map<String, Value>, TaskError>) {
+    pub(crate) async fn complete(self, outcome: Result<Value, TaskError>) {
         self.inner.finish(self.id, outcome).await;
     }
 }

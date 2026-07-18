@@ -19,7 +19,7 @@ use aperture_storage::{
 };
 use jiff::Timestamp;
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
@@ -105,33 +105,18 @@ impl Tasks {
     }
 
     /// Spawns a top-level task of kind `T` and returns a typed handle to it.
-    ///
-    /// `T::Input` must serialize as a JSON object. Types whose serialization
-    /// yields an array, scalar, or null are rejected as [`TaskError::EncodeInput`].
     pub async fn spawn<T: TaskDefinition>(
         &self,
         input: T::Input,
     ) -> Result<TaskHandle<T::Output>, TaskError> {
-        let value = serde_json::to_value(input).map_err(|e| TaskError::EncodeInput(e.into()))?;
-        let map = match value {
-            Value::Object(map) => map,
-            other => {
-                return Err(TaskError::EncodeInput(
-                    anyhow::format_err!("task input is not a JSON object: {other}"),
-                ))
-            }
-        };
-        self.inner.spawn_value::<T::Output>(T::KIND, map, None).await
+        let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
+        self.inner.spawn_value::<T::Output>(T::KIND, value, None).await
     }
 
     /// Spawns a top-level task by kind string, validating `input` against the
     /// kind's input type, and returns the created invocation. Used by the API,
     /// which does not await a typed output.
-    pub async fn create(
-        &self,
-        kind: &str,
-        input: Map<String, Value>,
-    ) -> Result<TaskInvocation, TaskError> {
+    pub async fn create(&self, kind: &str, input: Value) -> Result<TaskInvocation, TaskError> {
         let (invocation, _phase) = self.inner.start(kind, input, None).await?;
         Ok(invocation)
     }
@@ -286,7 +271,7 @@ impl TasksInner {
     pub(crate) async fn start(
         self: &Arc<Self>,
         kind: &str,
-        input: Map<String, Value>,
+        input: Value,
         parent_id: Option<DbId>,
     ) -> Result<(TaskInvocation, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
@@ -294,8 +279,7 @@ impl TasksInner {
                 .get(kind)
                 .ok_or_else(|| TaskError::NotRegistered(kind.to_owned()))?,
         );
-        let input_value = Value::Object(input.clone());
-        definition.validate(&input_value)?;
+        definition.validate(&input)?;
 
         let now = Timestamp::now();
         let id = self.tasks.create_running(kind, parent_id, &input, now).await?;
@@ -321,7 +305,7 @@ impl TasksInner {
             let mut running = self.running.lock().expect("running poisoned");
             let abort = {
                 let mut set = self.joinset.lock().expect("joinset poisoned");
-                definition.spawn_on(input_value, ctx, &mut set)
+                definition.spawn_on(input.clone(), ctx, &mut set)
             };
             running.insert(
                 id,
@@ -355,7 +339,7 @@ impl TasksInner {
     pub(crate) async fn spawn_value<O>(
         self: &Arc<Self>,
         kind: &str,
-        input: Map<String, Value>,
+        input: Value,
         parent_id: Option<DbId>,
     ) -> Result<TaskHandle<O>, TaskError> {
         let (invocation, phase) = self.start(kind, input, parent_id).await?;
@@ -376,14 +360,10 @@ impl TasksInner {
     }
 
     /// Records the terminal outcome of `id` and wakes anyone awaiting it.
-    pub(crate) async fn finish(
-        &self,
-        id: DbId,
-        outcome: Result<Map<String, Value>, TaskError>,
-    ) {
+    pub(crate) async fn finish(&self, id: DbId, outcome: Result<Value, TaskError>) {
         let now = Timestamp::now();
         let (status, output, error) = match outcome {
-            Ok(map) => (TaskStatus::Succeeded, Some(map), None),
+            Ok(value) => (TaskStatus::Succeeded, Some(value), None),
             Err(TaskError::Run(RunError::Cancelled)) => (TaskStatus::Cancelled, None, None),
             // `{:#}` keeps the full source chain, not just the outermost message.
             Err(err) => (TaskStatus::Failed, None, Some(format!("{err:#}"))),
@@ -462,7 +442,7 @@ impl<O: DeserializeOwned> TaskHandle<O> {
                         self.id
                     )))
                 })?;
-                serde_json::from_value(Value::Object(output)).map_err(TaskError::DecodeOutput)
+                serde_json::from_value(output).map_err(TaskError::DecodeOutput)
             }
             TaskStatus::Cancelled => Err(TaskError::Run(RunError::Cancelled)),
             TaskStatus::Failed | TaskStatus::Interrupted => Err(TaskError::Run(RunError::Failed(

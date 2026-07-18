@@ -4,7 +4,7 @@ use aperture_artifacts::{ListQuery, Page as StoragePage};
 use aperture_storage::{DbId, Interval, TaskSchedule};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::dto::{OrderParam, Page};
@@ -17,7 +17,7 @@ pub struct TaskScheduleResponse {
     /// The kind of task to spawn, matching a registered definition.
     pub kind: String,
     /// JSON input passed to each spawned invocation.
-    pub input: Map<String, Value>,
+    pub input: Value,
     /// Spawn cadence, as an ISO 8601 duration (e.g. `PT5M`).
     pub interval: Interval,
     /// When the next spawn is due.
@@ -54,7 +54,7 @@ pub struct CreateTaskScheduleRequest {
     /// The kind of task to spawn.
     pub kind: String,
     /// JSON input for each spawned invocation.
-    pub input: Map<String, Value>,
+    pub input: Value,
     /// Spawn cadence, as an ISO 8601 duration (e.g. `PT5M`). Must be positive
     /// and use fixed units (at most hours).
     pub interval: Interval,

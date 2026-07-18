@@ -9,7 +9,7 @@
 use std::result::Result as StdResult;
 
 use jiff::Timestamp;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
@@ -108,10 +108,10 @@ pub struct TaskInvocation {
     pub parent_id: Option<DbId>,
     /// The lifecycle state.
     pub status: TaskStatus,
-    /// JSON object passed to the task at spawn.
-    pub input: Map<String, Value>,
-    /// JSON object returned by the task on success.
-    pub output: Option<Map<String, Value>>,
+    /// JSON value passed to the task at spawn.
+    pub input: Value,
+    /// JSON value returned by the task on success.
+    pub output: Option<Value>,
     /// Failure detail, if any.
     pub error: Option<String>,
     /// When the invocation was recorded.
@@ -260,13 +260,13 @@ impl TaskRepository {
     }
 
     /// Records a new invocation in the [`TaskStatus::Pending`] state and
-    /// returns its assigned id. `input` is the task's input object.
+    /// returns its assigned id. `input` is the task's input value.
     #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create(
         &self,
         kind: &str,
         parent_id: Option<DbId>,
-        input: &Map<String, Value>,
+        input: &Value,
         created_at: Timestamp,
     ) -> Result<DbId> {
         let params = params_from_iter([
@@ -298,7 +298,7 @@ impl TaskRepository {
         &self,
         kind: &str,
         parent_id: Option<DbId>,
-        input: &Map<String, Value>,
+        input: &Value,
         started_at: Timestamp,
     ) -> Result<DbId> {
         let params = params_from_iter([
@@ -340,7 +340,7 @@ impl TaskRepository {
     }
 
     /// Records the terminal outcome of the invocation with `id`. `output` is
-    /// the task's output object on success, `error` the detail on failure.
+    /// the task's output value on success, `error` the detail on failure.
     ///
     /// Only an unfinished row is updated. A row that already reached a terminal
     /// state keeps it, so a late interrupt during shutdown cannot clobber a
@@ -351,7 +351,7 @@ impl TaskRepository {
         id: DbId,
         status: TaskStatus,
         finished_at: Timestamp,
-        output: Option<&Map<String, Value>>,
+        output: Option<&Value>,
         error: Option<&str>,
     ) -> Result<()> {
         self.connection

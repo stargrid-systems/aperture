@@ -104,14 +104,7 @@ impl<T: TaskDefinition> ErasedDefinition for T {
                     let input: T::Input =
                         serde_json::from_value(input).map_err(TaskError::DecodeInput)?;
                     let output = TaskDefinition::run(&*self, input, run_ctx).await?;
-                    let value =
-                        serde_json::to_value(output).map_err(|e| TaskError::EncodeOutput(e.into()))?;
-                    match value {
-                        Value::Object(map) => Ok(map),
-                        _ => Err(TaskError::EncodeOutput(
-                            anyhow::format_err!("task output is not a JSON object"),
-                        )),
-                    }
+                    serde_json::to_value(output).map_err(TaskError::EncodeOutput)
                 })
                 .catch_unwind()
                 .await

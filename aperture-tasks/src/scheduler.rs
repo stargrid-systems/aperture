@@ -173,7 +173,7 @@ pub enum SchedulerError {
 #[cfg(test)]
 mod tests {
     use aperture_storage::{Interval, ListQuery, NewTaskSchedule, TaskSchedulePatch};
-    use serde_json::Map;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -182,19 +182,10 @@ mod tests {
     /// kind string.
     struct Ping;
 
-    /// Empty object input. The scheduler creates invocations with an empty
-    /// JSON object, so this matches.
-    #[derive(serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
-    struct PingIn {}
-
-    /// Empty object output. Task outputs must be JSON objects.
-    #[derive(serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
-    struct PingOut {}
-
     impl crate::TaskDefinition for Ping {
         const KIND: &'static str = "ping";
-        type Input = PingIn;
-        type Output = PingOut;
+        type Input = Value;
+        type Output = ();
 
         fn capabilities(&self) -> crate::Capabilities {
             crate::Capabilities {
@@ -208,7 +199,7 @@ mod tests {
             _input: Self::Input,
             _ctx: crate::TaskContext,
         ) -> Result<Self::Output, crate::RunError> {
-            Ok(PingOut {})
+            Ok(())
         }
     }
 
@@ -236,7 +227,7 @@ mod tests {
         let schedule = scheduler
             .create(NewTaskSchedule {
                 kind: "ping".to_owned(),
-                input: Map::new(),
+                input: json!({}),
                 interval: interval(60_000_000),
                 next_run_at: ts(now - 1_000_000),
                 created_at: ts(now),
@@ -262,7 +253,7 @@ mod tests {
         let schedule = scheduler
             .create(NewTaskSchedule {
                 kind: "ping".to_owned(),
-                input: Map::new(),
+                input: json!({}),
                 interval: interval(60_000_000),
                 next_run_at: ts(now - 1_000_000),
                 created_at: ts(now),
@@ -291,7 +282,7 @@ mod tests {
         let schedule = scheduler
             .create(NewTaskSchedule {
                 kind: "does-not-exist".to_owned(),
-                input: Map::new(),
+                input: json!({}),
                 interval: interval(60_000_000),
                 next_run_at: ts(now - 1_000_000),
                 created_at: ts(now),

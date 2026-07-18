@@ -6,7 +6,7 @@
 //! can list, create, and disable them.
 
 use jiff::Timestamp;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
@@ -49,8 +49,8 @@ pub struct TaskSchedule {
     pub id: DbId,
     /// The kind of task to spawn, matching a registered definition.
     pub kind: String,
-    /// JSON object passed to each spawned invocation.
-    pub input: Map<String, Value>,
+    /// JSON value passed to each spawned invocation.
+    pub input: Value,
     /// Spawn cadence.
     pub interval: Interval,
     /// When the next spawn is due.
@@ -69,7 +69,7 @@ pub struct TaskSchedule {
 #[derive(Debug, Clone)]
 pub struct NewTaskSchedule {
     pub kind: String,
-    pub input: Map<String, Value>,
+    pub input: Value,
     pub interval: Interval,
     pub next_run_at: Timestamp,
     pub created_at: Timestamp,
@@ -313,7 +313,7 @@ mod tests {
     fn new_schedule(kind: &str, interval_micros: i64, next_run_at: i64) -> NewTaskSchedule {
         NewTaskSchedule {
             kind: kind.to_owned(),
-            input: Map::new(),
+            input: Value::Object(serde_json::Map::new()),
             interval: interval(interval_micros),
             next_run_at: ts(next_run_at),
             created_at: ts(0),
