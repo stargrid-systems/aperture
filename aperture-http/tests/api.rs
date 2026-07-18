@@ -87,6 +87,37 @@ async fn post_json(app: &Router, uri: &str, body: Value) -> (StatusCode, Value) 
     read_json(response).await
 }
 
+async fn patch_json(app: &Router, uri: &str, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    read_json(response).await
+}
+
+async fn delete(app: &Router, uri: &str) -> StatusCode {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    response.status()
+}
+
 async fn read_json(response: Response) -> (StatusCode, Value) {
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -327,4 +358,100 @@ async fn filters_artifacts_and_versions() {
     assert_eq!(hit["items"].as_array().unwrap().len(), 2);
     let (_, miss) = get_json(&app, "/api/v1/artifacts/spectra/versions?version=9.9.9").await;
     assert!(miss["items"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn task_schedule_lifecycle() {
+    let (app, _artifacts, _storage) = seeded_app().await;
+
+    // Empty listing.
+    let (status, json) = get_json(&app, "/api/v1/task-schedules").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json["items"].as_array().unwrap().is_empty());
+
+    // Create.
+    let (status, created) = post_json(
+        &app,
+        "/api/v1/task-schedules",
+        json!({
+            "kind": "download",
+            "input": {"key": "spectra"},
+            "interval": "PT5M",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["kind"], "download");
+    assert_eq!(created["interval"], "PT5M");
+    assert_eq!(created["input"]["key"], "spectra");
+    assert_eq!(created["enabled"], true);
+    let id = created["id"].as_str().unwrap();
+
+    // Listing reflects the new row.
+    let (_, json) = get_json(&app, "/api/v1/task-schedules").await;
+    assert_eq!(json["items"].as_array().unwrap().len(), 1);
+    assert_eq!(json["items"][0]["id"], id);
+
+    // Get.
+    let (status, fetched) = get_json(&app, &format!("/api/v1/task-schedules/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched["kind"], "download");
+
+    // Patch only the interval; enabled stays true.
+    let (status, updated) = patch_json(
+        &app,
+        &format!("/api/v1/task-schedules/{id}"),
+        json!({"interval": "PT1H"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["interval"], "PT1H");
+    assert_eq!(updated["enabled"], true);
+
+    // Patch only enabled; interval stays as set above.
+    let (status, updated) = patch_json(
+        &app,
+        &format!("/api/v1/task-schedules/{id}"),
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["interval"], "PT1H");
+    assert_eq!(updated["enabled"], false);
+
+    // Empty patch returns the row unchanged.
+    let (status, updated) =
+        patch_json(&app, &format!("/api/v1/task-schedules/{id}"), json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["interval"], "PT1H");
+    assert_eq!(updated["enabled"], false);
+
+    // Delete.
+    assert_eq!(
+        delete(&app, &format!("/api/v1/task-schedules/{id}")).await,
+        StatusCode::NO_CONTENT
+    );
+    // Second delete is a 404.
+    assert_eq!(
+        delete(&app, &format!("/api/v1/task-schedules/{id}")).await,
+        StatusCode::NOT_FOUND
+    );
+    let (status, _) = get_json(&app, &format!("/api/v1/task-schedules/{id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn task_schedule_unknown_returns_404() {
+    let (app, _artifacts, _storage) = seeded_app().await;
+
+    let (status, _) = get_json(&app, "/api/v1/task-schedules/999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = patch_json(
+        &app,
+        "/api/v1/task-schedules/999",
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

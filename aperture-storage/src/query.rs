@@ -1,16 +1,11 @@
 //! SQL fragment builders that keep conditions and bind params in lockstep.
-//!
-//! [`Filters`] builds a `WHERE` body, pairing each fragment with its bind
-//! param at push time so placeholder numbers can never drift out of sync with
-//! the param vector. [`EscapeLike`] is a small formatting helper for `LIKE`
-//! clauses. Both take column names from the calling query (never user input)
-//! since those names are interpolated verbatim into the generated SQL.
 
 use std::fmt::{self, Write};
 
 use turso::Value;
 
 use crate::page::{Keyset, Paginator};
+use crate::sql::ToSql;
 
 /// Builds the `WHERE` body of a listing, keeping conditions and their bind
 /// params in lockstep so placeholder numbers can never drift. Column names come
@@ -217,5 +212,86 @@ impl fmt::Display for EscapeLike<'_> {
             f.write_char(ch)?;
         }
         Ok(())
+    }
+}
+
+pub(crate) struct Assignments {
+    sql: String,
+    params: Vec<Value>,
+}
+
+impl Assignments {
+    pub(crate) fn new() -> Self {
+        Self {
+            sql: String::new(),
+            params: Vec::new(),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.params.is_empty()
+    }
+
+    pub(crate) fn set(&mut self, column: &str, value: &impl ToSql) {
+        self.params.push(value.to_sql());
+        if !self.sql.is_empty() {
+            self.sql.push_str(", ");
+        }
+        let _ = write!(self.sql, "{column} = ?{}", self.params.len());
+    }
+
+    pub(crate) fn set_opt(&mut self, column: &str, value: Option<&impl ToSql>) {
+        if let Some(value) = value {
+            self.set(column, value);
+        }
+    }
+
+    pub(crate) fn set_clause(&self) -> &str {
+        &self.sql
+    }
+
+    pub(crate) fn into_params(self) -> Vec<Value> {
+        self.params
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Int(i64);
+    impl ToSql for Int {
+        fn to_sql(&self) -> Value {
+            Value::Integer(self.0)
+        }
+    }
+
+    #[test]
+    fn assignments_empty_when_nothing_pushed() {
+        let assignments = Assignments::new();
+        assert!(assignments.is_empty());
+        assert_eq!(assignments.set_clause(), "");
+    }
+
+    #[test]
+    fn assignments_pairs_clause_with_params() {
+        let mut assignments = Assignments::new();
+        assignments.set("interval_us", &Int(60_000_000));
+        assignments.set("enabled", &Int(1));
+        assert!(!assignments.is_empty());
+        assert_eq!(assignments.set_clause(), "interval_us = ?1, enabled = ?2");
+        assert_eq!(
+            assignments.into_params(),
+            vec![Value::Integer(60_000_000), Value::Integer(1)]
+        );
+    }
+
+    #[test]
+    fn assignments_skips_none() {
+        let mut assignments = Assignments::new();
+        assignments.set_opt("interval_us", None::<&Int>);
+        assignments.set("enabled", &Int(0));
+        assert_eq!(assignments.set_clause(), "enabled = ?1");
+        assert_eq!(assignments.into_params(), vec![Value::Integer(0)]);
     }
 }

@@ -18,6 +18,7 @@ impl ApiError {
     pub(crate) const NOT_FOUND: Self = Self(StatusCode::NOT_FOUND);
     /// The request conflicts with the resource's current state.
     pub(crate) const CONFLICT: Self = Self(StatusCode::CONFLICT);
+    pub(crate) const INTERNAL: Self = Self(StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 impl From<ArtifactError> for ApiError {

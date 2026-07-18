@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use miette::IntoDiagnostic;
 use tokio::runtime;
 
 /// Stargrid hardware application gateway.
@@ -34,7 +33,7 @@ struct RunArgs {
     data_dir: PathBuf,
 }
 
-fn main() -> miette::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Version => {
@@ -46,17 +45,14 @@ fn main() -> miette::Result<()> {
     }
 }
 
-async fn emit_openapi() -> miette::Result<()> {
+async fn emit_openapi() -> anyhow::Result<()> {
     let doc = aperture::openapi().await?;
-    let json = serde_json::to_string_pretty(&doc).into_diagnostic()?;
+    let json = serde_json::to_string_pretty(&doc)?;
     println!("{json}");
     Ok(())
 }
 
-fn block_on<F: Future<Output = miette::Result<()>>>(future: F) -> miette::Result<()> {
-    let runtime = runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .into_diagnostic()?;
+fn block_on<F: Future<Output = anyhow::Result<()>>>(future: F) -> anyhow::Result<()> {
+    let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(future)
 }
