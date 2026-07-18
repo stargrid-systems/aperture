@@ -13,7 +13,8 @@ use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::interval::Interval;
 use crate::macros::sql;
-use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::query::Filters;
 use crate::sql::{Columns, ToSql};
 
 mod col {

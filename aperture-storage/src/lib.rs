@@ -34,6 +34,7 @@ mod log;
 mod macros;
 mod migration;
 mod page;
+mod query;
 mod sql;
 mod task;
 mod task_schedule;

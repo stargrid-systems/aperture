@@ -8,7 +8,8 @@ use uuid::Uuid;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
-use crate::page::{CursorValue, EscapeLike, Filters, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::query::{EscapeLike, Filters};
 use crate::sql::{Columns, ToSql, get};
 
 mod col {
