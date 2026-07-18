@@ -7,13 +7,22 @@ use crate::{DbId, Level, Result, StorageError, TaskStatus};
 
 impl ToSql for Uuid {
     fn to_sql(&self) -> Value {
-        Value::Blob(self.as_bytes().to_vec())
+        // Unfortunately we can't yet send the UUID directly as 16 bytes.
+        // See: <https://github.com/tursodatabase/turso/issues/6221>.
+        Value::Text(self.to_string())
     }
 }
 
 impl FromSql for Uuid {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
+            Value::Text(raw) => {
+                Uuid::parse_str(&raw).map_err(|_| StorageError::ColumnTypeMismatch {
+                    column: idx,
+                    expected: "uuid",
+                    actual: Value::Text(raw),
+                })
+            }
             Value::Blob(bytes) => {
                 Uuid::from_slice(&bytes).map_err(|_| StorageError::ColumnTypeMismatch {
                     column: idx,
@@ -23,7 +32,7 @@ impl FromSql for Uuid {
             }
             actual => Err(StorageError::ColumnTypeMismatch {
                 column: idx,
-                expected: "uuid blob",
+                expected: "uuid",
                 actual,
             }),
         }

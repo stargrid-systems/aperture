@@ -357,20 +357,6 @@ impl Filters {
         }
     }
 
-    /// Adds `column = ?` bound to the blob `value`.
-    pub(crate) fn eq_blob(&mut self, column: &str, value: Vec<u8>) {
-        self.params.push(Value::Blob(value));
-        self.separator();
-        let _ = write!(self.sql, "{column} = ?{}", self.params.len());
-    }
-
-    /// Like [`eq_blob`](Self::eq_blob), but skips the condition when `None`.
-    pub(crate) fn eq_blob_opt(&mut self, column: &str, value: Option<Vec<u8>>) {
-        if let Some(value) = value {
-            self.eq_blob(column, value);
-        }
-    }
-
     /// Adds `column >= ?` bound to the integer `value`.
     pub(crate) fn gte_int(&mut self, column: &str, value: i64) {
         self.params.push(Value::Integer(value));

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use aperture_storage::{Artifact, ArtifactKey, DbId, ListQuery, Page, Storage, VersionSort};
 use aperture_tasks::ProgressHandle;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use oci_client::Reference;
 use tokio::fs;
 use tokio::sync::Mutex as AsyncMutex;
@@ -26,7 +26,7 @@ use crate::progress::ProgressWriter;
 
 /// How long a resolved reference stays cached before it is re-checked against
 /// the registry.
-const RESOLUTION_TTL_US: i64 = 5 * 60 * 1_000_000;
+const RESOLUTION_TTL: SignedDuration = SignedDuration::from_mins(5);
 
 /// What a [`Artifacts::sync`] run removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +107,7 @@ struct Inner {
     blobs: BlobStore,
     oci: OciFetcher,
     /// Recent reference resolutions, so repeated downloads skip the manifest
-    /// lookup for up to [`RESOLUTION_TTL_US`].
+    /// lookup for up to [`RESOLUTION_TTL`].
     resolutions: Mutex<HashMap<String, CachedResolution>>,
     /// One lock per content digest, so concurrent downloads of the same content
     /// collapse onto a single transfer instead of each pulling it.
@@ -483,7 +483,7 @@ impl Inner {
 
 /// Whether a resolution made at `resolved_at` is still fresh at `now`.
 fn is_fresh(resolved_at: Timestamp, now: Timestamp) -> bool {
-    now.as_microsecond() - resolved_at.as_microsecond() < RESOLUTION_TTL_US
+    now.duration_since(resolved_at) < RESOLUTION_TTL
 }
 
 /// Builds a version record. Content is digest-addressed, so `at` stamps both
@@ -530,9 +530,10 @@ mod tests {
     #[test]
     fn resolution_is_fresh_within_the_ttl() {
         let base = at(1_000_000);
+        let ttl_micros: i64 = RESOLUTION_TTL.as_micros().try_into().unwrap();
         assert!(is_fresh(base, base));
-        assert!(is_fresh(base, at(1_000_000 + RESOLUTION_TTL_US - 1)));
-        assert!(!is_fresh(base, at(1_000_000 + RESOLUTION_TTL_US)));
+        assert!(is_fresh(base, at(1_000_000 + ttl_micros - 1)));
+        assert!(!is_fresh(base, at(1_000_000 + ttl_micros)));
     }
 
     #[test]

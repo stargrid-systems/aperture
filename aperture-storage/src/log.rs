@@ -294,7 +294,7 @@ impl LogRepository {
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
         filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(DbId::get));
-        filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
+        filters.eq_text_opt(col::BOOT_ID, filter.boot_id.as_ref().map(Uuid::to_string).as_deref());
         filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_microsecond()));
         filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_microsecond()));
 
@@ -388,7 +388,7 @@ impl LogRepository {
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
-        filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
+        filters.eq_text_opt(col::BOOT_ID, filter.boot_id.as_ref().map(Uuid::to_string).as_deref());
         filters.gte_int_opt(col::STARTED_AT, filter.since.map(|ts| ts.as_microsecond()));
         filters.lte_int_opt(col::STARTED_AT, filter.until.map(|ts| ts.as_microsecond()));
         for (key, value) in &filter.fields {
