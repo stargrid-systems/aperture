@@ -18,6 +18,6 @@ pub enum TlsError {
     #[error("no server certificate found in artifacts")]
     NoCertificate,
 
-    #[error("PEM parse error: {0}")]
-    PemParse(String),
+    #[error("certificate parse error: {0}")]
+    CertParse(String),
 }

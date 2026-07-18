@@ -25,9 +25,8 @@ futures-util = { workspace = true }
 httpdate = { workspace = true }
 jiff = { workspace = true, features = ["std", "serde"] }
 mime_guess = { workspace = true }
-rcgen = { workspace = true, features = ["pem", "ring", "x509-parser"] }
+rcgen = { workspace = true, features = ["ring", "x509-parser"] }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
-rustls-pemfile = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }

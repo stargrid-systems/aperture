@@ -2,8 +2,8 @@
 //!
 //! On first run, a self-signed CA (ECDSA P-256, 5-year validity) and a server
 //! certificate (14-day validity) are generated via rcgen. Both are stored as
-//! artifacts. The server certificate is regenerated periodically by the
-//! rotation task.
+//! artifacts in DER format. The server certificate is regenerated periodically
+//! by the rotation task.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use rcgen::{
     KeyUsagePurpose, SanType,
 };
 use rustls::ServerConfig;
-use rustls::pki_types::CertificateDer;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 
@@ -28,12 +28,12 @@ pub const CA_VALIDITY_DAYS: u64 = 365 * 5;
 /// Leaf certificate validity in days (short-lived, ACME-style).
 pub const LEAF_VALIDITY_DAYS: u64 = 14;
 
-/// Generated PKI material, PEM-encoded.
+/// Generated PKI material in DER format.
 pub struct Pki {
-    pub ca_cert_pem: String,
-    pub ca_key_pem: String,
-    pub server_cert_pem: String,
-    pub server_key_pem: String,
+    pub ca_cert: CertificateDer<'static>,
+    pub ca_key: PrivatePkcs8KeyDer<'static>,
+    pub server_cert: CertificateDer<'static>,
+    pub server_key: PrivatePkcs8KeyDer<'static>,
 }
 
 /// Generates a new CA and server certificate signed by that CA.
@@ -47,18 +47,18 @@ pub fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
     set_validity(&mut ca_params, CA_VALIDITY_DAYS);
 
     let ca_key = KeyPair::generate()?;
-    let ca_key_pem = ca_key.serialize_pem();
+    let ca_key_der = PrivatePkcs8KeyDer::from(ca_key.serialize_der());
     let ca_cert = ca_params.self_signed(&ca_key)?;
-    let ca_cert_pem = ca_cert.pem();
+    let ca_cert_der = ca_cert.der().clone();
     let issuer = Issuer::new(ca_params, ca_key);
 
     let sans = compute_sans(bind_addr);
-    let (server_cert_pem, server_key_pem) = generate_leaf(&issuer, &sans)?;
+    let (server_cert, server_key) = generate_leaf(&issuer, &sans)?;
     Ok(Pki {
-        ca_cert_pem,
-        ca_key_pem,
-        server_cert_pem,
-        server_key_pem,
+        ca_cert: ca_cert_der,
+        ca_key: ca_key_der,
+        server_cert,
+        server_key,
     })
 }
 
@@ -66,12 +66,12 @@ pub fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
 pub async fn regenerate_leaf(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
-) -> Result<(String, String), TlsError> {
-    let ca_cert_pem = read_artifact(artifacts, &CA_CERT).await?;
-    let ca_key_pem = read_artifact(artifacts, &CA_KEY).await?;
+) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>), TlsError> {
+    let ca_cert_der = read_artifact(artifacts, &CA_CERT).await?;
+    let ca_key_der = read_artifact(artifacts, &CA_KEY).await?;
 
-    let ca_key = KeyPair::from_pem(&ca_key_pem)?;
-    let issuer = Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key)?;
+    let ca_key = KeyPair::try_from(ca_key_der.as_slice())?;
+    let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(ca_cert_der), ca_key)?;
 
     let sans = compute_sans(bind_addr);
     generate_leaf(&issuer, &sans)
@@ -80,7 +80,7 @@ pub async fn regenerate_leaf(
 fn generate_leaf(
     issuer: &Issuer<'_, KeyPair>,
     sans: &[SanType],
-) -> Result<(String, String), TlsError> {
+) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>), TlsError> {
     let mut params = CertificateParams::default();
     params.subject_alt_names = sans.to_vec();
     params
@@ -92,7 +92,10 @@ fn generate_leaf(
 
     let key = KeyPair::generate()?;
     let cert = params.signed_by(&key, issuer)?;
-    Ok((cert.pem(), key.serialize_pem()))
+    Ok((
+        cert.der().clone(),
+        PrivatePkcs8KeyDer::from(key.serialize_der()),
+    ))
 }
 
 fn set_validity(params: &mut CertificateParams, days: u64) {
@@ -135,18 +138,18 @@ pub async fn ensure_certificates(
     }
     tracing::info!("generating initial PKI");
     let pki = generate_pki(bind_addr)?;
-    store_artifact(artifacts, &CA_CERT, &pki.ca_cert_pem).await?;
-    store_artifact(artifacts, &CA_KEY, &pki.ca_key_pem).await?;
-    store_artifact(artifacts, &SERVER_CERT, &pki.server_cert_pem).await?;
-    store_artifact(artifacts, &SERVER_KEY, &pki.server_key_pem).await?;
+    store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
+    store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
+    store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
+    store_key_artifact(artifacts, &SERVER_KEY, &pki.server_key).await?;
     Ok(())
 }
 
 /// Loads the server certificate from artifacts and builds a `ServerConfig`.
 pub async fn load_server_config(artifacts: &Artifacts) -> Result<ServerConfig, TlsError> {
-    let cert_pem = read_artifact(artifacts, &SERVER_CERT).await?;
-    let key_pem = read_artifact(artifacts, &SERVER_KEY).await?;
-    build_server_config(&cert_pem, &key_pem)
+    let cert_der = read_artifact(artifacts, &SERVER_CERT).await?;
+    let key_der = read_artifact(artifacts, &SERVER_KEY).await?;
+    build_server_config(&cert_der, &key_der)
 }
 
 /// Reloads certificates from artifacts and swaps the shared config.
@@ -165,10 +168,9 @@ pub async fn reload_certificates(
 /// uploaded certs and against the artifact `downloaded_at` field being reset
 /// by unrelated re-fetches.
 pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
-    let pem = read_artifact(artifacts, &SERVER_CERT).await?;
-    let der = first_cert_der(&pem)?;
+    let der = read_artifact(artifacts, &SERVER_CERT).await?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der)
-        .map_err(|e| TlsError::PemParse(format!("x509 parse failed: {e}")))?;
+        .map_err(|e| TlsError::CertParse(format!("x509 parse failed: {e}")))?;
     // `time_to_expiration` returns None when the cert is not currently valid
     // (expired or not-yet-effective). Either way, rotation is wanted.
     let remaining_seconds = cert
@@ -182,14 +184,6 @@ pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
     Ok(remaining_seconds < half_life_seconds)
 }
 
-/// Extracts the first certificate's DER bytes from a PEM bundle.
-fn first_cert_der(pem: &str) -> Result<CertificateDer<'static>, TlsError> {
-    rustls_pemfile::certs(&mut pem.as_bytes())
-        .next()
-        .ok_or(TlsError::PemParse("no certificate in PEM".into()))?
-        .map_err(|e| TlsError::PemParse(format!("pem decode failed: {e}")))
-}
-
 /// Generates a new leaf certificate and stores it as artifacts. Returns
 /// whether rotation actually occurred (the cert was past half-life and has
 /// been replaced).
@@ -197,9 +191,9 @@ pub async fn rotate_certificate(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
 ) -> Result<(), TlsError> {
-    let (cert_pem, key_pem) = regenerate_leaf(artifacts, bind_addr).await?;
-    store_artifact(artifacts, &SERVER_CERT, &cert_pem).await?;
-    store_artifact(artifacts, &SERVER_KEY, &key_pem).await?;
+    let (cert, key) = regenerate_leaf(artifacts, bind_addr).await?;
+    store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
+    store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
     Ok(())
 }
 
@@ -216,18 +210,16 @@ pub async fn rotate_if_due(artifacts: &Artifacts, bind_addr: SocketAddr) -> Resu
     Ok(true)
 }
 
-/// Builds a `rustls::ServerConfig` from PEM-encoded cert and key.
+/// Builds a `rustls::ServerConfig` from DER-encoded cert and key.
 ///
 /// The config explicitly enables TLS 1.3 (preferred) and TLS 1.2 (for legacy
 /// client compatibility). TLS 1.1 and earlier are not negotiated.
-pub fn build_server_config(cert_pem: &str, key_pem: &str) -> Result<ServerConfig, TlsError> {
+fn build_server_config(cert_der: &[u8], key_der: &[u8]) -> Result<ServerConfig, TlsError> {
     use rustls::version::{TLS12, TLS13};
 
-    let cert_chain: Vec<CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
-
-    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())?
-        .ok_or_else(|| TlsError::PemParse("no private key found in PEM".into()))?;
+    let cert_chain = vec![CertificateDer::from(cert_der.to_vec())];
+    let key = PrivateKeyDer::try_from(key_der.to_vec())
+        .map_err(|e| TlsError::CertParse(format!("key parse failed: {e}")))?;
 
     Ok(
         ServerConfig::builder_with_protocol_versions(&[&TLS13, &TLS12])
@@ -236,13 +228,24 @@ pub fn build_server_config(cert_pem: &str, key_pem: &str) -> Result<ServerConfig
     )
 }
 
-async fn store_artifact(
+async fn store_cert_artifact(
     artifacts: &Artifacts,
     key: &aperture_artifacts::ArtifactKey,
-    pem: &str,
+    der: &CertificateDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
-        .put(key, Some("application/x-pem-file"), pem.as_bytes())
+        .put(key, Some("application/pkix-cert"), der.as_ref())
+        .await?;
+    Ok(())
+}
+
+async fn store_key_artifact(
+    artifacts: &Artifacts,
+    key: &aperture_artifacts::ArtifactKey,
+    der: &PrivatePkcs8KeyDer<'_>,
+) -> Result<(), TlsError> {
+    artifacts
+        .put(key, Some("application/pkcs8"), der.secret_pkcs8_der())
         .await?;
     Ok(())
 }
@@ -250,7 +253,7 @@ async fn store_artifact(
 async fn read_artifact(
     artifacts: &Artifacts,
     key: &aperture_artifacts::ArtifactKey,
-) -> Result<String, TlsError> {
+) -> Result<Vec<u8>, TlsError> {
     let located = artifacts
         .locate(key)
         .await?
@@ -258,7 +261,7 @@ async fn read_artifact(
     let mut file = fs::File::open(&located.path).await?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).await?;
-    String::from_utf8(buf).map_err(|e| TlsError::PemParse(e.to_string()))
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -314,10 +317,10 @@ mod tests {
         ensure_certificates(&artifacts, addr).await.unwrap();
 
         // Generate a cert that is already expired and overwrite the artifact.
-        let ca_pem = read_artifact(&artifacts, &CA_CERT).await.unwrap();
-        let ca_key_pem = read_artifact(&artifacts, &CA_KEY).await.unwrap();
-        let ca_key = KeyPair::from_pem(&ca_key_pem).unwrap();
-        let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key).unwrap();
+        let ca_cert_der = read_artifact(&artifacts, &CA_CERT).await.unwrap();
+        let ca_key_der = read_artifact(&artifacts, &CA_KEY).await.unwrap();
+        let ca_key = KeyPair::try_from(ca_key_der.as_slice()).unwrap();
+        let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(ca_cert_der), ca_key).unwrap();
 
         let mut params = CertificateParams::default();
         params
@@ -330,7 +333,7 @@ mod tests {
         params.not_after = now - time::Duration::days(1);
         let key = KeyPair::generate().unwrap();
         let expired = params.signed_by(&key, &issuer).unwrap();
-        store_artifact(&artifacts, &SERVER_CERT, &expired.pem())
+        store_cert_artifact(&artifacts, &SERVER_CERT, expired.der())
             .await
             .unwrap();
 
