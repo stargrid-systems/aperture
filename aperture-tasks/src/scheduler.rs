@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use aperture_storage::{NewTaskSchedule, TaskScheduleRepository};
 use jiff::Timestamp;
-use serde_json::Value;
 use tokio::time::{MissedTickBehavior, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -98,7 +97,7 @@ impl Scheduler {
         let due = repo.list_due(now, TICK_BATCH).await?;
         let mut spawned = 0;
         for schedule in due {
-            let input = Value::Object(schedule.input);
+            let input = schedule.input;
             match self.inner.tasks.create(&schedule.kind, input).await {
                 Ok(invocation) => {
                     spawned += 1;
@@ -183,10 +182,19 @@ mod tests {
     /// kind string.
     struct Ping;
 
+    /// Empty object input. The scheduler creates invocations with an empty
+    /// JSON object, so this matches.
+    #[derive(serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+    struct PingIn {}
+
+    /// Empty object output. Task outputs must be JSON objects.
+    #[derive(serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+    struct PingOut {}
+
     impl crate::TaskDefinition for Ping {
         const KIND: &'static str = "ping";
-        type Input = Value;
-        type Output = ();
+        type Input = PingIn;
+        type Output = PingOut;
 
         fn capabilities(&self) -> crate::Capabilities {
             crate::Capabilities {
@@ -200,7 +208,7 @@ mod tests {
             _input: Self::Input,
             _ctx: crate::TaskContext,
         ) -> Result<Self::Output, crate::RunError> {
-            Ok(())
+            Ok(PingOut {})
         }
     }
 

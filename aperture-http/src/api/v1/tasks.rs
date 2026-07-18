@@ -76,7 +76,11 @@ async fn create_task(
     State(state): State<AppState>,
     Json(request): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
-    let task = state.tasks().create(&request.kind, request.input).await?;
+    let input = match request.input {
+        serde_json::Value::Object(map) => map,
+        _ => return Err(ApiError::BAD_REQUEST),
+    };
+    let task = state.tasks().create(&request.kind, input).await?;
     Ok((StatusCode::ACCEPTED, Json(TaskResponse::new(task, None))))
 }
 

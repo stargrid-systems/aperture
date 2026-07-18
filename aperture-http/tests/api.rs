@@ -218,14 +218,22 @@ async fn reads_recorded_tasks() {
     let (app, artifacts) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let id = repo
-        .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .create(
+            "download",
+            None,
+            &serde_json::Map::from_iter([("key".to_string(), json!("spectra"))]),
+            at(1_000),
+        )
         .await
         .unwrap();
     repo.finish(
         id,
         TaskStatus::Succeeded,
         at(2_000),
-        Some(r#"{"digest":"sha256:bbb"}"#),
+        Some(&serde_json::Map::from_iter([(
+            "digest".to_string(),
+            json!("sha256:bbb"),
+        )])),
         None,
     )
     .await
@@ -248,20 +256,33 @@ async fn filters_tasks_by_json_field() {
     let (app, artifacts) = seeded_app().await;
     let repo = artifacts.storage().tasks().unwrap();
     let spectra = repo
-        .create("download", None, r#"{"key":"spectra"}"#, at(1_000))
+        .create(
+            "download",
+            None,
+            &serde_json::Map::from_iter([("key".to_string(), json!("spectra"))]),
+            at(1_000),
+        )
         .await
         .unwrap();
     repo.finish(
         spectra,
         TaskStatus::Succeeded,
         at(1_050),
-        Some(r#"{"version":"1.0"}"#),
+        Some(&serde_json::Map::from_iter([(
+            "version".to_string(),
+            json!("1.0"),
+        )])),
         None,
     )
     .await
     .unwrap();
     let other = repo
-        .create("download", None, r#"{"key":"other"}"#, at(1_100))
+        .create(
+            "download",
+            None,
+            &serde_json::Map::from_iter([("key".to_string(), json!("other"))]),
+            at(1_100),
+        )
         .await
         .unwrap();
     repo.finish(other, TaskStatus::Failed, at(1_150), None, Some("boom"))

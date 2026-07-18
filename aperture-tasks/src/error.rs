@@ -35,12 +35,14 @@ pub enum TaskError {
     /// The task output could not be decoded into the kind's output type.
     #[error("failed to decode task output")]
     DecodeOutput(#[source] serde_json::Error),
-    /// The task input could not be encoded to JSON.
+    /// The task input could not be encoded to JSON, or serialized to a
+    /// non-object JSON value (only objects are accepted).
     #[error("failed to encode task input")]
-    EncodeInput(#[source] serde_json::Error),
-    /// The task output could not be encoded to JSON.
+    EncodeInput(#[source] anyhow::Error),
+    /// The task output could not be encoded to JSON, or serialized to a
+    /// non-object JSON value (only objects are accepted).
     #[error("failed to encode task output")]
-    EncodeOutput(#[source] serde_json::Error),
+    EncodeOutput(#[source] anyhow::Error),
     /// A storage operation failed.
     #[error(transparent)]
     Storage(#[from] StorageError),

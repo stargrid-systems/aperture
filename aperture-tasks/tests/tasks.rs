@@ -170,7 +170,12 @@ async fn spawn_and_wait_returns_decoded_output() {
 
     let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Succeeded);
-    assert_eq!(recorded.output.as_deref(), Some(r#"{"result":42}"#));
+    assert_eq!(
+        recorded.output,
+        Some(serde_json::Map::from_iter([
+            ("result".to_string(), serde_json::json!(42)),
+        ]))
+    );
 }
 
 #[tokio::test]
@@ -339,7 +344,7 @@ async fn reconcile_marks_orphaned_invocations() {
     let id = storage
         .tasks()
         .unwrap()
-        .create("double", None, "{}", at(1_000))
+        .create("double", None, &serde_json::Map::new(), at(1_000))
         .await
         .unwrap();
     storage

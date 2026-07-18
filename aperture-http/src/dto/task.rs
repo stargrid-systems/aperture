@@ -121,8 +121,8 @@ impl TaskResponse {
             kind: task.kind,
             parent_id: task.parent_id,
             status: task.status.into(),
-            input: parse_json(&task.input),
-            output: task.output.as_deref().map(parse_json),
+            input: Value::Object(task.input),
+            output: task.output.map(Value::Object),
             error: task.error,
             created_at: task.created_at,
             started_at: task.started_at,
@@ -281,10 +281,6 @@ impl TaskListParams {
 
 /// A task list request carried a malformed JSON filter.
 pub struct InvalidFilter;
-
-fn parse_json(raw: &str) -> Value {
-    serde_json::from_str(raw).unwrap_or(Value::Null)
-}
 
 /// Maps a storage page of tasks into the response envelope, attaching live
 /// progress to running tasks from `live` (keyed by task id).
