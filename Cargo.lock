@@ -161,6 +161,7 @@ dependencies = [
  "backhand",
  "bytes",
  "futures-util",
+ "httpdate",
  "jiff",
  "mime_guess",
  "rcgen",

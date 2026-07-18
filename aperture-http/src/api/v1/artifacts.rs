@@ -4,10 +4,9 @@ use aperture_artifacts::{ArtifactError, ArtifactKey};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::Response;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use futures_util::TryStreamExt as _;
-use jiff::fmt::strtime;
 use tokio::fs::File;
 use tokio_util::io::{ReaderStream, StreamReader};
 use utoipa_axum::router::OpenApiRouter;
@@ -15,6 +14,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::conditional::{etag_from_digest, format_http_date, matches_etag};
 use crate::dto::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, Page, VersionListParams,
     artifact_page, version_page,
@@ -218,12 +218,30 @@ async fn upload_artifact(
 async fn download_artifact_blob(
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, String)>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let artifacts = state.spectra().artifacts();
     let artifact = artifacts
         .version(&key, &digest)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
+
+    let etag = etag_from_digest(&artifact.digest);
+
+    if matches_etag(&headers, &etag) {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag),
+                (
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ),
+            ],
+        )
+            .into_response());
+    }
+
     let located = artifacts
         .locate_version(&key, &digest)
         .await?
@@ -234,20 +252,14 @@ async fn download_artifact_blob(
     let content_type = artifact
         .media_type
         .unwrap_or_else(|| "application/octet-stream".to_owned());
-    // Do we really have to manually format this? Also, why is it fallible.
-    let last_modified = strtime::format("%a, %d %b %Y %H:%M:%S GMT", artifact.downloaded_at).ok();
-    let mut builder = Response::builder()
+    let last_modified = format_http_date(artifact.downloaded_at);
+
+    Response::builder()
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_LENGTH, artifact.size_bytes)
-        .header(
-            header::ETAG,
-            format!("\"{digest}\"", digest = artifact.digest),
-        )
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
-    if let Some(lm) = last_modified {
-        builder = builder.header(header::LAST_MODIFIED, lm);
-    }
-    builder
+        .header(header::ETAG, etag)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(header::LAST_MODIFIED, last_modified)
         .body(Body::from_stream(ReaderStream::new(file)))
         .map_err(ApiError::from)
 }

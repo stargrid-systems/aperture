@@ -8,8 +8,7 @@ use std::task::{Context, Poll};
 use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::header::{
-    ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
-    RETRY_AFTER, VARY,
+    ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, RETRY_AFTER, VARY,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -22,6 +21,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use super::image::SpectraImage;
 use crate::AppState;
+use crate::conditional::matches_etag;
 
 const PLACEHOLDER: &str = include_str!("installing.html");
 
@@ -161,13 +161,6 @@ fn placeholder() -> Response {
     response
 }
 
-fn matches_etag(headers: &HeaderMap, etag: &HeaderValue) -> bool {
-    match headers.get(IF_NONE_MATCH) {
-        Some(value) => value == etag || value == "*",
-        None => false,
-    }
-}
-
 fn accepted_encodings(headers: &HeaderMap) -> (bool, bool) {
     let value = headers
         .get(ACCEPT_ENCODING)
@@ -201,6 +194,7 @@ mod tests {
 
     use axum::body::to_bytes;
     use axum::http::HeaderName;
+    use axum::http::header::IF_NONE_MATCH;
 
     use super::*;
 

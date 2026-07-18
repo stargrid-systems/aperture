@@ -22,6 +22,7 @@ use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
 
 mod api;
+mod conditional;
 mod dto;
 mod error;
 mod server;
