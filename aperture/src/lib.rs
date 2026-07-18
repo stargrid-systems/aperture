@@ -8,7 +8,6 @@ use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
-use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
@@ -23,44 +22,38 @@ mod runtime;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Runs the gateway HTTP server until the process is terminated.
-pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
-    let boot_id = Uuid::new_v4();
-
-    // Install the tracing subscriber before anything else so startup is
-    // captured. The DB side of the layer buffers to a channel; the worker is
-    // attached once storage is open below.
+pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> anyhow::Result<()> {
     let deferred_log_worker = logging::init();
 
+    let boot_id = Uuid::new_v4();
     let (artifacts, storage) = open_artifacts(&data_dir).await?;
-    artifacts.sync().await.into_diagnostic()?;
-    let log_worker = deferred_log_worker.connect(storage.logs().into_diagnostic()?, boot_id);
+
+    let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
+
+    // TODO: this should be handled through the task engine somehow.
+    artifacts.sync().await?;
 
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
-    let tasks = Tasks::new(storage.tasks().into_diagnostic()?, registry);
-    tasks.reconcile().await.into_diagnostic()?;
+    let tasks = Tasks::new(storage.tasks()?, registry);
 
-    let scheduler = Scheduler::new(storage.task_schedules().into_diagnostic()?, tasks.clone());
+    let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
     );
-    spectra
-        .activate_if_present()
-        .await
-        .map_err(|error| miette::miette!("{error:#}"))?;
+    spectra.activate_if_present().await?;
 
     let state = AppState::new(VERSION, boot_id, storage, spectra, tasks.clone());
     let app = aperture_http::app(state);
 
-    let listener = TcpListener::bind(addr).await.into_diagnostic()?;
+    // TODO: ideally this should be owned by the http worker, but we need to make it
+    // fallible.
+    let listener = TcpListener::bind(addr).await?;
     tracing::info!(%addr, "aperture listening");
 
-    // Drain order is registration order: HTTP stops accepting first, then the
-    // scheduler stops spawning and in-flight tasks drain, then the log worker
-    // flushes last so shutdown logs land in the database.
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", HttpWorker::new(listener, app));
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
@@ -95,8 +88,8 @@ async fn shutdown_signal() {
 }
 
 /// Returns the OpenAPI specification, with the task kinds projected in.
-pub async fn openapi() -> miette::Result<OpenApiSpec> {
-    let storage = Storage::open(":memory:").await.into_diagnostic()?;
+pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
+    let storage = Storage::open(":memory:").await?;
     let artifacts = Artifacts::new(storage, PathBuf::from("."));
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::new(artifacts));
@@ -111,13 +104,13 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
 /// Opens the storage database and blob store under `data_dir`. Returns the
 /// artifact manager and the storage handle so callers can build their own
 /// repositories alongside it.
-async fn open_artifacts(data_dir: &Path) -> miette::Result<(Arc<Artifacts>, Storage)> {
-    fs::create_dir_all(data_dir).await.into_diagnostic()?;
+async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Arc<Artifacts>, Storage)> {
+    fs::create_dir_all(data_dir).await?;
     let db_path = data_dir.join("aperture.db");
-    let db_path = db_path
-        .to_str()
-        .ok_or_else(|| miette::miette!("data dir is not valid UTF-8: {}", data_dir.display()))?;
-    let storage = Storage::open(db_path).await.into_diagnostic()?;
+    let db_path = db_path.to_str().ok_or_else(|| {
+        anyhow::format_err!("data dir is not valid UTF-8: {}", data_dir.display())
+    })?;
+    let storage = Storage::open(db_path).await?;
     let artifacts = Arc::new(Artifacts::new(storage.clone(), data_dir.join("store")));
     Ok((artifacts, storage))
 }

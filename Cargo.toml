@@ -30,7 +30,6 @@ clap = { version = "4", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 jiff = { version = "0.2", default-features = false }
 mime_guess = { version = "2", default-features = false }
-miette = { version = "7", default-features = false }
 oci-client = { version = "0.17", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }

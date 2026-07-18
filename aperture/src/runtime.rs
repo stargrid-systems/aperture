@@ -127,6 +127,9 @@ impl TasksWorker {
 
 impl Worker for TasksWorker {
     async fn run(self, stop: Stop) {
+        if let Err(err) = self.tasks.reconcile().await {
+            tracing::error!(error = %err, "tasks reconciliation failed");
+        }
         self.scheduler.run(SCHEDULER_TICK, stop).await;
         self.tasks.shutdown().await;
     }

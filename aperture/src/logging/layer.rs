@@ -30,7 +30,7 @@ mod collector;
 const CHANNEL_CAPACITY: usize = 4096;
 
 /// How long the background writer waits for more records before flushing.
-const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
+const FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Maximum records to batch before flushing.
 const FLUSH_BATCH: usize = 128;
@@ -85,8 +85,6 @@ struct EventMsg {
 /// A tracing layer that persists spans and events to the database.
 ///
 /// Cheap to clone: all clones share one channel sender and drop counter.
-/// Construct with [`DbLogLayer::new`], which also returns a
-/// [`DeferredLogWorker`] to swap in once a [`LogRepository`] is available.
 #[derive(Clone)]
 pub struct DbLogLayer {
     tx: mpsc::Sender<Record>,
@@ -94,8 +92,7 @@ pub struct DbLogLayer {
 }
 
 /// The receiving end of a [`DbLogLayer`]'s channel, held until a
-/// [`LogRepository`] is available. Call [`connect`](Self::connect) to turn it
-/// into a runnable [`LogWorker`].
+/// [`LogRepository`] is available.
 pub struct DeferredLogWorker {
     rx: mpsc::Receiver<Record>,
     dropped: Arc<AtomicU64>,
@@ -165,10 +162,11 @@ impl Worker for LogWorker {
 }
 
 impl DbLogLayer {
-    /// Creates the layer and the matching deferred worker. The layer can be
-    /// installed in the tracing subscriber immediately; records buffer in the
-    /// channel until [`DeferredLogWorker::connect`] produces a runnable
-    /// [`LogWorker`].
+    /// Creates the layer and the matching deferred worker.
+    ///
+    /// The layer can be installed in the tracing subscriber immediately;
+    /// records buffer in the channel until [`DeferredLogWorker::connect`]
+    /// produces a runnable [`LogWorker`].
     pub fn new() -> (Self, DeferredLogWorker) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));

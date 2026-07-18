@@ -15,6 +15,7 @@ workspace = true
 aperture-artifacts = { workspace = true }
 aperture-storage = { workspace = true }
 aperture-tasks = { workspace = true }
+
 anyhow = { workspace = true, features = ["std"] }
 axum = { workspace = true, features = ["json", "query"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
@@ -27,8 +28,6 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tokio-stream = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 tracing = { workspace = true }
-# The `uuid` feature is enabled to work around a utoipa 5.5.0 bug where the
-# `jiff_0_2` schema detection only compiles when another such feature is on.
 utoipa = { workspace = true, features = ["macros", "axum_extras", "jiff_0_2", "uuid"] }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["std", "serde"] }
