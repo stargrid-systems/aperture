@@ -1,9 +1,10 @@
-//! Periodic task scheduler.
+//! Periodic task scheduler driver.
 //!
 //! A scheduler owns a long-running driver that periodically queries the
 //! task schedule catalog for due rows and spawns each via [`Tasks::create`].
-//! Schedules themselves are managed through the [`TaskScheduleRepository`];
-//! the scheduler is read-only with respect to which schedules exist.
+//! The catalog itself (creating, listing, patching, deleting schedules) is
+//! managed through the [`TaskScheduleRepository`] in [`aperture-storage`];
+//! the scheduler is a pure runtime driver over that catalog.
 //!
 //! Errors during a single schedule spawn (unknown kind, storage error) are
 //! logged and the schedule is advanced to its next interval; one bad schedule
@@ -16,7 +17,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aperture_storage::{NewTaskSchedule, TaskScheduleRepository};
+use aperture_storage::TaskScheduleRepository;
 use jiff::Timestamp;
 use tokio::time::{MissedTickBehavior, interval_at, Instant};
 use tokio_util::sync::CancellationToken;
@@ -45,47 +46,6 @@ impl Scheduler {
         Self {
             inner: Arc::new(Inner { schedules, tasks }),
         }
-    }
-
-    /// Creates a new task schedule row.
-    pub async fn create(
-        &self,
-        new: NewTaskSchedule,
-    ) -> Result<aperture_storage::TaskSchedule, SchedulerError> {
-        let repo = &self.inner.schedules;
-        let id = repo.create(&new).await?;
-        let schedule = repo.get(id).await?.expect("just created");
-        Ok(schedule)
-    }
-
-    /// Returns the task schedule with `id`, if it exists.
-    pub async fn get(
-        &self,
-        id: aperture_storage::DbId,
-    ) -> Result<Option<aperture_storage::TaskSchedule>, SchedulerError> {
-        Ok(self.inner.schedules.get(id).await?)
-    }
-
-    /// Lists task schedules, oldest-first by id.
-    pub async fn list(
-        &self,
-        query: &aperture_storage::ListQuery,
-    ) -> Result<aperture_storage::Page<aperture_storage::TaskSchedule>, SchedulerError> {
-        Ok(self.inner.schedules.list(query).await?)
-    }
-
-    /// Updates a task schedule's interval and/or enabled flag.
-    pub async fn update(
-        &self,
-        id: aperture_storage::DbId,
-        patch: aperture_storage::TaskSchedulePatch,
-    ) -> Result<Option<aperture_storage::TaskSchedule>, SchedulerError> {
-        Ok(self.inner.schedules.update(id, &patch).await?)
-    }
-
-    /// Deletes the task schedule with `id`. Returns whether a row was removed.
-    pub async fn delete(&self, id: aperture_storage::DbId) -> Result<bool, SchedulerError> {
-        Ok(self.inner.schedules.delete(id).await?)
     }
 
     /// Runs one scheduler tick: queries due schedules and spawns each. Returns
@@ -172,7 +132,9 @@ pub enum SchedulerError {
 
 #[cfg(test)]
 mod tests {
-    use aperture_storage::{Interval, ListQuery, NewTaskSchedule, TaskSchedulePatch};
+    use aperture_storage::{
+        Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch,
+    };
     use serde_json::{Value, json};
 
     use super::*;
@@ -211,60 +173,75 @@ mod tests {
         Interval::from_micros(micros).unwrap()
     }
 
-    async fn setup() -> Scheduler {
-        let storage = aperture_storage::Storage::open(":memory:").await.unwrap();
+    /// Bundles the scheduler with the storage it drives so tests can seed the
+    /// schedule catalog directly through the repository.
+    struct Harness {
+        scheduler: Scheduler,
+        storage: Storage,
+    }
+
+    async fn setup() -> Harness {
+        let storage = Storage::open(":memory:").await.unwrap();
         let mut registry = crate::TaskRegistry::new();
         registry.register(Ping);
         let tasks = Tasks::new(storage.tasks().unwrap(), registry);
         let schedules = storage.task_schedules().unwrap();
-        Scheduler::new(schedules, tasks)
+        Harness {
+            scheduler: Scheduler::new(schedules, tasks),
+            storage,
+        }
+    }
+
+    async fn create_schedule(
+        storage: &Storage,
+        kind: &str,
+        interval_micros: i64,
+        next_run_at: i64,
+    ) -> aperture_storage::DbId {
+        let repo = storage.task_schedules().unwrap();
+        repo.create(&NewTaskSchedule {
+            kind: kind.to_owned(),
+            input: json!({}),
+            interval: interval(interval_micros),
+            next_run_at: ts(next_run_at),
+            created_at: ts(Timestamp::now().as_microsecond()),
+        })
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
     async fn tick_spawns_due_schedules_and_advances_them() {
-        let scheduler = setup().await;
+        let Harness { scheduler, storage } = setup().await;
         let now = Timestamp::now().as_microsecond();
-        let schedule = scheduler
-            .create(NewTaskSchedule {
-                kind: "ping".to_owned(),
-                input: json!({}),
-                interval: interval(60_000_000),
-                next_run_at: ts(now - 1_000_000),
-                created_at: ts(now),
-            })
-            .await
-            .unwrap();
+        create_schedule(&storage, "ping", 60_000_000, now - 1_000_000).await;
 
         let spawned = scheduler.tick().await.unwrap();
         assert_eq!(spawned, 1);
 
-        let schedules = scheduler.list(&ListQuery::default()).await.unwrap();
+        let schedules = storage
+            .task_schedules()
+            .unwrap()
+            .list(&ListQuery::default())
+            .await
+            .unwrap();
         assert_eq!(schedules.items.len(), 1);
         let advanced = &schedules.items[0];
         assert!(advanced.last_run_at.is_some());
         assert!(advanced.last_task_id.is_some());
-        let _ = &schedule;
     }
 
     #[tokio::test]
     async fn tick_skips_disabled_schedules() {
-        let scheduler = setup().await;
+        let Harness { scheduler, storage } = setup().await;
         let now = Timestamp::now().as_microsecond();
-        let schedule = scheduler
-            .create(NewTaskSchedule {
-                kind: "ping".to_owned(),
-                input: json!({}),
-                interval: interval(60_000_000),
-                next_run_at: ts(now - 1_000_000),
-                created_at: ts(now),
-            })
-            .await
-            .unwrap();
-        let id = schedule.id;
-        scheduler
+        let id = create_schedule(&storage, "ping", 60_000_000, now - 1_000_000).await;
+        storage
+            .task_schedules()
+            .unwrap()
             .update(
                 id,
-                TaskSchedulePatch {
+                &TaskSchedulePatch {
                     enabled: Some(false),
                     ..Default::default()
                 },
@@ -277,23 +254,13 @@ mod tests {
 
     #[tokio::test]
     async fn tick_advances_past_unknown_kind_so_it_doesnt_loop() {
-        let scheduler = setup().await;
+        let Harness { scheduler, storage } = setup().await;
         let now = Timestamp::now().as_microsecond();
-        let schedule = scheduler
-            .create(NewTaskSchedule {
-                kind: "does-not-exist".to_owned(),
-                input: json!({}),
-                interval: interval(60_000_000),
-                next_run_at: ts(now - 1_000_000),
-                created_at: ts(now),
-            })
-            .await
-            .unwrap();
-        let id = schedule.id;
+        let id = create_schedule(&storage, "does-not-exist", 60_000_000, now - 1_000_000).await;
 
         // First tick sees the due schedule, fails to spawn, but advances it.
         assert_eq!(scheduler.tick().await.unwrap(), 0);
-        let advanced = scheduler.get(id).await.unwrap().unwrap();
+        let advanced = storage.task_schedules().unwrap().get(id).await.unwrap().unwrap();
         assert!(advanced.last_run_at.is_some());
         // A failed spawn leaves last_task_id NULL.
         assert!(advanced.last_task_id.is_none());

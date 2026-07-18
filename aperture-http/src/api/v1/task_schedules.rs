@@ -37,7 +37,8 @@ async fn list_task_schedules(
     State(state): State<AppState>,
     Query(params): Query<TaskScheduleListParams>,
 ) -> Result<Json<Page<TaskScheduleResponse>>, ApiError> {
-    let page = state.scheduler().list(&params.to_query()).await?;
+    let repo = state.storage().task_schedules()?;
+    let page = repo.list(&params.to_query()).await?;
     Ok(Json(task_schedule_page(page)))
 }
 
@@ -58,9 +59,9 @@ async fn create_task_schedule(
     Json(request): Json<CreateTaskScheduleRequest>,
 ) -> Result<(StatusCode, Json<TaskScheduleResponse>), ApiError> {
     let now = Timestamp::now();
-    let schedule = state
-        .scheduler()
-        .create(NewTaskSchedule {
+    let repo = state.storage().task_schedules()?;
+    let id = repo
+        .create(&NewTaskSchedule {
             kind: request.kind,
             input: request.input,
             interval: request.interval,
@@ -68,6 +69,7 @@ async fn create_task_schedule(
             created_at: now,
         })
         .await?;
+    let schedule = repo.get(id).await?.ok_or(ApiError::INTERNAL)?;
     Ok((StatusCode::CREATED, Json(schedule.into())))
 }
 
@@ -87,7 +89,8 @@ async fn get_task_schedule(
     Path(id): Path<DbId>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
     let schedule = state
-        .scheduler()
+        .storage()
+        .task_schedules()?
         .get(id)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
@@ -112,8 +115,9 @@ async fn update_task_schedule(
     Json(request): Json<UpdateTaskScheduleRequest>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
     let schedule = state
-        .scheduler()
-        .update(id, request.into())
+        .storage()
+        .task_schedules()?
+        .update(id, &request.into())
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
     Ok(Json(schedule.into()))
@@ -134,7 +138,7 @@ async fn delete_task_schedule(
     State(state): State<AppState>,
     Path(id): Path<DbId>,
 ) -> Result<StatusCode, ApiError> {
-    let removed = state.scheduler().delete(id).await?;
+    let removed = state.storage().task_schedules()?.delete(id).await?;
     if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {

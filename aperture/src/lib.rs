@@ -58,14 +58,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         .await
         .map_err(|error| miette::miette!("{error:#}"))?;
 
-    let state = AppState::new(
-        VERSION,
-        boot_id,
-        storage,
-        spectra,
-        tasks.clone(),
-        scheduler.clone(),
-    );
+    let state = AppState::new(VERSION, boot_id, storage, spectra, tasks.clone());
     let app = aperture_http::app(state);
 
     let listener = TcpListener::bind(addr).await.into_diagnostic()?;
