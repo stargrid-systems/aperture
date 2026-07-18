@@ -1,15 +1,13 @@
 //! Aperture gateway: composes the HTTP layer with the artifact manager.
 
-use std::error::Error;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
 use aperture_storage::Storage;
-use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
+use aperture_tasks::{TaskRegistry, Tasks};
 use miette::IntoDiagnostic;
 use tokio::fs;
 use tokio::net::TcpListener;
@@ -21,9 +19,6 @@ mod logging;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// How often the scheduler wakes to check for due schedules.
-const SCHEDULER_TICK: Duration = Duration::from_secs(60);
 
 /// Runs the gateway HTTP server until the process is terminated.
 pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
@@ -40,8 +35,6 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     register_kinds(&mut registry, Arc::clone(&artifacts));
     let tasks = Tasks::new(storage.tasks().into_diagnostic()?, registry);
     tasks.reconcile().await.into_diagnostic()?;
-
-    let scheduler = Scheduler::new(storage.task_schedules().into_diagnostic()?, tasks.clone());
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
@@ -62,23 +55,8 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
     tracing::info!(%addr, "aperture listening");
 
     // One token drives every shutdown path. The OS-signal handler cancels it,
-    // which stops the scheduler driver and triggers axum's graceful drain.
+    // which triggers axum's graceful drain.
     let shutdown = CancellationToken::new();
-
-    // Periodic task scheduler: spawns due schedules on each tick. Cancelled on
-    // shutdown so the driver returns during the drain. A boot tick runs first so
-    // schedules that came due while the gateway was down fire right away instead
-    // of waiting up to `SCHEDULER_TICK`.
-    let scheduler_task = {
-        let shutdown = shutdown.clone();
-        let scheduler = scheduler.clone();
-        tokio::spawn(async move {
-            if let Err(err) = scheduler.tick().await {
-                tracing::error!(error = &err as &dyn Error, "scheduler boot tick failed",);
-            }
-            scheduler.run(SCHEDULER_TICK, shutdown).await;
-        })
-    };
 
     let shutdown_signal_token = shutdown.clone();
     let result = axum::serve(listener, app)
@@ -88,9 +66,6 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> miette::Result<()> {
         })
         .await
         .into_diagnostic();
-
-    // Stop accepting new periodic work before draining the task manager.
-    let _ = scheduler_task.await;
 
     // The server has stopped accepting requests.
     tracing::info!("aperture shutdown starting");

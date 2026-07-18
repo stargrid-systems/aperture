@@ -20,15 +20,10 @@ pub use self::task::{
     CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
     task_page,
 };
-pub use self::task_schedule::{
-    CreateTaskScheduleRequest, TaskScheduleListParams, TaskScheduleResponse,
-    UpdateTaskScheduleRequest, task_schedule_page,
-};
 
 mod artifact;
 mod log;
 mod task;
-mod task_schedule;
 
 /// Deserializes either a single comma-separated string or a sequence of
 /// strings into a `Vec<String>`. Accepts `target=A,B` (single param, comma
