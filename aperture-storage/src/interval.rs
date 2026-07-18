@@ -1,9 +1,7 @@
 //! A strictly-positive time interval.
 //!
 //! [`Interval`] wraps a [`jiff::SignedDuration`] that is guaranteed to be
-//! positive and representable as a whole number of microseconds. On the wire
-//! an interval is an ISO 8601 duration such as `PT5M`; jiff also accepts its
-//! friendlier form (`5m`) on input.
+//! positive and representable as a whole number of microseconds.
 
 use std::fmt;
 use std::result::Result as StdResult;
@@ -21,9 +19,16 @@ use crate::sql::{FromSql, ToSql};
 /// Construct with [`Interval::new`] (from a [`SignedDuration`]) or
 /// [`Interval::from_micros`]. Both reject zero and negative durations, and
 /// require the duration to fit in `i64` microseconds.
+///
+/// On the wire an interval is an ISO 8601 duration such as `PT5M`; jiff also
+/// accepts its friendlier form (`5m`) on input. The OpenAPI schema advertises
+/// the `duration` format so consumers know to expect ISO 8601.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String, example = "PT5M"))]
+#[cfg_attr(
+    feature = "schema",
+    schema(value_type = String, format = Duration, example = "PT5M")
+)]
 pub struct Interval(SignedDuration);
 
 /// Errors from constructing an [`Interval`].
