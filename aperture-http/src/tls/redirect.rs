@@ -44,9 +44,10 @@ fn redirect_to_https(https_port: u16, request: Request) -> Response {
     (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, target)]).into_response()
 }
 
-/// Strips the `:port` suffix from a Host header value. Handles bracketed IPv6
-/// hosts (`[::1]:8080` -> `[::1]`); bare-IPv6-without-port is not produced by
-/// HTTP/1.1 senders.
+/// Strips the `:port` suffix from a Host header value.
+///
+/// Handles bracketed IPv6 hosts (`[::1]:8080` -> `[::1]`); bare-IPv6-without-
+/// port is not produced by HTTP/1.1 senders.
 fn strip_port(host: &str) -> &str {
     host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host)
 }

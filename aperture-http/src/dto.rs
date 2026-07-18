@@ -31,9 +31,11 @@ mod task;
 mod task_schedule;
 
 /// Deserializes either a single comma-separated string or a sequence of
-/// strings into a `Vec<String>`. Accepts `target=A,B` (single param, comma
-/// separated) and `target=A&target=B` (repeated param) forms, as well as a
-/// single value `target=A`. Empty values produce an empty `Vec`.
+/// strings into a `Vec<String>`.
+///
+/// Accepts `target=A,B` (single param, comma separated) and
+/// `target=A&target=B` (repeated param) forms, as well as a single value
+/// `target=A`. Empty values produce an empty `Vec`.
 pub(crate) fn deserialize_single_or_vec_string<'de, D>(
     deserializer: D,
 ) -> Result<Vec<String>, D::Error>
@@ -57,8 +59,9 @@ where
 }
 
 /// A structured field filter passed as a string-encoded JSON object in a
-/// query parameter, e.g. `{"key":"value"}`. The raw string is parsed into
-/// key-value pairs during deserialization.
+/// query parameter, e.g. `{"key":"value"}`.
+///
+/// The raw string is parsed into key-value pairs during deserialization.
 #[derive(Debug, Clone, Default, ToSchema)]
 #[schema(value_type = String, example = "{\"status\":\"ok\"}")]
 pub struct JsonQueryString(pub BTreeMap<String, String>);

@@ -60,8 +60,9 @@ async fn list_tasks(
     Ok(Json(task_page(page, &live)))
 }
 
-/// Creates a task of the given kind and starts it. The body input is validated
-/// against the kind's input schema.
+/// Creates a task of the given kind and starts it.
+///
+/// The body input is validated against the kind's input schema.
 #[utoipa::path(
     post,
     path = "",

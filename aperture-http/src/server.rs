@@ -1,14 +1,19 @@
 //! Unified HTTP server: owns all listeners and the TLS reload watcher.
 
 use std::future::Future;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
+use aperture_artifacts::Artifacts;
 use axum::Router;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::tls::{TlsListener, TlsReload};
+use crate::tls::{
+    TlsListener, TlsReload, ensure_certificates, load_shared_config, redirect_router,
+};
 
 /// A TLS listener paired with its application router.
 struct TlsEntry {
@@ -22,13 +27,15 @@ struct HttpEntry {
     app: Router,
 }
 
-/// Runs the gateway's HTTP stack: an optional HTTPS listener, an optional
-/// plain-HTTP listener, and an optional TLS certificate reload watcher.
+/// Runs the gateway's HTTP stack.
 ///
-/// Construct with [`HttpServer::new`], then add listeners via the builder
-/// methods. All configured listeners and the reload watcher run concurrently
-/// inside [`HttpServer::run`] and drain together when the `stop` future
-/// resolves.
+/// Owns an optional HTTPS listener, an optional plain-HTTP listener, and an
+/// optional TLS certificate reload watcher. All configured listeners and the
+/// reload watcher run concurrently inside [`HttpServer::run`] and drain
+/// together when the `stop` future resolves.
+///
+/// Construct with [`HttpServer::start`] for the standard gateway setup, or
+/// build piece by piece via [`HttpServer::new`] and the builder methods.
 pub struct HttpServer {
     tls: Option<TlsEntry>,
     reload: Option<TlsReload>,
@@ -45,14 +52,55 @@ impl HttpServer {
         }
     }
 
+    /// Sets up the standard gateway HTTP stack.
+    ///
+    /// Ensures TLS certificates exist, binds the HTTPS listener, attaches the
+    /// certificate reload watcher, and optionally binds a second HTTP listener
+    /// that either redirects to HTTPS or serves the full API in plain HTTP
+    /// (recovery mode).
+    pub async fn start(
+        artifacts: Arc<Artifacts>,
+        https_addr: SocketAddr,
+        http_addr: Option<SocketAddr>,
+        insecure_http: bool,
+        app: Router,
+    ) -> anyhow::Result<Self> {
+        ensure_certificates(&artifacts, https_addr).await?;
+        let shared_config = load_shared_config(&artifacts).await?;
+
+        let tcp_listener = TcpListener::bind(https_addr).await?;
+        let tls_listener = TlsListener::new(tcp_listener, shared_config.clone());
+        let tls_reload = TlsReload::new(Arc::clone(&artifacts), shared_config);
+        tracing::info!(%https_addr, "aperture listening (https)");
+
+        let mut server = HttpServer::new()
+            .serve_tls(tls_listener, app.clone())
+            .with_tls_reload(tls_reload);
+
+        if let Some(http_addr) = http_addr {
+            let http_listener = TcpListener::bind(http_addr).await?;
+            if insecure_http {
+                tracing::warn!(%http_addr, "serving full API over plain HTTP (insecure mode)");
+                server = server.serve_http(http_listener, app);
+            } else {
+                tracing::info!(%http_addr, "http redirect listening");
+                let redirect = redirect_router(https_addr.port());
+                server = server.serve_http(http_listener, redirect);
+            }
+        }
+
+        Ok(server)
+    }
+
     /// Serves `app` over the TLS listener.
     pub fn serve_tls(mut self, listener: TlsListener, app: Router) -> Self {
         self.tls = Some(TlsEntry { listener, app });
         self
     }
 
-    /// Attaches a TLS reload watcher. Only effective when [`serve_tls`] is
-    /// also used.
+    /// Attaches a TLS reload watcher.
+    ///
+    /// Only effective when [`serve_tls`] is also used.
     ///
     /// [`serve_tls`]: HttpServer::serve_tls
     pub fn with_tls_reload(mut self, reload: TlsReload) -> Self {
@@ -140,7 +188,7 @@ impl Default for HttpServer {
     }
 }
 
-/// Drains all remaining join handles with a timeout per handle.
+/// Drains all remaining join handles.
 async fn drain(mut handles: FuturesUnordered<JoinHandle<()>>) {
     while let Some(handle) = handles.next().await {
         if let Err(err) = handle {

@@ -164,8 +164,9 @@ async fn delete_version(
     }
 }
 
-/// Uploads a new artifact version. The request body is stored as a
-/// content-addressed blob.
+/// Uploads a new artifact version.
+///
+/// The request body is stored as a content-addressed blob.
 #[utoipa::path(
     put,
     path = "/{key}",

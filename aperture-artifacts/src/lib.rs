@@ -27,4 +27,3 @@ mod fetch;
 mod hash_writer;
 mod media_type;
 mod progress;
-pub mod well_known;

@@ -46,7 +46,9 @@ struct RunArgs {
     data_dir: PathBuf,
 }
 
-/// Parses an HTTP listener address. An empty string means "no listener".
+/// Parses an HTTP listener address.
+///
+/// An empty string means "no listener".
 fn parse_optional_addr(s: &str) -> anyhow::Result<Option<SocketAddr>> {
     if s.is_empty() {
         return Ok(None);

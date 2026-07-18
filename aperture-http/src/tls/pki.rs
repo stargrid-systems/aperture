@@ -9,7 +9,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
-use aperture_artifacts::well_known::tls::{CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY};
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose, SanType,
@@ -18,9 +17,10 @@ use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::fs;
 use tokio::io::AsyncReadExt;
+use tokio::task::spawn_blocking;
 
-use super::SharedConfig;
 use super::error::TlsError;
+use super::{CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY, SharedConfig};
 
 /// CA certificate validity in days (5 years).
 pub const CA_VALIDITY_DAYS: u64 = 365 * 5;
@@ -30,13 +30,20 @@ pub const LEAF_VALIDITY_DAYS: u64 = 14;
 
 /// Generated PKI material in DER format.
 pub struct Pki {
+    /// Self-signed CA certificate.
     pub ca_cert: CertificateDer<'static>,
+    /// CA private key.
     pub ca_key: PrivatePkcs8KeyDer<'static>,
+    /// Leaf server certificate signed by [`Pki::ca_cert`].
     pub server_cert: CertificateDer<'static>,
+    /// Leaf server private key.
     pub server_key: PrivatePkcs8KeyDer<'static>,
 }
 
-/// Generates a new CA and server certificate signed by that CA.
+/// Generates a new CA and leaf certificate signed by that CA.
+///
+/// Performs ECDSA key generation and certificate signing, so it should run
+/// in a blocking context.
 pub fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
     let mut ca_params = CertificateParams::default();
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -63,6 +70,9 @@ pub fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
 }
 
 /// Generates a new leaf certificate signed by the CA stored in artifacts.
+///
+/// Reads the CA material asynchronously, then performs key generation and
+/// certificate signing in a blocking task.
 pub async fn regenerate_leaf(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
@@ -70,11 +80,13 @@ pub async fn regenerate_leaf(
     let ca_cert_der = read_artifact(artifacts, &CA_CERT).await?;
     let ca_key_der = read_artifact(artifacts, &CA_KEY).await?;
 
-    let ca_key = KeyPair::try_from(ca_key_der.as_slice())?;
-    let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(ca_cert_der), ca_key)?;
-
-    let sans = compute_sans(bind_addr);
-    generate_leaf(&issuer, &sans)
+    spawn_blocking(move || {
+        let ca_key = KeyPair::try_from(ca_key_der.as_slice())?;
+        let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(ca_cert_der), ca_key)?;
+        let sans = compute_sans(bind_addr);
+        generate_leaf(&issuer, &sans)
+    })
+    .await?
 }
 
 fn generate_leaf(
@@ -137,7 +149,7 @@ pub async fn ensure_certificates(
         return Ok(());
     }
     tracing::info!("generating initial PKI");
-    let pki = generate_pki(bind_addr)?;
+    let pki = spawn_blocking(move || generate_pki(bind_addr)).await??;
     store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
     store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
     store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
@@ -149,7 +161,7 @@ pub async fn ensure_certificates(
 pub async fn load_server_config(artifacts: &Artifacts) -> Result<ServerConfig, TlsError> {
     let cert_der = read_artifact(artifacts, &SERVER_CERT).await?;
     let key_der = read_artifact(artifacts, &SERVER_KEY).await?;
-    build_server_config(&cert_der, &key_der)
+    spawn_blocking(move || build_server_config(&cert_der, &key_der)).await?
 }
 
 /// Reloads certificates from artifacts and swaps the shared config.
@@ -163,10 +175,11 @@ pub async fn reload_certificates(
     Ok(())
 }
 
-/// Returns true when the server certificate's remaining validity has dropped
-/// below half of the leaf's intended lifetime. This is robust against custom
-/// uploaded certs and against the artifact `downloaded_at` field being reset
-/// by unrelated re-fetches.
+/// Returns true when the server certificate is past half-life.
+///
+/// This checks the remaining validity of the actual certificate rather than
+/// the artifact's `downloaded_at` field, making it robust against unrelated
+/// re-fetches and custom uploaded certs.
 pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
     let der = read_artifact(artifacts, &SERVER_CERT).await?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der)
@@ -184,9 +197,7 @@ pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
     Ok(remaining_seconds < half_life_seconds)
 }
 
-/// Generates a new leaf certificate and stores it as artifacts. Returns
-/// whether rotation actually occurred (the cert was past half-life and has
-/// been replaced).
+/// Generates a new leaf certificate and stores it as artifacts.
 pub async fn rotate_certificate(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
@@ -197,23 +208,22 @@ pub async fn rotate_certificate(
     Ok(())
 }
 
-/// regenerate_leaf + store, but reports whether the cert was actually due.
-/// Used by the rotation task to surface "no-op" runs in its output.
+/// Regenerates the leaf when it is due, reporting whether rotation occurred.
+///
+/// Live reload of the TLS listener is triggered separately by the artifact
+/// change feed (see [`crate::tls::TlsReload`]).
 pub async fn rotate_if_due(artifacts: &Artifacts, bind_addr: SocketAddr) -> Result<bool, TlsError> {
     if !needs_rotation(artifacts).await? {
         return Ok(false);
     }
     rotate_certificate(artifacts, bind_addr).await?;
-    // Live reload is triggered by the artifact change feed; nothing to do
-    // here. The change feed's debounce coalesces the cert+key writes into a
-    // single reload.
     Ok(true)
 }
 
 /// Builds a `rustls::ServerConfig` from DER-encoded cert and key.
 ///
-/// The config explicitly enables TLS 1.3 (preferred) and TLS 1.2 (for legacy
-/// client compatibility). TLS 1.1 and earlier are not negotiated.
+/// Enables TLS 1.3 (preferred) and TLS 1.2 (for legacy client compatibility).
+/// TLS 1.1 and earlier are not negotiated.
 fn build_server_config(cert_der: &[u8], key_der: &[u8]) -> Result<ServerConfig, TlsError> {
     use rustls::version::{TLS12, TLS13};
 
@@ -230,7 +240,7 @@ fn build_server_config(cert_der: &[u8], key_der: &[u8]) -> Result<ServerConfig, 
 
 async fn store_cert_artifact(
     artifacts: &Artifacts,
-    key: &aperture_artifacts::ArtifactKey,
+    key: &aperture_storage::ArtifactKey,
     der: &CertificateDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
@@ -241,7 +251,7 @@ async fn store_cert_artifact(
 
 async fn store_key_artifact(
     artifacts: &Artifacts,
-    key: &aperture_artifacts::ArtifactKey,
+    key: &aperture_storage::ArtifactKey,
     der: &PrivatePkcs8KeyDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
@@ -252,7 +262,7 @@ async fn store_key_artifact(
 
 async fn read_artifact(
     artifacts: &Artifacts,
-    key: &aperture_artifacts::ArtifactKey,
+    key: &aperture_storage::ArtifactKey,
 ) -> Result<Vec<u8>, TlsError> {
     let located = artifacts
         .locate(key)
@@ -270,7 +280,6 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, fs, process};
 
-    use aperture_artifacts::well_known::tls::{CA_CERT, CA_KEY, SERVER_CERT};
     use aperture_storage::Storage;
 
     use super::*;

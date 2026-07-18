@@ -8,7 +8,9 @@ use aperture_tasks::{SchedulerError, TaskError};
 use axum::http::{Error as HttpError, StatusCode};
 use axum::response::{IntoResponse, Response};
 
-/// An error turned into an HTTP response. Server faults are logged.
+/// An error turned into an HTTP response.
+///
+/// Server faults are logged.
 pub(crate) struct ApiError(StatusCode);
 
 impl ApiError {

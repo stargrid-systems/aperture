@@ -1,5 +1,7 @@
 use std::io;
 
+use tokio::task::JoinError;
+
 /// Errors from the TLS subsystem.
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
@@ -20,4 +22,7 @@ pub enum TlsError {
 
     #[error("certificate parse error: {0}")]
     CertParse(String),
+
+    #[error("blocking task failed: {0}")]
+    Join(#[from] JoinError),
 }

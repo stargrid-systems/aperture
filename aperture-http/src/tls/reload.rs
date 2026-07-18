@@ -8,14 +8,13 @@ use std::error::Error as StdError;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aperture_artifacts::well_known::tls::{SERVER_CERT, SERVER_KEY};
 use aperture_artifacts::{ArtifactChange, Artifacts, ChangeKind};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
-use super::SharedConfig;
 use super::pki::reload_certificates;
+use super::{SERVER_CERT, SERVER_KEY, SharedConfig};
 
 /// Window over which multiple artifact writes are coalesced into a single
 /// reload attempt.

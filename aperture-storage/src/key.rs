@@ -3,8 +3,7 @@
 //! Keys are short stable strings, for example `spectra` or `tls/server-cert`.
 //! They appear as the `key` column of the artifact catalog and as the path
 //! segment of the artifact HTTP API. Wrapping the string in a newtype keeps
-//! the call sites honest, centralises validation, and gives well-known keys a
-//! single home (see [`aperture_artifacts::well_known`]).
+//! the call sites honest and centralises validation.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -24,49 +23,44 @@ pub const MAX_LEN: usize = 1024;
 
 /// A logical artifact identifier.
 ///
-/// Construct with [`ArtifactKey::new`] (validated). Well-known constants are
-/// provided by `aperture_artifacts::well_known` and are validated once at
-/// first use.
+/// Construct with [`ArtifactKey::new`] (validated) or
+/// [`ArtifactKey::from_str`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArtifactKey(Cow<'static, str>);
 
 impl ArtifactKey {
-    /// Validates `key` and wraps it. Rejects empty, absolute paths, path
-    /// traversal segments (`.` or `..`), NUL bytes, control characters, and
-    /// keys longer than 1024 bytes.
+    /// Wraps `key` after validation.
+    ///
+    /// Rejects empty, absolute paths, path traversal segments (`.` or `..`),
+    /// NUL bytes, control characters, and keys longer than 1024 bytes.
     pub fn new(key: impl Into<Cow<'static, str>>) -> Result<Self, InvalidArtifactKey> {
         let key = key.into();
-        Self::validate(&key)?;
+        if key.is_empty() {
+            return Err(InvalidArtifactKey::Empty);
+        }
+        if key.starts_with('/') {
+            return Err(InvalidArtifactKey::AbsolutePath);
+        }
+        if key.contains('\0') {
+            return Err(InvalidArtifactKey::NulByte);
+        }
+        if key.bytes().any(|b| b < 0x20 || b == 0x7F) {
+            return Err(InvalidArtifactKey::ControlChar);
+        }
+        for segment in key.split('/') {
+            if segment == ".." || segment == "." {
+                return Err(InvalidArtifactKey::Traversal);
+            }
+        }
+        if key.len() > MAX_LEN {
+            return Err(InvalidArtifactKey::TooLong);
+        }
         Ok(Self(key))
     }
 
     /// The key as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    fn validate(s: &str) -> Result<(), InvalidArtifactKey> {
-        if s.is_empty() {
-            return Err(InvalidArtifactKey::Empty);
-        }
-        if s.starts_with('/') {
-            return Err(InvalidArtifactKey::AbsolutePath);
-        }
-        if s.contains('\0') {
-            return Err(InvalidArtifactKey::NulByte);
-        }
-        if s.bytes().any(|b| b < 0x20 || b == 0x7F) {
-            return Err(InvalidArtifactKey::ControlChar);
-        }
-        for segment in s.split('/') {
-            if segment == ".." || segment == "." {
-                return Err(InvalidArtifactKey::Traversal);
-            }
-        }
-        if s.len() > MAX_LEN {
-            return Err(InvalidArtifactKey::TooLong);
-        }
-        Ok(())
     }
 }
 
