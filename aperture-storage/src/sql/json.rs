@@ -38,7 +38,7 @@ impl FromSql for serde_json::Map<String, serde_json::Value> {
             serde_json::Value::Object(map) => Ok(map),
             other => Err(StorageError::InvalidJson {
                 column: idx,
-                error: format!("expected a JSON object, got {}", other),
+                error: format!("expected a JSON object, got {other}"),
             }),
         }
     }
