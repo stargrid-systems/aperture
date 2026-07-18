@@ -6,7 +6,6 @@
 //! and a synthetic warning event is inserted to record how many were lost.
 
 use std::error::Error as StdError;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -23,7 +22,7 @@ use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
 
 use self::collector::FieldCollector;
-use crate::runtime::Worker;
+use crate::runtime::{Stop, Worker};
 
 mod collector;
 
@@ -105,12 +104,11 @@ pub struct LogWorker {
 }
 
 impl Worker for LogWorker {
-    async fn run(mut self, stop: impl Future<Output = ()> + Send + 'static) {
+    async fn run(mut self, mut stop: Stop) {
         let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
         let mut interval = interval(FLUSH_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        let mut stop = Box::pin(stop);
         loop {
             tokio::select! {
                 biased;

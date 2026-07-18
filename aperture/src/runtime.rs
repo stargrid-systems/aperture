@@ -7,6 +7,7 @@
 
 use std::future::Future;
 use std::mem;
+use std::pin::Pin;
 use std::time::Duration;
 
 use aperture_tasks::{Scheduler, Tasks};
@@ -19,11 +20,10 @@ use tracing::error;
 
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
+pub(crate) type Stop = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
 pub(crate) trait Worker: Sized + Send + 'static {
-    fn run(
-        self,
-        stop: impl Future<Output = ()> + Send + 'static,
-    ) -> impl Future<Output = ()> + Send + 'static;
+    fn run(self, stop: Stop) -> impl Future<Output = ()> + Send;
 }
 
 pub(crate) struct Supervisor {
@@ -45,9 +45,9 @@ impl Supervisor {
     {
         let (tx, rx) = oneshot::channel();
         self.triggers.push(tx);
-        let stop = async {
+        let stop: Stop = Box::pin(async move {
             let _ = rx.await;
-        };
+        });
         let handle = tokio::spawn(worker.run(stop));
         self.handles.push((name, handle));
     }
@@ -103,7 +103,7 @@ impl HttpWorker {
 }
 
 impl Worker for HttpWorker {
-    async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
+    async fn run(self, stop: Stop) {
         let _ = axum::serve(self.listener, self.app)
             .with_graceful_shutdown(stop)
             .await;
@@ -127,7 +127,7 @@ impl TasksWorker {
 }
 
 impl Worker for TasksWorker {
-    async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
+    async fn run(self, stop: Stop) {
         self.scheduler.run(self.tick_interval, stop).await;
         self.tasks.shutdown().await;
     }
@@ -150,7 +150,7 @@ mod tests {
     }
 
     impl Worker for Counter {
-        async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
+        async fn run(self, stop: Stop) {
             self.started.fetch_add(1, Ordering::SeqCst);
             stop.await;
             self.stopped.fetch_add(1, Ordering::SeqCst);
@@ -207,7 +207,7 @@ mod tests {
     }
 
     impl Worker for Stamped {
-        async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
+        async fn run(self, stop: Stop) {
             stop.await;
             self.order.lock().await.push(self.i);
         }
