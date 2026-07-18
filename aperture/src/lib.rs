@@ -8,30 +8,26 @@ use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{AppState, OpenApiSpec, Spectra, SpectraConfig};
-use aperture_tasks::{NewSchedule, Scheduler, TaskRegistry, Tasks};
+use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
+use aperture_tasks::{Interval, Scheduler, TaskDefinition, TaskRegistry, Tasks};
 use jiff::Timestamp;
-use miette::IntoDiagnostic;
 use rustls::crypto::ring;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::signal::ctrl_c;
-use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use self::runtime::{HttpWorker, Supervisor, TasksWorker, TlsHttpWorker};
+
 mod logging;
+mod runtime;
 mod tls;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// How often the scheduler wakes to check for due schedules.
-const SCHEDULER_TICK: Duration = Duration::from_secs(60);
-
-/// Default rotation interval: the scheduler fires the rotate-certificate task
-/// once per day. The task itself is a no-op when the cert still has plenty of
-/// remaining validity.
-const CERT_ROTATION_INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
+/// Default rotation interval: 24 hours in microseconds.
+const CERT_ROTATION_INTERVAL: i64 = 24 * 60 * 60 * 1_000_000;
 
 /// Runs the gateway HTTPS server until the process is terminated.
 ///
@@ -43,262 +39,181 @@ pub async fn serve(
     http_addr: Option<SocketAddr>,
     insecure_http: bool,
     data_dir: PathBuf,
-) -> miette::Result<()> {
+) -> anyhow::Result<()> {
     if http_addr == Some(https_addr) {
-        return Err(miette::miette!(
-            "--https-addr and --http-addr must differ (both were {https_addr})"
-        ));
+        anyhow::bail!("--https-addr and --http-addr must differ (both were {https_addr})");
     }
 
     ring::default_provider()
         .install_default()
         .expect("failed to install crypto provider");
 
-    let artifacts = open_artifacts(&data_dir).await?;
-    let boot_id = Uuid::new_v4();
-    let log_repo = artifacts.storage().logs().into_diagnostic()?;
-    let log_worker = logging::init(log_repo, boot_id);
+    let deferred_log_worker = logging::init();
 
-    artifacts.sync().await.into_diagnostic()?;
+    let boot_id = Uuid::new_v4();
+    let (artifacts, storage) = open_artifacts(&data_dir).await?;
+
+    let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
+
+    artifacts.sync().await?;
 
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::clone(&artifacts));
-    let tasks = Tasks::new(artifacts.storage().clone(), registry);
-    tasks.reconcile().await.into_diagnostic()?;
+    let tasks = Tasks::new(storage.tasks()?, registry);
 
-    let scheduler = Scheduler::new(artifacts.storage().clone(), tasks.clone());
+    let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
     let spectra = Spectra::new(
         Arc::clone(&artifacts),
         tasks.clone(),
         SpectraConfig::default(),
     );
-    spectra
-        .activate_if_present()
-        .await
-        .map_err(|error| miette::miette!("{error:#}"))?;
+    spectra.activate_if_present().await?;
 
-    tls::ensure_certificates(&artifacts, https_addr)
-        .await
-        .into_diagnostic()?;
+    tls::ensure_certificates(&artifacts, https_addr).await?;
+    install_default_rotation_schedule(&storage, https_addr).await?;
+    scheduler.tick().await?;
 
-    // Install the default rotation schedule if no rotate-certificate schedule
-    // exists. The task itself is a no-op when the cert is fresh, so an eager
-    // next_run_at is safe: the first boot tick catches any expiry that
-    // happened while the gateway was down.
-    install_default_rotation_schedule(&scheduler, https_addr)
-        .await
-        .into_diagnostic()?;
-
-    // Run one scheduler tick at boot so any due rotation fires before we bind
-    // the listener. This closes the expired-cert-on-boot window without an
-    // ad-hoc startup check.
-    scheduler.tick().await.into_diagnostic()?;
-
-    let initial_config = tls::load_server_config(&artifacts)
-        .await
-        .into_diagnostic()?;
+    let initial_config = tls::load_server_config(&artifacts).await?;
     let shared_config: tls::SharedConfig =
         Arc::new(arc_swap::ArcSwap::from_pointee(initial_config));
 
-    // One token drives every shutdown path. The OS-signal handler task (in
-    // `bg`) cancels it on Ctrl+C or SIGTERM; every long-running task and
-    // every axum listener watches it so they all start their drain together.
-    let shutdown = CancellationToken::new();
-    let mut bg: JoinSet<()> = JoinSet::new();
-
-    // Install the OS-signal watcher. On Ctrl+C or SIGTERM it cancels the
-    // shared token, which simultaneously triggers graceful drain on every
-    // axum listener and signals the loops below to return.
-    {
-        let shutdown = shutdown.clone();
-        bg.spawn(async move {
-            shutdown_signal().await;
-            shutdown.cancel();
-        });
-    }
-
-    // Live certificate reload. We subscribe to artifact changes and reload
-    // whenever the server cert or key is written. A short debounce coalesces
-    // back-to-back uploads of the cert and key halves (which arrive as two
-    // separate writes) into one reload attempt; a failed reload (e.g. a
-    // mismatched cert+key mid-upload) is logged and retried on the next event.
-    bg.spawn(tls_reload_watcher(
-        Arc::clone(&artifacts),
-        shared_config.clone(),
-        shutdown.clone(),
-    ));
-
-    // Periodic task scheduler: drives certificate rotation and any other
-    // registered periodic task. Replaces the old rotation_loop.
-    bg.spawn(scheduler.clone().run(SCHEDULER_TICK, shutdown.clone()));
-
-    let state = AppState::new(VERSION, boot_id, spectra, tasks.clone(), scheduler.clone());
+    let state = AppState::new(VERSION, boot_id, storage.clone(), spectra, tasks.clone());
     let app = aperture_http::app(state);
 
+    let tcp_listener = TcpListener::bind(https_addr).await?;
+    let tls_listener = tls::TlsListener::new(tcp_listener, shared_config.clone());
+    tracing::info!(%https_addr, "aperture listening (https)");
+
+    let mut supervisor = Supervisor::new();
+    supervisor.spawn("https", TlsHttpWorker::new(tls_listener, app.clone()));
+
     if let Some(http_addr) = http_addr {
-        let http_listener = TcpListener::bind(http_addr).await.into_diagnostic()?;
+        let http_listener = TcpListener::bind(http_addr).await?;
         if insecure_http {
             tracing::warn!(%http_addr, "serving full API over plain HTTP (insecure mode)");
-            let http_app = app.clone();
-            let drain = {
-                let token = shutdown.clone();
-                async move { token.cancelled().await }
-            };
-            bg.spawn(async move {
-                if let Err(err) = axum::serve(http_listener, http_app)
-                    .with_graceful_shutdown(drain)
-                    .await
-                {
-                    tracing::error!(error = &err as &dyn StdError, "http server failed");
-                }
-            });
+            supervisor.spawn("http", HttpWorker::new(http_listener, app.clone()));
         } else {
             tracing::info!(%http_addr, "http redirect listening");
             let redirect = tls::redirect_router(https_addr.port());
-            let drain = {
-                let token = shutdown.clone();
-                async move { token.cancelled().await }
-            };
-            bg.spawn(async move {
-                if let Err(err) = axum::serve(http_listener, redirect)
-                    .with_graceful_shutdown(drain)
-                    .await
-                {
-                    tracing::error!(error = &err as &dyn StdError, "http redirect failed");
-                }
-            });
+            supervisor.spawn("http", HttpWorker::new(http_listener, redirect));
         }
     }
 
-    let tcp_listener = TcpListener::bind(https_addr).await.into_diagnostic()?;
-    let tls_listener = tls::TlsListener::new(tcp_listener, shared_config);
-    tracing::info!(%https_addr, "aperture listening (https)");
-    let drain = {
-        let token = shutdown.clone();
-        async move { token.cancelled().await }
-    };
-    let result = axum::serve(tls_listener, app)
-        .with_graceful_shutdown(drain)
-        .await
-        .into_diagnostic();
+    supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
+    supervisor.spawn(
+        "tls-reload",
+        TlsReloadWorker::new(Arc::clone(&artifacts), shared_config),
+    );
+    supervisor.spawn("log", log_worker);
 
-    tracing::info!("aperture shutdown starting");
-    // Drain the background tasks. The signal handler returns as soon as it
-    // has fired the token; the axum listeners finish their graceful drain;
-    // the loops bail out via the cancelled token.
-    while let Some(res) = bg.join_next().await {
-        if let Err(err) = res
-            && !err.is_cancelled()
-        {
-            tracing::error!(error = %err, "background task panicked");
-        }
-    }
+    supervisor.run_until_signal(shutdown_signal()).await;
+
     tasks.shutdown().await;
     tracing::info!("aperture shutdown complete");
 
-    log_worker.shutdown().await;
-
-    result?;
     Ok(())
 }
 
 /// Installs the default rotation schedule if no `rotate-certificate` schedule
-/// exists. Called once at boot.
+/// exists.
 async fn install_default_rotation_schedule(
-    scheduler: &Scheduler,
+    storage: &Storage,
     bind_addr: SocketAddr,
-) -> Result<(), aperture_tasks::SchedulerError> {
-    use aperture_tasks::TaskDefinition;
-    use tls::RotateCertificateDefinition;
-    let existing = scheduler
-        .repository()?
-        .find_by_kind(RotateCertificateDefinition::KIND)
-        .await?;
-    if !existing.is_empty() {
+) -> anyhow::Result<()> {
+    let repo = storage.task_schedules()?;
+    let existing = repo.list(&ListQuery::default()).await?;
+    let already = existing
+        .items
+        .iter()
+        .any(|s| s.kind == tls::RotateCertificateDefinition::KIND);
+    if already {
         return Ok(());
     }
-    let input = serde_json::to_string(&tls::RotateCertificateInput {
-        bind_addr: bind_addr.to_string(),
-    })
-    .expect("bind_addr serializes");
     let now = Timestamp::now();
-    scheduler
-        .create(NewSchedule {
-            kind: RotateCertificateDefinition::KIND.to_owned(),
-            input,
-            interval_ms: CERT_ROTATION_INTERVAL_MS,
-            next_run_at: now,
-            created_at: now,
-        })
-        .await?;
+    repo.create(&NewTaskSchedule {
+        kind: tls::RotateCertificateDefinition::KIND.to_owned(),
+        input: serde_json::json!({ "bind_addr": bind_addr.to_string() }),
+        interval: Interval::from_micros(CERT_ROTATION_INTERVAL)
+            .map_err(|e| anyhow::anyhow!("invalid interval: {e}"))?,
+        next_run_at: now,
+        created_at: now,
+    })
+    .await?;
     Ok(())
 }
 
 /// Window over which multiple artifact writes are coalesced into a single
-/// reload attempt. Long enough that a cert+key pair uploaded as two separate
-/// requests collapses into one reload.
+/// reload attempt.
 const TLS_RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
 
-/// Subscribes to artifact changes and reloads the live TLS config whenever the
-/// server certificate or key is written. Reload failures (e.g. a mismatched
-/// cert+key mid-upload) are logged; the next qualifying event retries.
-async fn tls_reload_watcher(
+struct TlsReloadWorker {
     artifacts: Arc<Artifacts>,
     config: tls::SharedConfig,
-    shutdown: CancellationToken,
-) {
-    use aperture_artifacts::well_known::tls::{SERVER_CERT, SERVER_KEY};
-    use aperture_artifacts::{ArtifactChange, ChangeKind};
-    use tokio::time::Instant;
+}
 
-    fn handle_change(
-        change: Result<ArtifactChange, tokio::sync::broadcast::error::RecvError>,
-        deadline: &mut Option<Instant>,
-    ) -> bool {
-        match change {
-            Ok(ArtifactChange {
-                key,
-                kind: ChangeKind::Written,
-            }) if key == *SERVER_CERT || key == *SERVER_KEY => {
-                let now = Instant::now();
-                *deadline = Some(deadline.map_or(now, |d| d.max(now)) + TLS_RELOAD_DEBOUNCE);
-            }
-            Ok(_) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                tracing::warn!("tls reload watcher lagged the artifact feed");
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-        }
-        true
+impl TlsReloadWorker {
+    fn new(artifacts: Arc<Artifacts>, config: tls::SharedConfig) -> Self {
+        Self { artifacts, config }
     }
+}
 
-    let mut rx = artifacts.subscribe();
-    let mut deadline: Option<Instant> = None;
-    loop {
-        if let Some(when) = deadline {
-            let sleep = tokio::time::sleep_until(when);
-            tokio::pin!(sleep);
-            tokio::select! {
-                biased;
-                () = shutdown.cancelled() => return,
-                recv = rx.recv() => {
-                    if !handle_change(recv, &mut deadline) { return; }
+impl runtime::Worker for TlsReloadWorker {
+    async fn run(self, stop: runtime::Stop) {
+        use aperture_artifacts::well_known::tls::{SERVER_CERT, SERVER_KEY};
+        use aperture_artifacts::{ArtifactChange, ChangeKind};
+        use tokio::sync::broadcast::error::RecvError;
+        use tokio::time::{Instant, sleep_until};
+
+        fn handle_change(
+            change: Result<ArtifactChange, RecvError>,
+            deadline: &mut Option<Instant>,
+        ) -> bool {
+            match change {
+                Ok(ArtifactChange {
+                    key,
+                    kind: ChangeKind::Written,
+                }) if key == *SERVER_CERT || key == *SERVER_KEY => {
+                    let now = Instant::now();
+                    *deadline = Some(deadline.map_or(now, |d| d.max(now)) + TLS_RELOAD_DEBOUNCE);
                 }
-                _ = &mut sleep => {
-                    deadline = None;
-                    tracing::info!("TLS reload requested");
-                    if let Err(err) = tls::reload_certificates(&artifacts, &config).await {
-                        tracing::error!(error = &err as &dyn StdError, "TLS reload failed");
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => {
+                    tracing::warn!("tls reload watcher lagged the artifact feed");
+                }
+                Err(RecvError::Closed) => return false,
+            }
+            true
+        }
+
+        let mut rx = self.artifacts.subscribe();
+        let mut deadline: Option<Instant> = None;
+        let mut stop = stop;
+        loop {
+            if let Some(when) = deadline {
+                let sleep = sleep_until(when);
+                tokio::pin!(sleep);
+                tokio::select! {
+                    biased;
+                    () = stop.as_mut() => return,
+                    recv = rx.recv() => {
+                        if !handle_change(recv, &mut deadline) { return; }
+                    }
+                    _ = &mut sleep => {
+                        deadline = None;
+                        tracing::info!("TLS reload requested");
+                        if let Err(err) = tls::reload_certificates(&self.artifacts, &self.config).await {
+                            tracing::error!(error = &err as &dyn StdError, "TLS reload failed");
+                        }
                     }
                 }
-            }
-        } else {
-            tokio::select! {
-                biased;
-                () = shutdown.cancelled() => return,
-                recv = rx.recv() => {
-                    if !handle_change(recv, &mut deadline) { return; }
+            } else {
+                tokio::select! {
+                    biased;
+                    () = stop.as_mut() => return,
+                    recv = rx.recv() => {
+                        if !handle_change(recv, &mut deadline) { return; }
+                    }
                 }
             }
         }
@@ -330,10 +245,9 @@ async fn shutdown_signal() {
 }
 
 /// Returns the OpenAPI specification, with the task kinds projected in.
-pub async fn openapi() -> miette::Result<OpenApiSpec> {
-    let artifacts = Artifacts::open(":memory:", PathBuf::from("."))
-        .await
-        .into_diagnostic()?;
+pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
+    let storage = Storage::open(":memory:").await?;
+    let artifacts = Artifacts::new(storage, PathBuf::from("."));
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, Arc::new(artifacts));
     Ok(aperture_http::openapi(&registry.descriptors()))
@@ -345,15 +259,16 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
     registry.register(tls::RotateCertificateDefinition::new(artifacts));
 }
 
-/// Opens the storage database and blob store under `data_dir`.
-async fn open_artifacts(data_dir: &Path) -> miette::Result<Arc<Artifacts>> {
-    fs::create_dir_all(data_dir).await.into_diagnostic()?;
+/// Opens the storage database and blob store under `data_dir`. Returns the
+/// artifact manager and the storage handle so callers can build their own
+/// repositories alongside it.
+async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Arc<Artifacts>, Storage)> {
+    fs::create_dir_all(data_dir).await?;
     let db_path = data_dir.join("aperture.db");
     let db_path = db_path
         .to_str()
-        .ok_or_else(|| miette::miette!("data dir is not valid UTF-8: {}", data_dir.display()))?;
-    let artifacts = Artifacts::open(db_path, data_dir.join("store"))
-        .await
-        .into_diagnostic()?;
-    Ok(Arc::new(artifacts))
+        .ok_or_else(|| anyhow::anyhow!("data dir is not valid UTF-8: {}", data_dir.display()))?;
+    let storage = Storage::open(db_path).await?;
+    let artifacts = Arc::new(Artifacts::new(storage.clone(), data_dir.join("store")));
+    Ok((artifacts, storage))
 }

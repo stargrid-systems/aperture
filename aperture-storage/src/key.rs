@@ -6,7 +6,14 @@
 //! the call sites honest, centralises validation, and gives well-known keys a
 //! single home (see [`aperture_artifacts::well_known`]).
 
+use std::borrow::Cow;
 use std::fmt;
+use std::str::FromStr;
+
+use serde::de::Error as DeError;
+use utoipa::openapi::schema::Type;
+use utoipa::openapi::{ObjectBuilder, RefOr, Schema};
+use utoipa::{PartialSchema, ToSchema};
 
 /// Maximum byte length of an artifact key.
 pub const MAX_LEN: usize = 1024;
@@ -14,7 +21,7 @@ pub const MAX_LEN: usize = 1024;
 /// A logical artifact identifier.
 ///
 /// Construct with [`ArtifactKey::new`] (validated). Well-known constants are
-/// provided by [`aperture_artifacts::well_known`] and are validated once at
+/// provided by `aperture_artifacts::well_known` and are validated once at
 /// first use.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArtifactKey(String);
@@ -41,7 +48,7 @@ impl fmt::Display for ArtifactKey {
     }
 }
 
-impl std::str::FromStr for ArtifactKey {
+impl FromStr for ArtifactKey {
     type Err = InvalidArtifactKey;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -80,7 +87,7 @@ impl<'de> serde::Deserialize<'de> for ArtifactKey {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Self::new(s).map_err(serde::de::Error::custom)
+        Self::new(s).map_err(DeError::custom)
     }
 }
 
@@ -131,30 +138,21 @@ fn validate(s: &str) -> Result<(), InvalidArtifactKey> {
     Ok(())
 }
 
-#[cfg(feature = "schema")]
-mod schema {
-    use std::borrow::Cow;
-
-    use utoipa::openapi::schema::Type;
-    use utoipa::openapi::{ObjectBuilder, RefOr, Schema};
-    use utoipa::{PartialSchema, ToSchema};
-
-    impl PartialSchema for super::ArtifactKey {
-        fn schema() -> RefOr<Schema> {
-            ObjectBuilder::new()
-                .schema_type(Type::String)
-                .description(Some(Cow::Borrowed(
-                    "Logical artifact identifier, for example `spectra` or `tls/server-cert`.",
-                )))
-                .build()
-                .into()
-        }
+impl PartialSchema for ArtifactKey {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .schema_type(Type::String)
+            .description(Some(Cow::Borrowed(
+                "Logical artifact identifier, for example `spectra` or `tls/server-cert`.",
+            )))
+            .build()
+            .into()
     }
+}
 
-    impl ToSchema for super::ArtifactKey {
-        fn name() -> Cow<'static, str> {
-            Cow::Borrowed("ArtifactKey")
-        }
+impl ToSchema for ArtifactKey {
+    fn name() -> Cow<'static, str> {
+        Cow::Borrowed("ArtifactKey")
     }
 }
 

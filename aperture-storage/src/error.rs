@@ -2,6 +2,8 @@
 
 use std::result::Result as StdResult;
 
+use crate::key::InvalidArtifactKey;
+
 /// Errors returned by the storage layer.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -50,9 +52,12 @@ pub enum StorageError {
         target: &'static str,
     },
 
-    /// A timestamp stored as milliseconds could not be converted.
-    #[error("invalid timestamp {millis} ms")]
-    InvalidTimestamp { millis: i64 },
+    /// A timestamp stored as microseconds could not be converted.
+    #[error("invalid timestamp {micros} us")]
+    InvalidTimestamp { micros: i64 },
+
+    #[error("invalid interval: {error}")]
+    InvalidInterval { error: String },
 
     /// A JSON column value could not be deserialized.
     #[error("invalid JSON at column {column}: {error}")]
@@ -60,7 +65,7 @@ pub enum StorageError {
 
     /// An artifact key failed validation.
     #[error("invalid artifact key: {0}")]
-    InvalidArtifactKey(#[from] crate::key::InvalidArtifactKey),
+    InvalidArtifactKey(#[from] InvalidArtifactKey),
 }
 
 impl StorageError {

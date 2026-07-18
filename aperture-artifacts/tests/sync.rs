@@ -15,8 +15,8 @@ fn temp_root(tag: &str) -> PathBuf {
 async fn sync_removes_versions_without_blobs() {
     let root = temp_root("orphan-version");
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage, root.clone());
-    let repo = artifacts.storage().artifacts().unwrap();
+    let artifacts = Artifacts::new(storage.clone(), root.clone());
+    let repo = storage.artifacts().unwrap();
 
     // A catalog version whose blob never made it to disk.
     repo.record_version(&Artifact {
@@ -27,7 +27,7 @@ async fn sync_removes_versions_without_blobs() {
         media_type: None,
         version: None,
         size_bytes: 10,
-        downloaded_at: Timestamp::from_millisecond(1_700_000_000_000).unwrap(),
+        downloaded_at: Timestamp::from_microsecond(1_700_000_000_000).unwrap(),
         verified_at: None,
     })
     .await

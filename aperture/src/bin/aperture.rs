@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use miette::IntoDiagnostic;
 use tokio::runtime;
 
 /// Stargrid hardware application gateway.
@@ -43,16 +42,16 @@ struct RunArgs {
 }
 
 /// Parses an HTTP listener address. An empty string means "no listener".
-fn parse_optional_addr(s: &str) -> miette::Result<Option<SocketAddr>> {
+fn parse_optional_addr(s: &str) -> anyhow::Result<Option<SocketAddr>> {
     if s.is_empty() {
         return Ok(None);
     }
     s.parse::<SocketAddr>()
         .map(Some)
-        .map_err(|e| miette::miette!("invalid socket address {s:?}: {e}"))
+        .map_err(|e| anyhow::anyhow!("invalid socket address {s:?}: {e}"))
 }
 
-fn main() -> miette::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Version => {
@@ -72,17 +71,14 @@ fn main() -> miette::Result<()> {
     }
 }
 
-async fn emit_openapi() -> miette::Result<()> {
+async fn emit_openapi() -> anyhow::Result<()> {
     let doc = aperture::openapi().await?;
-    let json = serde_json::to_string_pretty(&doc).into_diagnostic()?;
+    let json = serde_json::to_string_pretty(&doc)?;
     println!("{json}");
     Ok(())
 }
 
-fn block_on<F: Future<Output = miette::Result<()>>>(future: F) -> miette::Result<()> {
-    let runtime = runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .into_diagnostic()?;
+fn block_on<F: Future<Output = anyhow::Result<()>>>(future: F) -> anyhow::Result<()> {
+    let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(future)
 }

@@ -1,12 +1,21 @@
 //! Migration 0001: artifact catalog, task invocations, and structured logs.
-//!
-//! `boot_id` is stored as `BLOB` rather than the turso `uuid` custom type
-//! because the latter is broken in STRICT tables as of turso 0.6. See
-//! <https://github.com/tursodatabase/turso/issues/6221>. The way it's used now should hopefully be compatible with a future fix.
 
 use crate::macros::sql;
 
-pub(super) const SQL: &str = sql!(
+const CUSTOM_TYPES: &str = "\
+CREATE TYPE timestamp_us BASE INTEGER
+    ENCODE value
+    DECODE value
+    OPERATOR '<'
+    OPERATOR '=';
+CREATE TYPE duration_us BASE INTEGER
+    ENCODE CASE WHEN value > 0 THEN value ELSE RAISE(ABORT, 'duration must be positive') END
+    DECODE value
+    OPERATOR '<'
+    OPERATOR '=';
+";
+
+const TABLES: &str = sql!(
     CREATE TABLE artifacts (
         id INTEGER PRIMARY KEY,
         key TEXT NOT NULL,
@@ -14,9 +23,9 @@ pub(super) const SQL: &str = sql!(
         digest TEXT NOT NULL,
         media_type TEXT,
         version TEXT,
-        size_bytes INTEGER NOT NULL,
-        downloaded_at INTEGER NOT NULL,
-        verified_at INTEGER,
+        size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+        downloaded_at timestamp_us NOT NULL,
+        verified_at timestamp_us,
         UNIQUE (key, digest)
     ) STRICT;
     CREATE INDEX idx_artifacts_key ON artifacts (key);
@@ -26,46 +35,43 @@ pub(super) const SQL: &str = sql!(
         kind TEXT NOT NULL,
         parent_id INTEGER REFERENCES tasks (id),
         status TEXT NOT NULL,
-        input TEXT NOT NULL,
-        output TEXT,
+        input jsonb NOT NULL,
+        output jsonb,
         error TEXT,
-        created_at INTEGER NOT NULL,
-        started_at INTEGER,
-        finished_at INTEGER
+        created_at timestamp_us NOT NULL,
+        started_at timestamp_us,
+        finished_at timestamp_us
     ) STRICT;
     CREATE INDEX idx_tasks_kind ON tasks (kind);
     CREATE INDEX idx_tasks_status ON tasks (status);
     CREATE INDEX idx_tasks_parent ON tasks (parent_id);
 
-    // Periodic task schedules. Each row describes a task kind and JSON input
-    // that the scheduler re-runs at interval_ms cadence, advancing
-    // next_run_at after each spawn.
-    CREATE TABLE schedules (
+    CREATE TABLE task_schedules (
         id INTEGER PRIMARY KEY,
         kind TEXT NOT NULL,
-        input TEXT NOT NULL,
-        interval_ms INTEGER NOT NULL,
-        next_run_at INTEGER NOT NULL,
-        last_run_at INTEGER,
+        input jsonb NOT NULL,
+        interval_us duration_us NOT NULL,
+        next_run_at timestamp_us NOT NULL,
+        last_run_at timestamp_us,
         last_task_id INTEGER REFERENCES tasks (id),
-        enabled INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL
+        enabled boolean NOT NULL DEFAULT TRUE,
+        created_at timestamp_us NOT NULL
     ) STRICT;
-    CREATE INDEX idx_schedules_kind ON schedules (kind);
-    CREATE INDEX idx_schedules_next_run ON schedules (next_run_at) WHERE enabled = 1;
+    CREATE INDEX idx_task_schedules_kind ON task_schedules (kind);
+    CREATE INDEX idx_task_schedules_next_run ON task_schedules (next_run_at) WHERE enabled = TRUE;
 
     CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,
         tracing_id INTEGER NOT NULL,
         parent_tracing_id INTEGER,
-        boot_id BLOB NOT NULL,
+        boot_id uuid NOT NULL,
         name TEXT NOT NULL,
-        level INTEGER NOT NULL,
+        level INTEGER NOT NULL CHECK (level BETWEEN 0 AND 4),
         target TEXT NOT NULL,
         file TEXT,
-        line INTEGER,
-        started_at INTEGER NOT NULL,
-        ended_at INTEGER,
+        line smallint CHECK (line IS NULL OR CAST(line AS INTEGER) > 0),
+        started_at timestamp_us NOT NULL,
+        ended_at timestamp_us,
         fields jsonb NOT NULL
     ) STRICT;
     CREATE INDEX idx_log_spans_tracing ON log_spans (tracing_id, boot_id);
@@ -75,14 +81,14 @@ pub(super) const SQL: &str = sql!(
 
     CREATE TABLE log_events (
         id INTEGER PRIMARY KEY,
-        boot_id BLOB NOT NULL,
+        boot_id uuid NOT NULL,
         span_tracing_id INTEGER,
-        level INTEGER NOT NULL,
+        level INTEGER NOT NULL CHECK (level BETWEEN 0 AND 4),
         target TEXT NOT NULL,
         message TEXT,
-        timestamp INTEGER NOT NULL,
+        timestamp timestamp_us NOT NULL,
         file TEXT,
-        line INTEGER,
+        line smallint CHECK (line IS NULL OR CAST(line AS INTEGER) > 0),
         fields jsonb NOT NULL
     ) STRICT;
     CREATE INDEX idx_log_events_timestamp ON log_events (timestamp);
@@ -102,7 +108,7 @@ pub(super) const SQL: &str = sql!(
         child.line,
         child.started_at,
         child.ended_at,
-        json(child.fields) AS fields
+        child.fields
     FROM log_spans child
     LEFT JOIN log_spans parent
         ON child.parent_tracing_id = parent.tracing_id
@@ -119,9 +125,11 @@ pub(super) const SQL: &str = sql!(
         log_events.file,
         log_events.line,
         log_events.boot_id,
-        json(log_events.fields) AS fields
+        log_events.fields
     FROM log_events
     LEFT JOIN log_spans span
         ON log_events.span_tracing_id = span.tracing_id
         AND log_events.boot_id = span.boot_id;
 );
+
+pub(super) const STATEMENTS: &[&str] = &[CUSTOM_TYPES, TABLES];

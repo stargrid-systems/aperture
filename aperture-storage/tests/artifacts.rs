@@ -3,8 +3,8 @@ use std::{env, fs};
 use aperture_storage::{Artifact, ArtifactKey, DbId, ListQuery, Storage, VersionSort};
 use jiff::Timestamp;
 
-fn at(millis: i64) -> Timestamp {
-    Timestamp::from_millisecond(millis).unwrap()
+fn at(micros: i64) -> Timestamp {
+    Timestamp::from_microsecond(micros).unwrap()
 }
 
 fn key(s: &str) -> ArtifactKey {

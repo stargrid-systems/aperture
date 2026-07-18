@@ -16,19 +16,19 @@ pub use self::log::{
     BootResponse, LevelResponse, LogEventResponse, LogListParams, LogSpanDetailResponse,
     LogSpanListParams, LogSpanResponse, LogTargetListParams, boots_response, event_page, span_page,
 };
-pub use self::schedule::{
-    CreateScheduleRequest, ScheduleListParams, ScheduleResponse, UpdateScheduleRequest,
-    schedule_page,
-};
 pub use self::task::{
     CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
     task_page,
 };
+pub use self::task_schedule::{
+    CreateTaskScheduleRequest, TaskScheduleListParams, TaskScheduleResponse,
+    UpdateTaskScheduleRequest, task_schedule_page,
+};
 
 mod artifact;
 mod log;
-mod schedule;
 mod task;
+mod task_schedule;
 
 /// Deserializes either a single comma-separated string or a sequence of
 /// strings into a `Vec<String>`. Accepts `target=A,B` (single param, comma

@@ -13,8 +13,8 @@
 //! [`Scheduler`] drives registered kinds on a periodic schedule.
 
 pub use aperture_storage::{
-    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ListQuery, NewSchedule, Order, Page,
-    ParentFilter, SchedulePatch, StatusFilter, TaskInvocation, TaskStatus,
+    Interval, InvalidJsonPath, JsonField, JsonFilter, JsonPath, ListQuery, NewTaskSchedule, Order,
+    Page, ParentFilter, StatusFilter, TaskInvocation, TaskSchedulePatch, TaskStatus,
 };
 
 pub use self::context::TaskContext;

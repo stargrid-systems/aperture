@@ -3,8 +3,8 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
-use aperture_storage::LogRepository;
-use aperture_tasks::{Scheduler, TaskDescriptor, Tasks};
+use aperture_storage::Storage;
+use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::trace::TraceLayer;
@@ -30,27 +30,25 @@ mod spectra;
 pub struct AppState {
     version: &'static str,
     boot_id: Uuid,
+    storage: Storage,
     spectra: Spectra,
     tasks: Tasks,
-    scheduler: Scheduler,
 }
 
 impl AppState {
-    /// Wraps the gateway version, boot id, Spectra frontend, task manager, and
-    /// scheduler for use as request state.
     pub fn new(
         version: &'static str,
         boot_id: Uuid,
+        storage: Storage,
         spectra: Spectra,
         tasks: Tasks,
-        scheduler: Scheduler,
     ) -> Self {
         Self {
             version,
             boot_id,
+            storage,
             spectra,
             tasks,
-            scheduler,
         }
     }
 
@@ -62,21 +60,16 @@ impl AppState {
         self.boot_id
     }
 
+    pub(crate) fn storage(&self) -> &Storage {
+        &self.storage
+    }
+
     pub(crate) fn spectra(&self) -> &Spectra {
         &self.spectra
     }
 
     pub(crate) fn tasks(&self) -> &Tasks {
         &self.tasks
-    }
-
-    pub(crate) fn scheduler(&self) -> &Scheduler {
-        &self.scheduler
-    }
-
-    /// Returns the repository over the structured log tables for this request.
-    pub(crate) fn logs(&self) -> Result<LogRepository, aperture_storage::StorageError> {
-        self.spectra.artifacts().storage().logs()
     }
 }
 

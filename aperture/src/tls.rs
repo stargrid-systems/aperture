@@ -13,7 +13,7 @@ use arc_swap::ArcSwap;
 pub use self::listener::TlsListener;
 pub use self::pki::{ensure_certificates, load_server_config, reload_certificates};
 pub use self::redirect::redirect_router;
-pub use self::rotate::{RotateCertificateDefinition, RotateCertificateInput};
+pub use self::rotate::RotateCertificateDefinition;
 
 mod error;
 mod listener;

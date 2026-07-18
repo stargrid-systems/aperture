@@ -1,10 +1,13 @@
+use std::io;
+
 use aperture_artifacts::{ArtifactError, ArtifactKey};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use tokio_util::io::ReaderStream;
+use tokio::fs::File;
+use tokio_util::io::{ReaderStream, StreamReader};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -190,8 +193,8 @@ async fn upload_artifact(
     let stream = request
         .into_body()
         .into_data_stream()
-        .map_err(std::io::Error::other);
-    let reader = tokio_util::io::StreamReader::new(stream);
+        .map_err(io::Error::other);
+    let reader = StreamReader::new(stream);
     let artifact = state
         .spectra()
         .artifacts()
@@ -231,7 +234,7 @@ async fn download_artifact_blob(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
     // Stream the blob straight from disk; never held in full in memory.
-    let file = tokio::fs::File::open(&located.path)
+    let file = File::open(&located.path)
         .await
         .map_err(ArtifactError::from)?;
     let stream = ReaderStream::new(file);

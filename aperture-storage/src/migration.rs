@@ -5,7 +5,6 @@
 
 use turso::{Connection, Value};
 
-use self::m0001_initial::SQL as M0001_INITIAL;
 use crate::error::{Result, StorageError};
 use crate::macros::sql;
 
@@ -20,7 +19,7 @@ const BASE_VERSION: i64 = 0;
 
 /// Ordered list of migrations. Index `i` upgrades the schema from version
 /// `BASE_VERSION + i` to `BASE_VERSION + i + 1`.
-const MIGRATIONS: &[&str] = &[M0001_INITIAL];
+const MIGRATIONS: &[&[&str]] = &[m0001_initial::STATEMENTS];
 
 /// Applies all pending migrations to the database.
 pub(crate) async fn run(connection: &Connection) -> Result<()> {
@@ -37,12 +36,12 @@ pub(crate) async fn run(connection: &Connection) -> Result<()> {
             baseline: BASE_VERSION,
         });
     }
-    for (index, statements) in MIGRATIONS.iter().enumerate() {
+    for (index, chunks) in MIGRATIONS.iter().enumerate() {
         let version = BASE_VERSION + index as i64 + 1;
         if version <= current {
             continue;
         }
-        apply(connection, statements, version).await?;
+        apply(connection, chunks, version).await?;
     }
     Ok(())
 }
@@ -61,15 +60,17 @@ async fn current_version(connection: &Connection) -> Result<i64> {
     }
 }
 
-async fn apply(connection: &Connection, statements: &str, version: i64) -> Result<()> {
+async fn apply(connection: &Connection, chunks: &[&str], version: i64) -> Result<()> {
     let tx = connection
         .unchecked_transaction()
         .await
         .map_err(StorageError::from_turso)?;
     let res = async {
-        tx.execute_batch(statements)
-            .await
-            .map_err(StorageError::from_turso)?;
+        for statements in chunks {
+            tx.execute_batch(statements)
+                .await
+                .map_err(StorageError::from_turso)?;
+        }
         tx.pragma_update("user_version", version)
             .await
             .map_err(StorageError::from_turso)?;

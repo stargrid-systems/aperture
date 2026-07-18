@@ -264,20 +264,22 @@ async fn read_artifact(
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
+    use std::path::PathBuf;
+    use std::{env, fs, process};
 
-    use aperture_artifacts::well_known::tls::SERVER_CERT;
+    use aperture_artifacts::well_known::tls::{CA_CERT, CA_KEY, SERVER_CERT};
     use aperture_storage::Storage;
 
     use super::*;
 
     /// A temporary blob store directory removed when dropped.
-    struct TempDir(std::path::PathBuf);
+    struct TempDir(PathBuf);
 
     impl TempDir {
         fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!(
+            let dir = env::temp_dir().join(format!(
                 "aperture-tls-tests-{}-{}",
-                std::process::id(),
+                process::id(),
                 uuid::Uuid::new_v4()
             ));
             Self(dir)
@@ -286,7 +288,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -312,12 +314,8 @@ mod tests {
         ensure_certificates(&artifacts, addr).await.unwrap();
 
         // Generate a cert that is already expired and overwrite the artifact.
-        let ca_pem = read_artifact(&artifacts, &aperture_artifacts::well_known::tls::CA_CERT)
-            .await
-            .unwrap();
-        let ca_key_pem = read_artifact(&artifacts, &aperture_artifacts::well_known::tls::CA_KEY)
-            .await
-            .unwrap();
+        let ca_pem = read_artifact(&artifacts, &CA_CERT).await.unwrap();
+        let ca_key_pem = read_artifact(&artifacts, &CA_KEY).await.unwrap();
         let ca_key = KeyPair::from_pem(&ca_key_pem).unwrap();
         let issuer = Issuer::from_ca_cert_pem(&ca_pem, ca_key).unwrap();
 

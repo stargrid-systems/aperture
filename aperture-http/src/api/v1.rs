@@ -5,7 +5,7 @@ use utoipa_axum::routes;
 
 use self::artifacts::router as artifacts_routes;
 use self::logs::router as logs_routes;
-use self::schedules::router as schedules_routes;
+use self::task_schedules::router as task_schedules_routes;
 use self::tasks::{definitions_router as task_definitions_routes, router as tasks_routes};
 use crate::AppState;
 use crate::dto::VersionResponse;
@@ -13,7 +13,7 @@ use crate::dto::VersionResponse;
 mod artifacts;
 mod logs;
 pub mod operation_ids;
-mod schedules;
+mod task_schedules;
 mod tasks;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -22,7 +22,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .nest("/artifacts", artifacts_routes())
         .nest("/tasks", tasks_routes())
         .nest("/task-definitions", task_definitions_routes())
-        .nest("/schedules", schedules_routes())
+        .nest("/task-schedules", task_schedules_routes())
         .nest("/logs", logs_routes())
 }
 

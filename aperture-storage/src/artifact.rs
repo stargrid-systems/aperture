@@ -13,7 +13,8 @@ use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::key::ArtifactKey;
 use crate::macros::sql;
-use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::query::Filters;
 use crate::sql::{Columns, ToSql, get};
 
 mod col {
@@ -286,7 +287,7 @@ impl ArtifactRepository {
         }
         Ok(paginator.finish(items, |artifact| {
             let value = match sort {
-                VersionSort::DownloadedAt => artifact.downloaded_at.as_millisecond(),
+                VersionSort::DownloadedAt => artifact.downloaded_at.as_microsecond(),
                 VersionSort::SizeBytes => artifact.size_bytes as i64,
             };
             (CursorValue::Int(value), artifact.id.get())

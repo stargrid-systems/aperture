@@ -13,7 +13,7 @@ use aperture_storage::{
     Artifact, ArtifactKey, ArtifactKeyEntry, DbId, ListQuery, Page, Storage, VersionSort,
 };
 use aperture_tasks::ProgressHandle;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use oci_client::Reference;
 use tokio::fs;
 use tokio::io::AsyncRead;
@@ -35,7 +35,7 @@ const CHANGE_FEED_CAPACITY: usize = 64;
 
 /// How long a resolved reference stays cached before it is re-checked against
 /// the registry.
-const RESOLUTION_TTL_MS: i64 = 5 * 60 * 1000;
+const RESOLUTION_TTL: SignedDuration = SignedDuration::from_mins(5);
 
 /// What a [`Artifacts::sync`] run removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +116,7 @@ struct Inner {
     blobs: BlobStore,
     oci: OciFetcher,
     /// Recent reference resolutions, so repeated downloads skip the manifest
-    /// lookup for up to [`RESOLUTION_TTL_MS`].
+    /// lookup for up to [`RESOLUTION_TTL`].
     resolutions: Mutex<HashMap<String, CachedResolution>>,
     /// One lock per content digest, so concurrent downloads of the same content
     /// collapse onto a single transfer instead of each pulling it.
@@ -139,18 +139,6 @@ impl Artifacts {
                 changes,
             }),
         }
-    }
-
-    /// Opens storage at `db_path` (applying migrations) and keeps blobs under
-    /// `store_root`.
-    pub async fn open(db_path: &str, store_root: PathBuf) -> Result<Self> {
-        let storage = Storage::open(db_path).await?;
-        Ok(Self::new(storage, store_root))
-    }
-
-    /// Read access to the storage catalog.
-    pub fn storage(&self) -> &Storage {
-        &self.inner.storage
     }
 
     /// Subscribes to artifact changes. Late subscribers do not see events from
@@ -557,7 +545,7 @@ impl Inner {
 
 /// Whether a resolution made at `resolved_at` is still fresh at `now`.
 fn is_fresh(resolved_at: Timestamp, now: Timestamp) -> bool {
-    now.as_millisecond() - resolved_at.as_millisecond() < RESOLUTION_TTL_MS
+    now.duration_since(resolved_at) < RESOLUTION_TTL
 }
 
 /// Builds a version record. Content is digest-addressed, so `at` stamps both
@@ -587,8 +575,8 @@ fn build_artifact(
 mod tests {
     use super::*;
 
-    fn at(millis: i64) -> Timestamp {
-        Timestamp::from_millisecond(millis).unwrap()
+    fn at(micros: i64) -> Timestamp {
+        Timestamp::from_microsecond(micros).unwrap()
     }
 
     fn oci_request(reference: &str, media_type: &str) -> FetchRequest {
@@ -604,9 +592,10 @@ mod tests {
     #[test]
     fn resolution_is_fresh_within_the_ttl() {
         let base = at(1_000_000);
+        let ttl_micros: i64 = RESOLUTION_TTL.as_micros().try_into().unwrap();
         assert!(is_fresh(base, base));
-        assert!(is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS - 1)));
-        assert!(!is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS)));
+        assert!(is_fresh(base, at(1_000_000 + ttl_micros - 1)));
+        assert!(!is_fresh(base, at(1_000_000 + ttl_micros)));
     }
 
     #[test]

@@ -45,7 +45,7 @@ async fn list_logs(
         until: params.until,
         fields,
     };
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let page = logs.list_events(&filter, &query).await?;
     Ok(Json(event_page(page)))
 }
@@ -62,7 +62,7 @@ async fn list_log_targets(
     State(state): State<AppState>,
     Query(params): Query<LogTargetListParams>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let targets = logs.list_targets(params.q.as_deref()).await?;
     Ok(Json(targets))
 }
@@ -77,7 +77,7 @@ async fn list_log_targets(
 async fn list_log_boots(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BootResponse>>, ApiError> {
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let boots = logs.list_boots().await?;
     Ok(Json(boots_response(boots, state.boot_id())))
 }
@@ -110,7 +110,7 @@ async fn list_spans(
         parent,
         fields,
     };
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let page = logs.list_spans(&filter, &query).await?;
     Ok(Json(span_page(page)))
 }
@@ -130,7 +130,7 @@ async fn get_span(
     State(state): State<AppState>,
     Path(id): Path<DbId>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let span = logs.get_span(id).await?;
     let span = span.ok_or(ApiError::NOT_FOUND)?;
     let events = logs.events_for_span(id).await?;
