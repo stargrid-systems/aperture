@@ -26,8 +26,10 @@ mod layer;
 /// Default console filter: aperture crates at INFO, everything else at WARN.
 const DEFAULT_FILTER: &str = "aperture=info,warn";
 
-/// Installs the tracing subscriber. The DB layer buffers records to a channel
-/// until [`DeferredLogWorker::connect`] produces a runnable worker. Call this
+/// Installs the tracing subscriber.
+///
+/// The DB layer buffers records to a channel until
+/// [`DeferredLogWorker::connect`] produces a runnable worker. Call this
 /// as early as possible so startup is captured.
 pub fn init() -> DeferredLogWorker {
     let (db_layer, deferred) = DbLogLayer::new();
