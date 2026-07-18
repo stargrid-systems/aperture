@@ -14,7 +14,7 @@ use crate::id::DbId;
 use crate::interval::Interval;
 use crate::macros::sql;
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
-use crate::query::Filters;
+use crate::query::{Assignments, Filters};
 use crate::sql::{Columns, ToSql};
 
 mod col {
@@ -176,26 +176,16 @@ impl TaskScheduleRepository {
         id: DbId,
         patch: &TaskSchedulePatch,
     ) -> Result<Option<TaskSchedule>> {
-        let mut sets: Vec<&'static str> = Vec::new();
-        if patch.interval.is_some() {
-            sets.push("interval_us = ?");
-        }
-        if patch.enabled.is_some() {
-            sets.push("enabled = ?");
-        }
-        if sets.is_empty() {
+        let mut assignments = Assignments::new();
+        assignments.set_opt(col::INTERVAL_US, patch.interval.as_ref());
+        assignments.set_opt(col::ENABLED, patch.enabled.as_ref());
+        if assignments.is_empty() {
             return self.get(id).await;
         }
-        let set_clause = sets.join(", ");
-        let sql = format!("UPDATE task_schedules SET {set_clause} WHERE id = ?");
-        let mut params: Vec<turso::Value> = Vec::new();
-        if let Some(interval) = &patch.interval {
-            params.push(interval.to_sql());
-        }
-        if let Some(enabled) = patch.enabled {
-            params.push(enabled.to_sql());
-        }
+        let set_clause = assignments.set_clause().to_owned();
+        let mut params = assignments.into_params();
         params.push(id.to_sql());
+        let sql = format!("UPDATE task_schedules SET {set_clause} WHERE id = ?");
         self.connection
             .execute(&sql, params_from_iter(params))
             .await
