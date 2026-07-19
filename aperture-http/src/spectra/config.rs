@@ -1,14 +1,11 @@
 //! Where the Spectra frontend comes from.
 
-use std::sync::LazyLock;
-
 use aperture_artifacts::{ArtifactKey, MediaType};
 
 const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.1";
 const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
 
-static SPECTRA_KEY: LazyLock<ArtifactKey> =
-    LazyLock::new(|| ArtifactKey::new("spectra").expect("well-known key"));
+const SPECTRA_KEY: ArtifactKey = ArtifactKey::from_static("spectra");
 
 /// The image and media type the Spectra frontend is pulled from.
 #[derive(Clone)]

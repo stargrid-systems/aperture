@@ -4,6 +4,7 @@
 //! the live TLS listener picks up the change via the artifact change feed.
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
@@ -14,8 +15,8 @@ use utoipa::ToSchema;
 
 use super::pki;
 
-/// Default rotation interval: 24 hours in microseconds.
-const ROTATION_INTERVAL_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
+/// Default rotation interval: 24 hours.
+const ROTATION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Input for the rotate-certificate task.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -115,11 +116,62 @@ pub async fn install_default_rotation_schedule(
     repo.create(&NewTaskSchedule {
         kind: RotateCertificateDefinition::KIND.to_owned(),
         input: serde_json::json!({ "bind_addr": bind_addr.to_string() }),
-        interval: Interval::from_micros(ROTATION_INTERVAL_MICROS)
-            .map_err(|e| anyhow::format_err!("invalid interval: {e}"))?,
+        interval: Interval::from_micros(ROTATION_INTERVAL.as_micros() as i64)
+            .map_err(|e| anyhow::anyhow!(e).context("invalid interval"))?,
         next_run_at: now,
         created_at: now,
     })
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::{env, fs, process};
+
+    use aperture_storage::Storage;
+    use aperture_tasks::Capabilities;
+
+    use super::*;
+
+    /// A temporary blob store directory removed when dropped.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let dir = env::temp_dir().join(format!(
+                "aperture-tls-rotate-tests-{}-{}",
+                process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn fresh_store() -> Artifacts {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let dir = TempDir::new();
+        Artifacts::new(storage, dir.0.clone())
+    }
+
+    /// Locks the invariant that rotation is neither cancellable nor resumable.
+    ///
+    /// The capabilities flag controls whether the scheduler is allowed to
+    /// interrupt the task between its two artifact writes (key then cert).
+    /// Allowing interruption would land the catalog in a state rustls rejects
+    /// on every subsequent reload. See
+    /// `RotateCertificateDefinition::capabilities`.
+    #[tokio::test]
+    async fn rotation_capabilities_are_none() {
+        let artifacts = fresh_store().await;
+        let def = RotateCertificateDefinition::new(artifacts);
+        assert_eq!(def.capabilities(), Capabilities::NONE);
+    }
 }

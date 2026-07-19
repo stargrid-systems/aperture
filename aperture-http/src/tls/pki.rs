@@ -4,6 +4,20 @@
 //! certificate (14-day validity) are generated via rcgen. Both are stored as
 //! artifacts in DER format. The server certificate is regenerated periodically
 //! by the rotation task.
+//!
+//! # What lives on disk
+//!
+//! Four artifacts live under the data directory, all in binary DER form:
+//!
+//! | Key              | Media type             | Sensitivity |
+//! | ---------------- | ---------------------- | ----------- |
+//! | `tls/ca-cert`    | `application/pkix-cert`| public      |
+//! | `tls/ca-key`     | `application/pkcs8`    | **secret**  |
+//! | `tls/server-cert`| `application/pkix-cert`| public      |
+//! | `tls/server-key` | `application/pkcs8`    | **secret**  |
+//!
+//! The CA private key is the single most security-sensitive file the gateway
+//! writes. Anyone who can read it can mint certs the gateway will trust.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;

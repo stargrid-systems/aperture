@@ -213,7 +213,10 @@ impl Artifacts {
 
     /// Stores `reader` as a content-addressed blob and records it under `key`.
     ///
-    /// Returns the stored version.
+    /// Returns the stored version. The `digest` field of the returned artifact
+    /// is always a valid `Digest` (i.e. `artifact.digest.parse::<Digest>()`
+    /// succeeds); the same guarantee holds for any `Artifact` read back from
+    /// the catalog.
     pub async fn put<R>(
         &self,
         key: &ArtifactKey,

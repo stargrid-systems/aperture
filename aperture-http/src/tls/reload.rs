@@ -90,7 +90,7 @@ fn handle_change(
         Ok(ArtifactChange {
             key,
             kind: ChangeKind::Written,
-        }) if key == *SERVER_CERT || key == *SERVER_KEY => {
+        }) if key == SERVER_CERT || key == SERVER_KEY => {
             *deadline = Some(Instant::now() + RELOAD_DEBOUNCE);
         }
         Ok(_) => {}

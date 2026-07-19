@@ -35,33 +35,99 @@ impl ArtifactKey {
     /// NUL bytes, control characters, and keys longer than 1024 bytes.
     pub fn new(key: impl Into<Cow<'static, str>>) -> Result<Self, InvalidArtifactKey> {
         let key = key.into();
-        if key.is_empty() {
-            return Err(InvalidArtifactKey::Empty);
-        }
-        if key.len() > MAX_LEN {
-            return Err(InvalidArtifactKey::TooLong);
-        }
-        if key.starts_with('/') {
-            return Err(InvalidArtifactKey::AbsolutePath);
-        }
-        if key.contains('\0') {
-            return Err(InvalidArtifactKey::NulByte);
-        }
-        if key.bytes().any(|b| b < 0x20 || b == 0x7F) {
-            return Err(InvalidArtifactKey::ControlChar);
-        }
-        for segment in key.split('/') {
-            if segment == ".." || segment == "." {
-                return Err(InvalidArtifactKey::Traversal);
-            }
-        }
+        validate(key.as_bytes())?;
         Ok(Self(key))
+    }
+
+    /// Wraps a `'static` string after validation, panicking on invalid input.
+    ///
+    /// Intended for well-known keys declared as `static`. Lets the call site
+    /// skip `LazyLock`:
+    ///
+    /// ```ignore
+    /// static SPECTRA: ArtifactKey = ArtifactKey::from_static("spectra");
+    /// ```
+    pub const fn from_static(key: &'static str) -> Self {
+        match validate(key.as_bytes()) {
+            Ok(()) => Self(Cow::Borrowed(key)),
+            Err(InvalidArtifactKey::Empty) => panic!("artifact key is empty"),
+            Err(InvalidArtifactKey::AbsolutePath) => panic!("artifact key must not start with '/'"),
+            Err(InvalidArtifactKey::NulByte) => panic!("artifact key must not contain NUL bytes"),
+            Err(InvalidArtifactKey::ControlChar) => {
+                panic!("artifact key must not contain control characters")
+            }
+            Err(InvalidArtifactKey::Traversal) => {
+                panic!("artifact key must not contain '.' or '..' segments")
+            }
+            Err(InvalidArtifactKey::TooLong) => panic!("artifact key exceeds max length"),
+        }
     }
 
     /// The key as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Validates `bytes` as an artifact key.
+///
+/// Shared between [`ArtifactKey::new`] (fallible) and
+/// [`ArtifactKey::from_static`] (panicking). Written as a `const fn` so both
+/// paths enforce the same rule from a single source of truth.
+const fn validate(bytes: &[u8]) -> Result<(), InvalidArtifactKey> {
+    if bytes.is_empty() {
+        return Err(InvalidArtifactKey::Empty);
+    }
+    if bytes.len() > MAX_LEN {
+        return Err(InvalidArtifactKey::TooLong);
+    }
+    if bytes[0] == b'/' {
+        return Err(InvalidArtifactKey::AbsolutePath);
+    }
+
+    let mut i = 0;
+    let mut segment_start = 0;
+    let mut found_nul = false;
+    let mut found_control = false;
+    let mut found_traversal = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 0 {
+            found_nul = true;
+        } else if b < 0x20 || b == 0x7F {
+            found_control = true;
+        }
+
+        if b == b'/' {
+            if is_traversal_segment(bytes, segment_start, i) {
+                found_traversal = true;
+            }
+            segment_start = i + 1;
+        }
+        i += 1;
+    }
+    if is_traversal_segment(bytes, segment_start, bytes.len()) {
+        found_traversal = true;
+    }
+
+    if found_nul {
+        Err(InvalidArtifactKey::NulByte)
+    } else if found_control {
+        Err(InvalidArtifactKey::ControlChar)
+    } else if found_traversal {
+        Err(InvalidArtifactKey::Traversal)
+    } else {
+        Ok(())
+    }
+}
+
+const fn is_traversal_segment(bytes: &[u8], start: usize, end: usize) -> bool {
+    let len = end - start;
+    if len == 1 && bytes[start] == b'.' {
+        return true;
+    }
+    len == 2 && bytes[start] == b'.' && bytes[start + 1] == b'.'
 }
 
 impl fmt::Display for ArtifactKey {

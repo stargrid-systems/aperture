@@ -4,7 +4,7 @@
 //! Certificates are stored as artifacts. On first run a self-signed CA and
 //! server certificate are generated automatically.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::ArtifactKey;
@@ -24,16 +24,12 @@ mod redirect;
 mod reload;
 mod rotate;
 
-// Artifact keys for the gateway's self-signed PKI. Validated once at first
-// use; clones afterwards are cheap (Cow::Borrowed).
-static CA_CERT: LazyLock<ArtifactKey> =
-    LazyLock::new(|| ArtifactKey::new("tls/ca-cert").expect("well-known key"));
-static CA_KEY: LazyLock<ArtifactKey> =
-    LazyLock::new(|| ArtifactKey::new("tls/ca-key").expect("well-known key"));
-static SERVER_CERT: LazyLock<ArtifactKey> =
-    LazyLock::new(|| ArtifactKey::new("tls/server-cert").expect("well-known key"));
-static SERVER_KEY: LazyLock<ArtifactKey> =
-    LazyLock::new(|| ArtifactKey::new("tls/server-key").expect("well-known key"));
+// Artifact keys for the gateway's self-signed PKI. `const` (not `LazyLock`)
+// because validation is a `const fn`, so these resolve at compile time.
+const CA_CERT: ArtifactKey = ArtifactKey::from_static("tls/ca-cert");
+const CA_KEY: ArtifactKey = ArtifactKey::from_static("tls/ca-key");
+const SERVER_CERT: ArtifactKey = ArtifactKey::from_static("tls/server-cert");
+const SERVER_KEY: ArtifactKey = ArtifactKey::from_static("tls/server-key");
 
 /// Shared, hot-swappable server configuration.
 pub type SharedConfig = Arc<ArcSwap<rustls::ServerConfig>>;
