@@ -4,6 +4,20 @@
 //! Certificates are stored as artifacts. On first run a self-signed CA and
 //! server certificate are generated automatically.
 //!
+//! # Threat model
+//!
+//! The well-known PKI keys (`tls/ca-cert`, `tls/ca-key`, `tls/server-cert`,
+//! `tls/server-key`) live in the same artifact store as everything else the
+//! gateway manages. There is no per-key namespace reservation today. Any
+//! caller with write access to the artifact API can therefore overwrite the
+//! CA private key with their own and have the gateway mint certificates
+//! signed by it on the next rotation.
+//!
+//! Concretely: treat the artifact API as equally trusted with the gateway's
+//! data directory. Do not expose it on an untrusted network until the
+//! authentication layer ships. Replacing `tls/ca-key` is sufficient to
+//! compromise every derived cert.
+//!
 //! This module is private to the crate. The crate boundary exposes only
 //! `RotateCertificateDefinition`, `install_default_rotation_schedule`, and
 //! `init_crypto_provider` (see `lib.rs`). Everything else stays internal so

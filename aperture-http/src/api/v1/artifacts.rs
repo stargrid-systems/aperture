@@ -1,3 +1,14 @@
+//! Artifact catalog HTTP endpoints.
+//!
+//! # Trust boundary
+//!
+//! `PUT /api/v1/artifacts/{key}` accepts any well-formed `ArtifactKey`,
+//! including the well-known `tls/*` keys the gateway uses for its own PKI.
+//! Until authentication lands there is no namespace reservation: any caller
+//! with network access can replace the CA private key and have the gateway
+//! mint certs signed by it. Treat this endpoint as privileged. See the
+//! `aperture_http::tls` module doc for the full threat model.
+
 use std::io;
 
 use aperture_artifacts::{ArtifactError, ArtifactKey};

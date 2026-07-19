@@ -38,9 +38,14 @@ fn redirect_to_https(https_port: u16, request: Request) -> Response {
         .headers()
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
-        .map(strip_port);
+        .map(strip_port)
+        .filter(|h| !h.bytes().any(|b| b == b' ' || b == b'\t'));
     let Some(host) = host else {
-        return (StatusCode::BAD_REQUEST, "redirect requires a Host header").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "redirect requires a usable Host header",
+        )
+            .into_response();
     };
     let path = request
         .uri()
@@ -126,5 +131,19 @@ mod tests {
             .to_str()
             .unwrap();
         assert_eq!(location, "https://example.com/p");
+    }
+
+    #[tokio::test]
+    async fn rejects_host_with_whitespace() {
+        // A Host carrying spaces or tabs is malformed. Reflecting it verbatim
+        // into the Location header would produce an invalid URL. Reject
+        // instead of guessing what the client meant.
+        let req = HttpRequest::builder()
+            .uri("/p")
+            .header("host", "evil.example other")
+            .body(Body::empty())
+            .unwrap();
+        let resp = redirect_to_https(8443, req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

@@ -27,6 +27,12 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 /// spin the accept loop without any yield.
 const HANDSHAKE_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
+/// How many consecutive failures to swallow before logging again.
+///
+/// Keeps a broken listener visible in the log without flooding it. At the
+/// 50 ms backoff this fires roughly every 3 seconds under sustained failure.
+const ACCEPT_FAILURES_PER_LOG: u32 = 60;
+
 /// A `TcpListener` that performs TLS on every accepted connection.
 pub struct TlsListener {
     inner: TcpListener,
@@ -45,11 +51,25 @@ impl Listener for TlsListener {
     type Addr = SocketAddr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        let mut accept_failures: u32 = 0;
+        let mut handshake_failures: u32 = 0;
         loop {
             let (stream, addr) = match self.inner.accept().await {
-                Ok(conn) => conn,
+                Ok(conn) => {
+                    // Reset the accept-failure counter so the next accept
+                    // error starts fresh.
+                    accept_failures = 0;
+                    conn
+                }
                 Err(err) => {
-                    tracing::error!(error = &err as &dyn StdError, "tcp accept failed");
+                    accept_failures = accept_failures.wrapping_add(1);
+                    if should_log(accept_failures) {
+                        tracing::warn!(
+                            error = &err as &dyn StdError,
+                            consecutive_failures = accept_failures,
+                            "tcp accept failed (logging every {ACCEPT_FAILURES_PER_LOG} failures)"
+                        );
+                    }
                     sleep(ACCEPT_ERROR_BACKOFF).await;
                     continue;
                 }
@@ -59,11 +79,15 @@ impl Listener for TlsListener {
             match acceptor.accept(stream).await {
                 Ok(tls) => return (tls, addr),
                 Err(err) => {
-                    tracing::warn!(
-                        error = &err as &dyn StdError,
-                        %addr,
-                        "tls handshake failed"
-                    );
+                    handshake_failures = handshake_failures.wrapping_add(1);
+                    if should_log(handshake_failures) {
+                        tracing::warn!(
+                            error = &err as &dyn StdError,
+                            %addr,
+                            consecutive_failures = handshake_failures,
+                            "tls handshake failed (logging every {ACCEPT_FAILURES_PER_LOG} failures)"
+                        );
+                    }
                     sleep(HANDSHAKE_ERROR_BACKOFF).await;
                 }
             }
@@ -73,4 +97,10 @@ impl Listener for TlsListener {
     fn local_addr(&self) -> io::Result<Self::Addr> {
         self.inner.local_addr()
     }
+}
+
+/// Returns true the first time and then every `interval`-th time. Keeps the
+/// log clear under sustained failure while still surfacing the problem.
+fn should_log(consecutive: u32) -> bool {
+    consecutive == 1 || consecutive.is_multiple_of(ACCEPT_FAILURES_PER_LOG)
 }

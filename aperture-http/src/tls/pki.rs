@@ -168,6 +168,12 @@ fn set_validity(params: &mut CertificateParams, days: u64) {
     params.not_after = now + time::Duration::days(days as i64);
 }
 
+/// Computes the SAN list for a leaf cert on first run.
+///
+/// The localhost defaults always come first. If `bind_addr` carries a
+/// non-loopback IP, it is appended. Callers that ever extend the localhost
+/// defaults (extra DNS names, more IPs) must keep the `already` deduplication
+/// step so a cert does not end up listing the same SAN twice.
 fn compute_sans(bind_addr: SocketAddr) -> Vec<SanType> {
     let mut sans = vec![
         SanType::DnsName("localhost".try_into().expect("valid DNS name")),
