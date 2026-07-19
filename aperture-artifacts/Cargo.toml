@@ -27,3 +27,4 @@ utoipa = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+uuid = { workspace = true, features = ["std", "v4"] }

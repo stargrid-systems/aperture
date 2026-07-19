@@ -38,10 +38,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn change_eq_ignores_digest() {
-        // ArtifactChange carries only the key and the kind. The change feed
-        // does not include the digest so that subscribers can match on key
-        // without having to know about the underlying content identity.
+    fn changes_with_same_key_and_kind_are_equal() {
+        // ArtifactChange carries only the key and the kind. The feed does not
+        // include the digest so subscribers can match on key without having
+        // to know about the underlying content identity.
         let key = ArtifactKey::new("spectra").unwrap();
         let a = ArtifactChange {
             key: key.clone(),
@@ -52,5 +52,19 @@ mod tests {
             kind: ChangeKind::Written,
         };
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn changes_with_different_kinds_are_not_equal() {
+        let key = ArtifactKey::new("spectra").unwrap();
+        let written = ArtifactChange {
+            key: key.clone(),
+            kind: ChangeKind::Written,
+        };
+        let removed = ArtifactChange {
+            key,
+            kind: ChangeKind::Removed,
+        };
+        assert_ne!(written, removed);
     }
 }

@@ -6,7 +6,8 @@ use aperture_storage::DbId;
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderValue, Request, StatusCode};
+use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION};
 use axum::response::Response;
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -32,7 +33,9 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
 }
 
 async fn seeded_app() -> (Router, Artifacts, Storage) {
-    let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
+    // Unique per call so parallel tests in the same binary do not stomp on
+    // each other's blob store.
+    let root = env::temp_dir().join(format!("aperture-api-{}-{}", process::id(), uuid::Uuid::new_v4()));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Artifacts::new(storage.clone(), root);
@@ -449,4 +452,206 @@ async fn task_schedule_unknown_returns_404() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn put_then_get_round_trips_blob_bytes() {
+    let (app, _artifacts, _storage) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/artifacts/firmware")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(&b"hello aperture"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .expect("201 has a Location header")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let digest = json["digest"].as_str().unwrap().to_owned();
+    assert!(
+        digest.starts_with("sha256:"),
+        "digest should be sha256-prefixed, got {digest}"
+    );
+    // The Location header must point at a route the gateway actually serves.
+    // Following it must reach the version we just uploaded.
+    assert_eq!(
+        location,
+        format!("/api/v1/artifacts/firmware/versions/{digest}")
+    );
+    let (status, _) = get_json(&app, &location).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Fetch the blob bytes back.
+    let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(&blob_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        "application/octet-stream"
+    );
+    assert_eq!(
+        response.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(etag, format!("\"{digest}\""));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&body[..], b"hello aperture");
+}
+
+#[tokio::test]
+async fn put_url_encodes_location_for_multi_segment_key() {
+    // Regression test: a key like `tls/server-cert` contains a slash. The
+    // Location header must percent-encode it so following the link routes
+    // back to the resource instead of producing a 404.
+    let (app, _artifacts, _storage) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/artifacts/tls%2Fserver-cert")
+                .header(CONTENT_TYPE, "application/pkix-cert")
+                .body(Body::from(&b"der-bytes"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        location.starts_with("/api/v1/artifacts/tls%2Fserver-cert/versions/"),
+        "Location must encode the slash, got {location}"
+    );
+
+    // Following the encoded Location must succeed.
+    let (status, _) = get_json(&app, &location).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn put_rejects_html_media_type_parameters() {
+    // Sanitisation rejects media types with parameters so a malicious client
+    // cannot inject `text/html; charset=...` and have it echoed back verbatim.
+    let (app, _artifacts, _storage) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/artifacts/firmware")
+                .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(&b"<html>"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let digest = json["digest"].as_str().unwrap().to_owned();
+
+    let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(&blob_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    // The sanitised media type is dropped, so the GET falls back to the safe
+    // default rather than replaying `text/html`.
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        "application/octet-stream"
+    );
+}
+
+#[tokio::test]
+async fn blob_returns_304_when_etag_matches() {
+    let (app, _artifacts, _storage) = seeded_app().await;
+
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/artifacts/firmware")
+                .body(Body::from(&b"conditional"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(put.into_body(), usize::MAX).await.unwrap();
+    let digest = serde_json::from_slice::<Value>(&body).unwrap()["digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let etag = HeaderValue::from_str(&format!("\"{digest}\"")).unwrap();
+
+    let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&blob_uri)
+                .header(IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        response.headers().get(ETAG).unwrap().to_str().unwrap(),
+        format!("\"{digest}\"")
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(body.is_empty(), "304 response body should be empty");
+}
+
+#[tokio::test]
+async fn blob_404_when_digest_unknown() {
+    let (app, _artifacts, _storage) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/artifacts/firmware/versions/sha256:deadbeef/blob")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

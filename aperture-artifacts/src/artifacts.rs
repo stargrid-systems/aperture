@@ -280,8 +280,8 @@ impl Artifacts {
 impl Inner {
     /// Publishes `change` to the feed.
     ///
-    /// Late or lagging receivers are dropped:
-    /// a send error here is expected and silently ignored.
+    /// Late or lagging receivers are dropped. A send error here is expected
+    /// and silently ignored.
     fn notify(&self, change: ArtifactChange) {
         let _ = self.changes.send(change);
     }
@@ -586,6 +586,15 @@ fn build_artifact(
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::time::Duration;
+
+    use aperture_storage::Storage;
+    use tokio::time::timeout;
+
     use super::*;
 
     fn at(micros: i64) -> Timestamp {
@@ -600,6 +609,74 @@ mod tests {
                 media_type: MediaType::from(media_type),
             },
         }
+    }
+
+    /// Builds an in-memory artifacts store rooted at a fresh temp dir.
+    async fn fresh_store() -> (Artifacts, PathBuf) {
+        let dir = env::temp_dir().join(format!(
+            "aperture-artifacts-tests-{}-{}",
+            process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let storage = Storage::open(":memory:").await.unwrap();
+        let artifacts = Artifacts::new(storage, dir.clone());
+        (artifacts, dir)
+    }
+
+    /// Removes the temp dir created by [`fresh_store`]. Best-effort.
+    fn cleanup(dir: PathBuf) {
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn put_publishes_written_event() {
+        let (artifacts, dir) = fresh_store().await;
+        let mut rx = artifacts.subscribe();
+        let key = ArtifactKey::new("firmware").unwrap();
+        artifacts
+            .put(&key, Some("application/octet-stream"), &b"bytes"[..])
+            .await
+            .unwrap();
+        let change = rx.recv().await.expect("feed emitted an event");
+        assert_eq!(change.key, key);
+        assert_eq!(change.kind, ChangeKind::Written);
+        cleanup(dir);
+    }
+
+    #[tokio::test]
+    async fn evict_version_publishes_removed_event() {
+        let (artifacts, dir) = fresh_store().await;
+        let key = ArtifactKey::new("firmware").unwrap();
+        let artifact = artifacts
+            .put(&key, None, &b"bytes"[..])
+            .await
+            .unwrap();
+
+        let mut rx = artifacts.subscribe();
+        artifacts
+            .evict_version(&key, &artifact.digest)
+            .await
+            .unwrap();
+        let change = rx.recv().await.expect("feed emitted an event");
+        assert_eq!(change.key, key);
+        assert_eq!(change.kind, ChangeKind::Removed);
+        cleanup(dir);
+    }
+
+    #[tokio::test]
+    async fn late_subscriber_misses_earlier_events() {
+        let (artifacts, dir) = fresh_store().await;
+        let key = ArtifactKey::new("firmware").unwrap();
+        artifacts
+            .put(&key, None, &b"first"[..])
+            .await
+            .unwrap();
+
+        // Subscribe after the write completed. No event should arrive.
+        let mut rx = artifacts.subscribe();
+        let outcome = timeout(Duration::from_millis(50), rx.recv()).await;
+        assert!(outcome.is_err(), "late subscriber should not see prior events");
+        cleanup(dir);
     }
 
     #[test]
