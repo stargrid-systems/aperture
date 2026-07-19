@@ -62,8 +62,8 @@ pub async fn serve(
     let spectra = Spectra::new(artifacts.clone(), tasks.clone(), SpectraConfig::default());
     spectra.activate_if_present().await?;
 
-    if let Some(addr) = https_addr {
-        install_default_rotation_schedule(&storage, addr).await?;
+    if https_addr.is_some() {
+        install_default_rotation_schedule(&storage).await?;
     }
 
     let state = AppState::new(VERSION, boot_id, storage.clone(), spectra, tasks.clone());

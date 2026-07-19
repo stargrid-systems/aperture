@@ -2,8 +2,12 @@
 //!
 //! Driven by the periodic scheduler. The task body only writes the new cert;
 //! the live TLS listener picks up the change via the artifact change feed.
+//!
+//! Rotation preserves the existing cert's identity (subject DN + SANs). The
+//! initial SANs come from `ensure_certificates` on first run. To change the
+//! SANs after the fact, an operator replaces the leaf cert directly (a
+//! separate "re-issue" operation, not modelled by this task).
 
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use aperture_artifacts::Artifacts;
@@ -19,28 +23,13 @@ use super::pki;
 const ROTATION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Input for the rotate-certificate task.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct RotateCertificateInput {
-    /// The address the HTTPS listener is bound to, formatted as `host:port`.
-    ///
-    /// The bind IP is added to the leaf's Subject Alternative Names when it
-    /// differs from the localhost defaults.
-    ///
-    /// Note: the value is captured at schedule-creation time. Reconfiguring
-    /// the gateway to bind a different address does not retroactively update
-    /// existing schedules. Delete and recreate the schedule, or restart the
-    /// gateway, to pick up a new bind address.
-    pub bind_addr: String,
-}
-
-impl RotateCertificateInput {
-    /// Parses the bind address from its string form.
-    pub fn parse_bind_addr(&self) -> Result<SocketAddr, RunError> {
-        self.bind_addr
-            .parse::<SocketAddr>()
-            .map_err(|e| RunError::Failed(anyhow::Error::from(e)))
-    }
-}
+///
+/// Rotation is identity-preserving (it copies the subject DN and SANs from
+/// the existing leaf), so the task takes no parameters. The struct exists as
+/// a forward-compatibility placeholder and to satisfy the task framework's
+/// serialisable input contract.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct RotateCertificateInput {}
 
 /// Output of the rotate-certificate task.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -81,12 +70,11 @@ impl TaskDefinition for RotateCertificateDefinition {
 
     async fn run(
         &self,
-        input: RotateCertificateInput,
+        _input: RotateCertificateInput,
         _ctx: TaskContext,
     ) -> Result<RotateCertificateOutput, RunError> {
         let artifacts = self.artifacts.clone();
-        let bind_addr = input.parse_bind_addr()?;
-        let rotated = pki::rotate_if_due(&artifacts, bind_addr)
+        let rotated = pki::rotate_if_due(&artifacts)
             .await
             .map_err(|err| RunError::Failed(anyhow::Error::from(err)))?;
         Ok(RotateCertificateOutput { rotated })
@@ -99,10 +87,7 @@ impl TaskDefinition for RotateCertificateDefinition {
 /// `rotate-certificate` schedule and only inserts one when missing. The
 /// list-then-insert is racy across processes sharing storage, but aperture
 /// is a single-process gateway so this is not a concern in practice.
-pub async fn install_default_rotation_schedule(
-    storage: &Storage,
-    bind_addr: SocketAddr,
-) -> anyhow::Result<()> {
+pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Result<()> {
     let repo = storage.task_schedules()?;
     let existing = repo.list(&ListQuery::default()).await?;
     let already = existing
@@ -115,7 +100,7 @@ pub async fn install_default_rotation_schedule(
     let now = Timestamp::now();
     repo.create(&NewTaskSchedule {
         kind: RotateCertificateDefinition::KIND.to_owned(),
-        input: serde_json::json!({ "bind_addr": bind_addr.to_string() }),
+        input: serde_json::json!({}),
         interval: Interval::from_micros(ROTATION_INTERVAL.as_micros() as i64)
             .map_err(|e| anyhow::anyhow!(e).context("invalid interval"))?,
         next_run_at: now,
