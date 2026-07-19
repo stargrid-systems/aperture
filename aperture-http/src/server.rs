@@ -3,7 +3,6 @@
 use std::error::Error as StdError;
 use std::future::Future;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
 use axum::Router;
@@ -60,7 +59,7 @@ impl HttpServer {
     /// that either redirects to HTTPS or serves the full API in plain HTTP
     /// (recovery mode).
     pub async fn start(
-        artifacts: Arc<Artifacts>,
+        artifacts: Artifacts,
         https_addr: SocketAddr,
         http_addr: Option<SocketAddr>,
         insecure_http: bool,
@@ -71,7 +70,7 @@ impl HttpServer {
 
         let tcp_listener = TcpListener::bind(https_addr).await?;
         let tls_listener = TlsListener::new(tcp_listener, shared_config.clone());
-        let tls_reload = TlsReload::new(Arc::clone(&artifacts), shared_config);
+        let tls_reload = TlsReload::new(artifacts.clone(), shared_config);
         tracing::info!(%https_addr, "aperture listening (https)");
 
         let mut server = HttpServer::new()
@@ -94,6 +93,7 @@ impl HttpServer {
     }
 
     /// Serves `app` over the TLS listener.
+    #[must_use]
     pub fn serve_tls(mut self, listener: TlsListener, app: Router) -> Self {
         self.tls = Some(TlsEntry { listener, app });
         self
@@ -104,12 +104,14 @@ impl HttpServer {
     /// Only effective when [`serve_tls`] is also used.
     ///
     /// [`serve_tls`]: HttpServer::serve_tls
+    #[must_use]
     pub fn with_tls_reload(mut self, reload: TlsReload) -> Self {
         self.reload = Some(reload);
         self
     }
 
     /// Serves `app` over a plain HTTP listener.
+    #[must_use]
     pub fn serve_http(mut self, listener: TcpListener, app: Router) -> Self {
         self.http = Some(HttpEntry { listener, app });
         self

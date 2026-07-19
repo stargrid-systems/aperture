@@ -38,6 +38,9 @@ impl ArtifactKey {
         if key.is_empty() {
             return Err(InvalidArtifactKey::Empty);
         }
+        if key.len() > MAX_LEN {
+            return Err(InvalidArtifactKey::TooLong);
+        }
         if key.starts_with('/') {
             return Err(InvalidArtifactKey::AbsolutePath);
         }
@@ -51,9 +54,6 @@ impl ArtifactKey {
             if segment == ".." || segment == "." {
                 return Err(InvalidArtifactKey::Traversal);
             }
-        }
-        if key.len() > MAX_LEN {
-            return Err(InvalidArtifactKey::TooLong);
         }
         Ok(Self(key))
     }
@@ -140,6 +140,7 @@ impl PartialSchema for ArtifactKey {
     fn schema() -> RefOr<Schema> {
         ObjectBuilder::new()
             .schema_type(Type::String)
+            .max_length(Some(MAX_LEN))
             .description(Some(Cow::Borrowed(
                 "Logical artifact identifier, for example `spectra` or `tls/server-cert`.",
             )))

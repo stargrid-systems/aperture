@@ -5,7 +5,6 @@
 //! writes within a short debounce window are coalesced into a single reload.
 
 use std::error::Error as StdError;
-use std::sync::Arc;
 use std::time::Duration;
 
 use aperture_artifacts::{ArtifactChange, Artifacts, ChangeKind};
@@ -23,13 +22,13 @@ const RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
 /// Watches the artifact change feed and hot-swaps the TLS server config when
 /// the certificate or key changes.
 pub struct TlsReload {
-    artifacts: Arc<Artifacts>,
+    artifacts: Artifacts,
     config: SharedConfig,
 }
 
 impl TlsReload {
     /// Creates a reload watcher that swaps `config` on certificate changes.
-    pub fn new(artifacts: Arc<Artifacts>, config: SharedConfig) -> Self {
+    pub fn new(artifacts: Artifacts, config: SharedConfig) -> Self {
         Self { artifacts, config }
     }
 

@@ -9,6 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
+use aperture_storage::ArtifactKey;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose, SanType,
@@ -23,28 +24,24 @@ use super::error::TlsError;
 use super::{CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY, SharedConfig};
 
 /// CA certificate validity in days (5 years).
-pub const CA_VALIDITY_DAYS: u64 = 365 * 5;
+const CA_VALIDITY_DAYS: u64 = 365 * 5;
 
 /// Leaf certificate validity in days (short-lived, ACME-style).
-pub const LEAF_VALIDITY_DAYS: u64 = 14;
+const LEAF_VALIDITY_DAYS: u64 = 14;
 
 /// Generated PKI material in DER format.
-pub struct Pki {
-    /// Self-signed CA certificate.
-    pub ca_cert: CertificateDer<'static>,
-    /// CA private key.
-    pub ca_key: PrivatePkcs8KeyDer<'static>,
-    /// Leaf server certificate signed by [`Pki::ca_cert`].
-    pub server_cert: CertificateDer<'static>,
-    /// Leaf server private key.
-    pub server_key: PrivatePkcs8KeyDer<'static>,
+struct Pki {
+    ca_cert: CertificateDer<'static>,
+    ca_key: PrivatePkcs8KeyDer<'static>,
+    server_cert: CertificateDer<'static>,
+    server_key: PrivatePkcs8KeyDer<'static>,
 }
 
 /// Generates a new CA and leaf certificate signed by that CA.
 ///
 /// Performs ECDSA key generation and certificate signing, so it should run
 /// in a blocking context.
-pub fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
+fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
     let mut ca_params = CertificateParams::default();
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
@@ -73,7 +70,7 @@ pub fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
 ///
 /// Reads the CA material asynchronously, then performs key generation and
 /// certificate signing in a blocking task.
-pub async fn regenerate_leaf(
+async fn regenerate_leaf(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
 ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>), TlsError> {
@@ -182,7 +179,7 @@ pub async fn reload_certificates(
 /// The threshold is computed from the cert's `not_before` and `not_after`, not
 /// from the hardcoded `LEAF_VALIDITY_DAYS`, so uploaded custom certs keep their
 /// own lifetime regardless of the default rotation policy.
-pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
+async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
     let der = read_artifact(artifacts, &SERVER_CERT).await?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der)
         .map_err(|e| TlsError::CertParse(format!("x509 parse failed: {e}")))?;
@@ -205,10 +202,7 @@ pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
 /// The key is written before the cert so a crash between writes leaves a state
 /// that rustls rejects (stale cert, new key) rather than silently corrupting
 /// handshakes (new cert, stale key).
-pub async fn rotate_certificate(
-    artifacts: &Artifacts,
-    bind_addr: SocketAddr,
-) -> Result<(), TlsError> {
+async fn rotate_certificate(artifacts: &Artifacts, bind_addr: SocketAddr) -> Result<(), TlsError> {
     let (cert, key) = regenerate_leaf(artifacts, bind_addr).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
     store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
@@ -219,7 +213,10 @@ pub async fn rotate_certificate(
 ///
 /// Live reload of the TLS listener is triggered separately by the artifact
 /// change feed (see [`crate::tls::TlsReload`]).
-pub async fn rotate_if_due(artifacts: &Artifacts, bind_addr: SocketAddr) -> Result<bool, TlsError> {
+pub(super) async fn rotate_if_due(
+    artifacts: &Artifacts,
+    bind_addr: SocketAddr,
+) -> Result<bool, TlsError> {
     if !needs_rotation(artifacts).await? {
         return Ok(false);
     }
@@ -247,7 +244,7 @@ fn build_server_config(cert_der: &[u8], key_der: &[u8]) -> Result<ServerConfig, 
 
 async fn store_cert_artifact(
     artifacts: &Artifacts,
-    key: &aperture_storage::ArtifactKey,
+    key: &ArtifactKey,
     der: &CertificateDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
@@ -258,7 +255,7 @@ async fn store_cert_artifact(
 
 async fn store_key_artifact(
     artifacts: &Artifacts,
-    key: &aperture_storage::ArtifactKey,
+    key: &ArtifactKey,
     der: &PrivatePkcs8KeyDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
@@ -267,10 +264,7 @@ async fn store_key_artifact(
     Ok(())
 }
 
-async fn read_artifact(
-    artifacts: &Artifacts,
-    key: &aperture_storage::ArtifactKey,
-) -> Result<Vec<u8>, TlsError> {
+async fn read_artifact(artifacts: &Artifacts, key: &ArtifactKey) -> Result<Vec<u8>, TlsError> {
     let located = artifacts
         .locate(key)
         .await?

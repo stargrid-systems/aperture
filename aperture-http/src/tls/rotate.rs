@@ -4,7 +4,6 @@
 //! the live TLS listener picks up the change via the artifact change feed.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
@@ -49,12 +48,12 @@ pub struct RotateCertificateOutput {
 
 /// Task definition for periodic certificate rotation.
 pub struct RotateCertificateDefinition {
-    artifacts: Arc<Artifacts>,
+    artifacts: Artifacts,
 }
 
 impl RotateCertificateDefinition {
     /// Creates the definition over `artifacts`.
-    pub fn new(artifacts: Arc<Artifacts>) -> Self {
+    pub fn new(artifacts: Artifacts) -> Self {
         Self { artifacts }
     }
 }
@@ -79,7 +78,7 @@ impl TaskDefinition for RotateCertificateDefinition {
         input: RotateCertificateInput,
         ctx: TaskContext,
     ) -> Result<RotateCertificateOutput, RunError> {
-        let artifacts = Arc::clone(&self.artifacts);
+        let artifacts = self.artifacts.clone();
         let bind_addr = input.parse_bind_addr()?;
         tokio::select! {
             biased;
@@ -95,7 +94,9 @@ impl TaskDefinition for RotateCertificateDefinition {
 /// Installs the default rotation schedule if none exists yet.
 ///
 /// Safe to call on every boot: it checks for an existing
-/// `rotate-certificate` schedule and only inserts one when missing.
+/// `rotate-certificate` schedule and only inserts one when missing. The
+/// list-then-insert is racy across processes sharing storage, but aperture
+/// is a single-process gateway so this is not a concern in practice.
 pub async fn install_default_rotation_schedule(
     storage: &Storage,
     bind_addr: SocketAddr,

@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
@@ -32,11 +31,11 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
     }
 }
 
-async fn seeded_app() -> (Router, Arc<Artifacts>, Storage) {
+async fn seeded_app() -> (Router, Artifacts, Storage) {
     let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Arc::new(Artifacts::new(storage.clone(), root));
+    let artifacts = Artifacts::new(storage.clone(), root);
 
     let repo = storage.artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:fff", 1_000))
@@ -50,14 +49,10 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, Storage) {
         .unwrap();
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
+    registry.register(DownloadDefinition::new(artifacts.clone()));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let spectra = Spectra::new(
-        Arc::clone(&artifacts),
-        tasks.clone(),
-        SpectraConfig::default(),
-    );
+    let spectra = Spectra::new(artifacts.clone(), tasks.clone(), SpectraConfig::default());
     let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks);
     (app(state), artifacts, storage)
 }

@@ -116,9 +116,11 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Projects the registered task kinds into the spec: it adds each kind's input
-/// and output component schemas, then a discriminated `CreateTaskInput` union
-/// over the per-kind create bodies, and points `POST /tasks` at it.
+/// Projects registered task kinds into the OpenAPI spec.
+///
+/// Adds each kind's input/output component schemas, builds a discriminated
+/// `CreateTaskInput` one-of over the per-kind create bodies, and points
+/// `POST /tasks` at it.
 fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
     if descriptors.is_empty() {
         return;

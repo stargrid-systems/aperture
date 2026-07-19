@@ -2,7 +2,6 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::tls::{RotateCertificateDefinition, install_default_rotation_schedule};
@@ -46,16 +45,12 @@ pub async fn serve(
     artifacts.sync().await?;
 
     let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, Arc::clone(&artifacts));
+    register_kinds(&mut registry, artifacts.clone());
     let tasks = Tasks::new(storage.tasks()?, registry);
 
     let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
-    let spectra = Spectra::new(
-        Arc::clone(&artifacts),
-        tasks.clone(),
-        SpectraConfig::default(),
-    );
+    let spectra = Spectra::new(artifacts.clone(), tasks.clone(), SpectraConfig::default());
     spectra.activate_if_present().await?;
 
     install_default_rotation_schedule(&storage, https_addr).await?;
@@ -63,14 +58,7 @@ pub async fn serve(
     let state = AppState::new(VERSION, boot_id, storage.clone(), spectra, tasks.clone());
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(
-        Arc::clone(&artifacts),
-        https_addr,
-        http_addr,
-        insecure_http,
-        app,
-    )
-    .await?;
+    let server = HttpServer::start(artifacts, https_addr, http_addr, insecure_http, app).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
@@ -118,13 +106,13 @@ pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
     let storage = Storage::open(":memory:").await?;
     let artifacts = Artifacts::new(storage, PathBuf::from("."));
     let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, Arc::new(artifacts));
+    register_kinds(&mut registry, artifacts);
     Ok(aperture_http::openapi(&registry.descriptors()))
 }
 
 /// Registers every task kind the gateway supports.
-fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
-    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
+fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
+    registry.register(DownloadDefinition::new(artifacts.clone()));
     registry.register(RotateCertificateDefinition::new(artifacts));
 }
 
@@ -132,7 +120,7 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Arc<Artifacts>) {
 ///
 /// Returns the artifact manager and the storage handle so callers can build
 /// their own repositories alongside it.
-async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Arc<Artifacts>, Storage)> {
+async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Artifacts, Storage)> {
     fs::create_dir_all(data_dir).await?;
     let db_path = data_dir.join("aperture.db");
     let db_path = db_path.to_str().ok_or_else(|| {
@@ -140,5 +128,5 @@ async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Arc<Artifacts>, Stor
     })?;
     let storage = Storage::open(db_path).await?;
     let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"));
-    Ok((Arc::new(artifacts), storage))
+    Ok((artifacts, storage))
 }

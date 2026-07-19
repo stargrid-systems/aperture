@@ -35,7 +35,7 @@ const CHANGE_FEED_CAPACITY: usize = 64;
 /// the registry.
 const RESOLUTION_TTL: SignedDuration = SignedDuration::from_mins(5);
 
-/// What a [`Artifacts::sync`] run removed.
+/// What an [`Artifacts::sync`] run removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SyncReport {
     /// Blobs on disk that no catalog entry referenced.
@@ -325,8 +325,19 @@ impl Inner {
             .await?
             .iter()
             .any(|version| version.digest == artifact.digest);
-        if !still_referenced && let Ok(parsed) = artifact.digest.parse::<Digest>() {
-            self.blobs.remove(&parsed).await?;
+        if !still_referenced {
+            match artifact.digest.parse::<Digest>() {
+                Ok(parsed) => {
+                    self.blobs.remove(&parsed).await?;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        key = %artifact.key,
+                        digest = %artifact.digest,
+                        "unparseable digest during eviction; blob may leak"
+                    );
+                }
+            }
         }
         Ok(true)
     }

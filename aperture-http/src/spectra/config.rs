@@ -4,8 +4,8 @@ use std::sync::LazyLock;
 
 use aperture_artifacts::{ArtifactKey, MediaType};
 
-pub(super) const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.1";
-pub(super) const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
+const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.1";
+const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
 
 static SPECTRA_KEY: LazyLock<ArtifactKey> =
     LazyLock::new(|| ArtifactKey::new("spectra").expect("well-known key"));

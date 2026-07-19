@@ -1,7 +1,5 @@
 //! The download task: fetching an artifact, modelled as a [`TaskDefinition`].
 
-use std::sync::Arc;
-
 use aperture_storage::ArtifactKey;
 use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
 use serde::{Deserialize, Serialize};
@@ -60,12 +58,12 @@ pub struct DownloadOutput {
 /// The download task kind. Fetches an artifact into the blob store and records
 /// the version, reporting transferred bytes as progress.
 pub struct DownloadDefinition {
-    artifacts: Arc<Artifacts>,
+    artifacts: Artifacts,
 }
 
 impl DownloadDefinition {
     /// Creates the definition over `artifacts`.
-    pub fn new(artifacts: Arc<Artifacts>) -> Self {
+    pub fn new(artifacts: Artifacts) -> Self {
         Self { artifacts }
     }
 }

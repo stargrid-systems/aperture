@@ -21,11 +21,11 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
-/// Maximum size of a single artifact upload.
+/// Maximum request body size for artifact ingestion.
 ///
-/// The body is streamed to disk, so this is a backstop against runaway or
-/// malicious uploads filling the disk, not a memory cap. We can promote this to
-/// a runtime config later.
+/// Applied as a backstop on all write endpoints. The body is streamed to disk,
+/// so this guards against runaway or malicious uploads filling the disk, not
+/// against memory exhaustion. We can promote this to a runtime config later.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -185,7 +185,14 @@ async fn upload_artifact(
     Path(key): Path<ArtifactKey>,
     headers: HeaderMap,
     request: Request,
-) -> Result<(StatusCode, Json<ArtifactVersionResponse>), ApiError> {
+) -> Result<
+    (
+        StatusCode,
+        [(header::HeaderName, String); 1],
+        Json<ArtifactVersionResponse>,
+    ),
+    ApiError,
+> {
     let media_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
@@ -199,7 +206,12 @@ async fn upload_artifact(
         .artifacts()
         .put(&key, media_type, reader)
         .await?;
-    Ok((StatusCode::CREATED, Json(artifact.into())))
+    let location = format!("/api/v1/artifacts/{key}/versions/{}", artifact.digest);
+    Ok((
+        StatusCode::CREATED,
+        [(header::LOCATION, location)],
+        Json(artifact.into()),
+    ))
 }
 
 /// Downloads the blob content of one stored version.
@@ -249,9 +261,13 @@ async fn download_artifact_blob(
         .locate_version(&key, &digest)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
-    let file = File::open(&located.path)
-        .await
-        .map_err(ArtifactError::from)?;
+    let file = File::open(&located.path).await.map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            ApiError::NOT_FOUND
+        } else {
+            ArtifactError::from(err).into()
+        }
+    })?;
     let content_type = artifact
         .media_type
         .as_deref()

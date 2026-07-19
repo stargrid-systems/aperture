@@ -15,7 +15,7 @@ use super::image::{SpectraImage, open_image};
 /// Owns the Spectra frontend and fetches it on demand.
 #[derive(Clone)]
 pub struct Spectra {
-    artifacts: Arc<Artifacts>,
+    artifacts: Artifacts,
     tasks: Tasks,
     config: SpectraConfig,
     current: Arc<RwLock<Option<Arc<SpectraImage>>>>,
@@ -25,7 +25,7 @@ pub struct Spectra {
 impl Spectra {
     /// Creates a frontend backed by `artifacts`, fetched via `tasks`, pulling
     /// from `config`.
-    pub fn new(artifacts: Arc<Artifacts>, tasks: Tasks, config: SpectraConfig) -> Self {
+    pub fn new(artifacts: Artifacts, tasks: Tasks, config: SpectraConfig) -> Self {
         Self {
             artifacts,
             tasks,
@@ -36,11 +36,12 @@ impl Spectra {
     }
 
     /// The artifact manager behind this frontend.
-    pub fn artifacts(&self) -> &Arc<Artifacts> {
+    pub fn artifacts(&self) -> &Artifacts {
         &self.artifacts
     }
 
     /// Opens the frontend if its blob is already cached, without downloading.
+    ///
     /// Returns whether a cached blob was found and opened.
     pub async fn activate_if_present(&self) -> anyhow::Result<bool> {
         if let Some(located) = self.artifacts.locate(&self.config.key).await? {
