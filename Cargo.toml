@@ -4,6 +4,7 @@ members = [
     "aperture",
     "aperture-artifacts",
     "aperture-http",
+    "aperture-runtime",
     "aperture-storage",
     "aperture-tasks",
 ]
@@ -19,6 +20,7 @@ rust-version = "1.93"
 [workspace.dependencies]
 aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
+aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
 aperture-tasks = { version = "0.1.0", path = "aperture-tasks" }
 

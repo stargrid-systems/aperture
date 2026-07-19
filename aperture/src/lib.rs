@@ -8,12 +8,13 @@ use aperture_http::{
     AppState, HttpServer, OpenApiSpec, RotateCertificateDefinition, Spectra, SpectraConfig,
     init_crypto_provider, install_default_rotation_schedule,
 };
+use aperture_runtime::Supervisor;
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
 use tokio::fs;
 use uuid::Uuid;
 
-use self::runtime::{Supervisor, TasksWorker};
+use self::runtime::TasksWorker;
 
 mod logging;
 mod runtime;

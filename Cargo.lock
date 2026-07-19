@@ -118,6 +118,7 @@ dependencies = [
  "anyhow",
  "aperture-artifacts",
  "aperture-http",
+ "aperture-runtime",
  "aperture-storage",
  "aperture-tasks",
  "clap",
@@ -155,6 +156,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aperture-artifacts",
+ "aperture-runtime",
  "aperture-storage",
  "aperture-tasks",
  "arc-swap",
@@ -184,6 +186,16 @@ dependencies = [
  "utoipa-axum",
  "uuid",
  "x509-parser",
+]
+
+[[package]]
+name = "aperture-runtime"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

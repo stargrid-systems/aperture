@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use aperture_runtime::{Stop, Worker};
 use aperture_storage::{EventRecord, Level, LogRepository, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::mpsc;
@@ -22,7 +23,6 @@ use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
 
 use self::collector::FieldCollector;
-use crate::runtime::{Stop, Worker};
 
 mod collector;
 

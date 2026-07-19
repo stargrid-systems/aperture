@@ -1,16 +1,15 @@
 //! Unified HTTP server: owns all listeners and the TLS reload watcher.
 
-use std::error::Error as StdError;
+use std::fmt::Debug;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use aperture_artifacts::Artifacts;
+use aperture_runtime::{Stop, Worker, WorkerSet};
 use axum::Router;
-use futures_util::stream::{FuturesUnordered, StreamExt};
+use axum::serve::Listener;
 use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::tls::{TlsEndpoint, TlsListener, TlsReload, ensure_certificates, redirect_router};
@@ -19,9 +18,9 @@ use crate::tls::{TlsEndpoint, TlsListener, TlsReload, ensure_certificates, redir
 ///
 /// axum's `with_graceful_shutdown` waits forever for in-flight connections by
 /// default. Without an outer timeout, a single slow client can hang the
-/// shutdown indefinitely. The supervisor layers its own per-worker timeout on
-/// top, but here we want connections to close on their own scale before
-/// the hard kill.
+/// shutdown indefinitely. The outer supervisor layers its own timeout on top,
+/// but here we want connections to close on their own scale before the hard
+/// kill.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A TLS listener paired with its application router and reload watcher.
@@ -142,8 +141,7 @@ impl HttpServer {
     /// drained immediately.
     pub async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
         let token = CancellationToken::new();
-
-        let mut handles: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+        let mut workers = WorkerSet::new();
 
         if let Some(TlsEntry {
             listener,
@@ -152,63 +150,65 @@ impl HttpServer {
         }) = self.tls
         {
             let listener_token = token.clone();
-            handles.push(tokio::spawn(async move {
-                if let Err(err) = axum::serve(listener, app)
-                    .with_graceful_shutdown(async move { listener_token.cancelled().await })
-                    .await
-                {
-                    tracing::error!(
-                        error = &err as &dyn StdError,
-                        "https server exited with error"
-                    );
-                }
-            }));
+            workers.spawn("https", async move {
+                serve_until_cancelled(listener, app, listener_token).await;
+            });
             let reload_token = token.clone();
-            handles.push(tokio::spawn(reload.run(reload_token)));
+            workers.spawn("tls-reload", reload.run(reload_token));
         }
 
         for HttpEntry { listener, app } in self.http {
-            let token = token.clone();
-            handles.push(tokio::spawn(async move {
-                if let Err(err) = axum::serve(listener, app)
-                    .with_graceful_shutdown(async move { token.cancelled().await })
-                    .await
-                {
-                    tracing::error!(
-                        error = &err as &dyn StdError,
-                        "http server exited with error"
-                    );
-                }
-            }));
+            let listener_token = token.clone();
+            workers.spawn("http", async move {
+                serve_until_cancelled(listener, app, listener_token).await;
+            });
         }
-
-        if handles.is_empty() {
+        if workers.is_empty() {
             tracing::debug!("http server has no listeners configured, returning");
             return;
         }
 
         tokio::pin!(stop);
-
-        loop {
-            tokio::select! {
-                biased;
-                _ = &mut stop => {
-                    token.cancel();
-                    drain(handles).await;
-                    return;
+        // Wait for either the stop signal or any worker to exit on its own.
+        // Either branch cancels the token, which the listeners and reload
+        // watcher observe as their graceful-shutdown trigger.
+        tokio::select! {
+            biased;
+            _ = &mut stop => {
+                token.cancel();
+                workers.drain(DRAIN_TIMEOUT).await;
+            }
+            name = workers.wait_for_any_exit() => {
+                if let Some(name) = name {
+                    tracing::info!(
+                        worker = name,
+                        "http worker exited early, draining remaining workers"
+                    );
                 }
-                result = handles.next() => match result {
-                    None => return,
-                    Some(Err(err)) => {
-                        tracing::error!(error = &err as &dyn StdError, "http server task panicked");
-                        token.cancel();
-                    }
-                    Some(Ok(())) => {
-                        token.cancel();
-                    }
-                },
+                token.cancel();
+                workers.drain(DRAIN_TIMEOUT).await;
             }
         }
+    }
+}
+
+/// Serve `app` from `listener` until `token` is cancelled.
+async fn serve_until_cancelled<L>(listener: L, app: Router, token: CancellationToken)
+where
+    L: Listener + Send + 'static,
+    L::Io: Send,
+    L::Addr: Debug + Send,
+{
+    use std::error::Error as StdError;
+    use std::future::IntoFuture as _;
+
+    let serve =
+        axum::serve(listener, app).with_graceful_shutdown(async move { token.cancelled().await });
+    if let Err(err) = serve.into_future().await {
+        tracing::error!(
+            error = &err as &dyn StdError,
+            "http server exited with error"
+        );
     }
 }
 
@@ -218,35 +218,12 @@ impl Default for HttpServer {
     }
 }
 
-/// Drains all remaining join handles with a hard ceiling of [`DRAIN_TIMEOUT`].
-///
-/// axum's `with_graceful_shutdown` waits forever for in-flight connections by
-/// default. Without an outer timeout, a single slow client can hang the
-/// shutdown indefinitely. Tasks that do not finish before the deadline are
-/// detached (the `FuturesUnordered` is dropped mid-iteration) and left for
-/// the runtime to clean up at process exit. We do not abort them, so an
-/// in-flight response can still finish writing if the connection drops
-/// cleanly afterwards.
-async fn drain(handles: FuturesUnordered<JoinHandle<()>>) {
-    match timeout(DRAIN_TIMEOUT, drain_all(handles)).await {
-        Ok(()) => tracing::info!("http server drain complete"),
-        Err(_) => tracing::warn!(
-            "http server drain timed out after {:?}, detaching remaining tasks",
-            DRAIN_TIMEOUT
-        ),
-    }
-}
-
-/// Inner drain loop without an outer deadline. Returns when every task has
-/// completed.
-async fn drain_all(mut handles: FuturesUnordered<JoinHandle<()>>) {
-    while let Some(result) = handles.next().await {
-        if let Err(err) = result {
-            tracing::error!(
-                error = &err as &dyn StdError,
-                "http server task panicked during drain"
-            );
-        }
+/// Adapter that lets [`HttpServer`] be driven by a `aperture-runtime`
+/// supervisor. The supervisor hands us a `stop` future; we forward it to
+/// `HttpServer::run`.
+impl Worker for HttpServer {
+    async fn run(self, stop: Stop) {
+        HttpServer::run(self, stop).await;
     }
 }
 
