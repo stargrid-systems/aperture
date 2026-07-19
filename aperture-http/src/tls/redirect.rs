@@ -46,9 +46,14 @@ fn redirect_to_https(https_port: u16, request: Request) -> Response {
 
 /// Strips the `:port` suffix from a Host header value.
 ///
-/// Handles bracketed IPv6 hosts (`[::1]:8080` -> `[::1]`); bare-IPv6-without-
-/// port is not produced by HTTP/1.1 senders.
+/// Handles bracketed IPv6 hosts (`[::1]:8080` -> `[::1]`) and bare IPv6
+/// addresses without a port (`[::1]` -> `[::1]`).
 fn strip_port(host: &str) -> &str {
+    if host.starts_with('[')
+        && let Some(end) = host.find(']')
+    {
+        return &host[..=end];
+    }
     host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host)
 }
 
@@ -62,6 +67,7 @@ mod tests {
     #[test]
     fn strip_port_handles_bracketed_ipv6() {
         assert_eq!(strip_port("[::1]:8080"), "[::1]");
+        assert_eq!(strip_port("[::1]"), "[::1]");
         assert_eq!(strip_port("example.com:8080"), "example.com");
         assert_eq!(strip_port("example.com"), "example.com");
     }

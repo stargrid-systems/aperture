@@ -40,7 +40,14 @@ pub(crate) async fn fallback(State(state): State<AppState>, request: Request) ->
 
 fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
     if matches_etag(request.headers(), &image.etag) {
-        return (StatusCode::NOT_MODIFIED, [(ETAG, image.etag.clone())]).into_response();
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (ETAG, image.etag.clone()),
+                (CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+            ],
+        )
+            .into_response();
     }
 
     let (accept_br, accept_gzip) = accepted_encodings(request.headers());
@@ -56,9 +63,9 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
     headers.insert(CONTENT_TYPE, content_type);
     headers.insert(ETAG, image.etag.clone());
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
     if let Some(encoding) = resolved.encoding {
         headers.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
-        headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
     }
     response
 }

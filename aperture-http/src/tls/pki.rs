@@ -136,7 +136,9 @@ fn compute_sans(bind_addr: SocketAddr) -> Vec<SanType> {
 ///
 /// All four artifacts must be present together. If any is missing (e.g. from a
 /// partially-interrupted first run), the entire PKI is regenerated so the
-/// rotation code can rely on a complete set.
+/// rotation code can rely on a complete set. Keys are written before their
+/// matching certs so a crash between writes leaves a state that rustls rejects
+/// at load time rather than silently corrupting handshakes.
 pub async fn ensure_certificates(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
@@ -150,10 +152,10 @@ pub async fn ensure_certificates(
     }
     tracing::info!("generating initial PKI");
     let pki = spawn_blocking(move || generate_pki(bind_addr)).await??;
-    store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
     store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
-    store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
+    store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &pki.server_key).await?;
+    store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
     Ok(())
 }
 
@@ -175,36 +177,41 @@ pub async fn reload_certificates(
     Ok(())
 }
 
-/// Returns true when the server certificate is past half-life.
+/// Returns true when the server certificate is past half of its own validity.
 ///
-/// This checks the remaining validity of the actual certificate rather than
-/// the artifact's `downloaded_at` field, making it robust against unrelated
-/// re-fetches and custom uploaded certs.
+/// The threshold is computed from the cert's `not_before` and `not_after`, not
+/// from the hardcoded `LEAF_VALIDITY_DAYS`, so uploaded custom certs keep their
+/// own lifetime regardless of the default rotation policy.
 pub async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
     let der = read_artifact(artifacts, &SERVER_CERT).await?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der)
         .map_err(|e| TlsError::CertParse(format!("x509 parse failed: {e}")))?;
+    let validity = cert.validity();
     // `time_to_expiration` returns None when the cert is not currently valid
     // (expired or not-yet-effective). Either way, rotation is wanted.
-    let remaining_seconds = cert
-        .validity()
-        .time_to_expiration()
-        .map(|d| d.whole_seconds());
-    let Some(remaining_seconds) = remaining_seconds else {
+    let Some(remaining) = validity.time_to_expiration() else {
         return Ok(true);
     };
-    let half_life_seconds = (LEAF_VALIDITY_DAYS as i64) * 24 * 60 * 60 / 2;
-    Ok(remaining_seconds < half_life_seconds)
+    // `not_after - not_before` is None only if the cert is malformed
+    // (not_after <= not_before). Treat that as needing rotation too.
+    let Some(total) = validity.not_after - validity.not_before else {
+        return Ok(true);
+    };
+    Ok(remaining < total / 2)
 }
 
 /// Generates a new leaf certificate and stores it as artifacts.
+///
+/// The key is written before the cert so a crash between writes leaves a state
+/// that rustls rejects (stale cert, new key) rather than silently corrupting
+/// handshakes (new cert, stale key).
 pub async fn rotate_certificate(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
 ) -> Result<(), TlsError> {
     let (cert, key) = regenerate_leaf(artifacts, bind_addr).await?;
-    store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
+    store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
     Ok(())
 }
 
@@ -358,7 +365,7 @@ mod tests {
         // Sanity: complete set is in place.
         assert!(artifacts.locate(&SERVER_CERT).await.unwrap().is_some());
 
-        // Drop the server key. ensure_certificates should regenerate the PKI
+        // Drop the server cert. ensure_certificates should regenerate the PKI
         // (and a new server-cert/key pair along with it).
         let latest = artifacts
             .artifact(&SERVER_CERT)

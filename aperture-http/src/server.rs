@@ -1,5 +1,6 @@
 //! Unified HTTP server: owns all listeners and the TLS reload watcher.
 
+use std::error::Error as StdError;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -131,7 +132,10 @@ impl HttpServer {
                     .with_graceful_shutdown(async move { token.cancelled().await })
                     .await
                 {
-                    tracing::error!(error = %err, "https server exited with error");
+                    tracing::error!(
+                        error = &err as &dyn StdError,
+                        "https server exited with error"
+                    );
                 }
             }));
         }
@@ -148,7 +152,10 @@ impl HttpServer {
                     .with_graceful_shutdown(async move { token.cancelled().await })
                     .await
                 {
-                    tracing::error!(error = %err, "http server exited with error");
+                    tracing::error!(
+                        error = &err as &dyn StdError,
+                        "http server exited with error"
+                    );
                 }
             }));
         }
@@ -170,7 +177,7 @@ impl HttpServer {
                 result = handles.next() => match result {
                     None => return,
                     Some(Err(err)) => {
-                        tracing::error!(error = %err, "http server task panicked");
+                        tracing::error!(error = &err as &dyn StdError, "http server task panicked");
                         token.cancel();
                     }
                     Some(Ok(())) => {
@@ -192,7 +199,10 @@ impl Default for HttpServer {
 async fn drain(mut handles: FuturesUnordered<JoinHandle<()>>) {
     while let Some(handle) = handles.next().await {
         if let Err(err) = handle {
-            tracing::error!(error = %err, "http server task panicked during drain");
+            tracing::error!(
+                error = &err as &dyn StdError,
+                "http server task panicked during drain"
+            );
         }
     }
 }

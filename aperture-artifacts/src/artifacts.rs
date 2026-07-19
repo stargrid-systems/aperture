@@ -258,11 +258,13 @@ impl Artifacts {
         request: FetchRequest,
         progress: ProgressHandle,
     ) -> Result<Artifact> {
-        let artifact = self.inner.download(&request, &progress).await?;
-        self.inner.notify(ArtifactChange {
-            key: artifact.key.clone(),
-            kind: ChangeKind::Written,
-        });
+        let (artifact, written) = self.inner.download(&request, &progress).await?;
+        if written {
+            self.inner.notify(ArtifactChange {
+                key: artifact.key.clone(),
+                kind: ChangeKind::Written,
+            });
+        }
         Ok(artifact)
     }
 
@@ -330,27 +332,26 @@ impl Inner {
     }
 
     /// Resolves the request to a content digest, reuses the blob if it is
-    /// already present, and otherwise fetches it. Reuse is keyed on the
-    /// resolved digest, so the recorded source is irrelevant: the same
-    /// content is never pulled twice, and a repointed tag is picked up
-    /// because the reference is re-resolved (subject to the resolution
-    /// cache).
+    /// already present, and otherwise fetches it.
+    ///
+    /// Returns the artifact and whether a new version was recorded (and thus
+    /// whether a change-feed notification is warranted).
     async fn download(
         &self,
         request: &FetchRequest,
         progress: &ProgressHandle,
-    ) -> Result<Artifact> {
+    ) -> Result<(Artifact, bool)> {
         let repository = self.storage.artifacts()?;
         let now = Timestamp::now();
         let resolved = self.resolve(request, now).await?;
         let digest_str = resolved.digest.to_string();
 
         // Fast path: this version is already recorded and its blob is present.
-        // Pure reads, so no lock is needed.
+        // Read-only, so no lock is needed.
         if let Some(existing) = repository.get_version(&request.key, &digest_str).await?
             && self.blobs.contains(&resolved.digest).await
         {
-            return Ok(existing);
+            return Ok((existing, false));
         }
 
         // Anything that writes runs under the per-digest lock, so concurrent
@@ -360,7 +361,7 @@ impl Inner {
 
         // Re-check under the lock: another caller may have finished meanwhile.
         if let Some(existing) = repository.get_version(&request.key, &digest_str).await? {
-            return Ok(existing);
+            return Ok((existing, false));
         }
         // The blob is present (shared from another key), so record without
         // pulling.
@@ -374,7 +375,7 @@ impl Inner {
                 now,
             );
             repository.record_version(&artifact).await?;
-            return Ok(artifact);
+            return Ok((artifact, true));
         }
 
         let fetched = self.execute(request, progress).await?;
@@ -387,7 +388,7 @@ impl Inner {
             Timestamp::now(),
         );
         repository.record_version(&artifact).await?;
-        Ok(artifact)
+        Ok((artifact, true))
     }
 
     /// Resolves `request` to its content, using the cache when a recent entry

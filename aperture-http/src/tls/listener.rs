@@ -8,13 +8,19 @@
 use std::error::Error as StdError;
 use std::io;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use axum::serve::Listener;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 
 use super::SharedConfig;
+
+/// Backoff applied after a `TcpListener::accept` error to avoid busy-looping
+/// under persistent failures such as fd exhaustion.
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 /// A `TcpListener` that performs TLS on every accepted connection.
 pub struct TlsListener {
@@ -39,6 +45,7 @@ impl Listener for TlsListener {
                 Ok(conn) => conn,
                 Err(err) => {
                     tracing::error!(error = &err as &dyn StdError, "tcp accept failed");
+                    sleep(ACCEPT_ERROR_BACKOFF).await;
                     continue;
                 }
             };

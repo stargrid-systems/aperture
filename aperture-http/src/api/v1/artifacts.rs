@@ -14,7 +14,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::conditional::{etag_from_digest, format_http_date, matches_etag};
+use crate::conditional::{etag_from_digest, format_http_date, is_not_modified};
 use crate::dto::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, Page, VersionListParams,
     artifact_page, version_page,
@@ -228,8 +228,9 @@ async fn download_artifact_blob(
         .ok_or(ApiError::NOT_FOUND)?;
 
     let etag = etag_from_digest(&artifact.digest);
+    let last_modified = format_http_date(artifact.downloaded_at);
 
-    if matches_etag(&headers, &etag) {
+    if is_not_modified(&headers, &etag, artifact.downloaded_at) {
         return Ok((
             StatusCode::NOT_MODIFIED,
             [
@@ -238,6 +239,7 @@ async fn download_artifact_blob(
                     header::CACHE_CONTROL,
                     HeaderValue::from_static("public, max-age=31536000, immutable"),
                 ),
+                (header::LAST_MODIFIED, last_modified),
             ],
         )
             .into_response());
@@ -252,8 +254,8 @@ async fn download_artifact_blob(
         .map_err(ArtifactError::from)?;
     let content_type = artifact
         .media_type
-        .unwrap_or_else(|| "application/octet-stream".to_owned());
-    let last_modified = format_http_date(artifact.downloaded_at);
+        .as_deref()
+        .unwrap_or("application/octet-stream");
 
     Response::builder()
         .header(header::CONTENT_TYPE, content_type)

@@ -5,6 +5,7 @@
 //! triggers for a set of workers, so a single OS signal can drain them all in
 //! registration order.
 
+use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -62,7 +63,11 @@ impl Supervisor {
         for (name, handle) in self.handles {
             match timeout(DRAIN_TIMEOUT, handle).await {
                 Ok(Ok(())) => {}
-                Ok(Err(err)) => tracing::error!(worker = name, error = %err, "worker panicked"),
+                Ok(Err(err)) => tracing::error!(
+                    worker = name,
+                    error = &err as &dyn StdError,
+                    "worker panicked"
+                ),
                 Err(_) => tracing::error!(worker = name, "worker did not drain within 30s"),
             }
         }
@@ -76,7 +81,11 @@ impl Supervisor {
         let early_exit = async {
             for (name, handle) in &mut self.handles {
                 if let Err(err) = handle.await {
-                    tracing::error!(worker = name, error = %err, "worker exited unexpectedly");
+                    tracing::error!(
+                        worker = name,
+                        error = &err as &dyn StdError,
+                        "worker exited unexpectedly"
+                    );
                     return;
                 }
             }
@@ -111,7 +120,7 @@ impl TasksWorker {
 impl Worker for TasksWorker {
     async fn run(self, stop: Stop) {
         if let Err(err) = self.tasks.reconcile().await {
-            tracing::error!(error = %err, "tasks reconciliation failed");
+            tracing::error!(error = &err as &dyn StdError, "tasks reconciliation failed");
         }
         self.scheduler.run(SCHEDULER_TICK, stop).await;
         self.tasks.shutdown().await;

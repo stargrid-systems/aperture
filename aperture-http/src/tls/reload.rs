@@ -44,14 +44,16 @@ impl TlsReload {
                     key,
                     kind: ChangeKind::Written,
                 }) if key == *SERVER_CERT || key == *SERVER_KEY => {
-                    let now = Instant::now();
-                    *deadline = Some(deadline.map_or(now, |d| d.max(now)) + RELOAD_DEBOUNCE);
+                    *deadline = Some(Instant::now() + RELOAD_DEBOUNCE);
                 }
                 Ok(_) => {}
                 Err(RecvError::Lagged(_)) => {
                     tracing::warn!("tls reload watcher lagged the artifact feed");
                 }
-                Err(RecvError::Closed) => return false,
+                Err(RecvError::Closed) => {
+                    tracing::warn!("artifact change feed closed; TLS reload watcher exiting");
+                    return false;
+                }
             }
             true
         }
