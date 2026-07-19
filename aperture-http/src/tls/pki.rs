@@ -284,6 +284,19 @@ mod tests {
     use aperture_storage::Storage;
 
     use super::*;
+    use crate::tls::{TlsReload, load_shared_config};
+
+    /// Installs the ring crypto provider once per test process.
+    fn install_crypto() {
+        use std::sync::Once;
+
+        use rustls::crypto::ring;
+
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = ring::default_provider().install_default();
+        });
+    }
 
     /// A temporary blob store directory removed when dropped.
     struct TempDir(PathBuf);
@@ -379,5 +392,98 @@ mod tests {
         assert!(artifacts.locate(&SERVER_KEY).await.unwrap().is_some());
         assert!(artifacts.locate(&CA_CERT).await.unwrap().is_some());
         assert!(artifacts.locate(&CA_KEY).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn load_server_config_succeeds_after_ensure() {
+        install_crypto();
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+        let config = load_server_config(&artifacts).await.unwrap();
+        // A successfully built ServerConfig can provide a cert resolver.
+        // We just verify no panic and no error.
+        let _ = config;
+    }
+
+    #[tokio::test]
+    async fn load_server_config_fails_on_corrupt_key() {
+        install_crypto();
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+
+        // Overwrite the key with garbage.
+        artifacts
+            .put(&SERVER_KEY, Some("application/pkcs8"), &b"corrupt"[..])
+            .await
+            .unwrap();
+
+        assert!(load_server_config(&artifacts).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reload_certificates_swaps_shared_config() {
+        install_crypto();
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+
+        let config = load_shared_config(&artifacts).await.unwrap();
+        let old = config.load_full();
+
+        rotate_certificate(&artifacts, addr).await.unwrap();
+        reload_certificates(&artifacts, &config).await.unwrap();
+
+        let new = config.load_full();
+        assert!(
+            !Arc::ptr_eq(&old, &new),
+            "shared config was not swapped after reload"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotate_if_due_returns_false_for_fresh_cert() {
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+
+        let rotated = rotate_if_due(&artifacts, addr).await.unwrap();
+        assert!(!rotated, "fresh cert should not need rotation");
+    }
+
+    #[tokio::test]
+    async fn reload_watcher_swaps_config_on_cert_change() {
+        install_crypto();
+        use std::time::Duration;
+
+        use tokio::time::sleep;
+        use tokio_util::sync::CancellationToken;
+
+        let (artifacts, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr).await.unwrap();
+
+        let config = load_shared_config(&artifacts).await.unwrap();
+        let old = config.load_full();
+
+        let reload = TlsReload::new(artifacts.clone(), config.clone());
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(reload.run(token.clone()));
+
+        // Trigger a cert change via the rotation path.
+        rotate_certificate(&artifacts, addr).await.unwrap();
+
+        // Wait for debounce (500 ms) + reload I/O.
+        sleep(Duration::from_millis(1500)).await;
+
+        let new = config.load_full();
+        assert!(
+            !Arc::ptr_eq(&old, &new),
+            "watcher did not reload config after cert change"
+        );
+
+        token.cancel();
+        handle.await.unwrap();
     }
 }

@@ -208,3 +208,80 @@ async fn drain(mut handles: FuturesUnordered<JoinHandle<()>>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use axum::routing::get;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio::time::{sleep, timeout};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_server_returns_immediately() {
+        let server = HttpServer::new();
+        let (_tx, rx) = oneshot::channel::<()>();
+        timeout(
+            Duration::from_millis(100),
+            server.run(async move {
+                let _ = rx.await;
+            }),
+        )
+        .await
+        .expect("server with no listeners should return immediately");
+    }
+
+    #[tokio::test]
+    async fn run_drains_after_stop_signal() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = HttpServer::new()
+            .serve_http(listener, Router::new().route("/", get(|| async { "ok" })));
+
+        let (tx, rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            server
+                .run(async move {
+                    let _ = rx.await;
+                })
+                .await;
+        });
+
+        sleep(Duration::from_millis(100)).await;
+        let _ = tx.send(());
+
+        timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("server did not drain within 5s")
+            .expect("server task panicked");
+    }
+
+    #[tokio::test]
+    async fn run_drains_two_listeners_after_stop() {
+        let l1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let l2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+
+        let server = HttpServer::new()
+            .serve_http(l1, Router::new().route("/", get(|| async { "1" })))
+            .serve_http(l2, Router::new().route("/", get(|| async { "2" })));
+
+        let (tx, rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            server
+                .run(async move {
+                    let _ = rx.await;
+                })
+                .await;
+        });
+
+        sleep(Duration::from_millis(100)).await;
+        let _ = tx.send(());
+
+        timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("server did not drain within 5s")
+            .expect("server task panicked");
+    }
+}
