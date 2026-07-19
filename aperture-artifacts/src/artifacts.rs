@@ -586,11 +586,9 @@ fn build_artifact(
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::fs;
     use std::path::PathBuf;
-    use std::process;
     use std::time::Duration;
+    use std::{env, fs, process};
 
     use aperture_storage::Storage;
     use tokio::time::timeout;
@@ -647,10 +645,7 @@ mod tests {
     async fn evict_version_publishes_removed_event() {
         let (artifacts, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
-        let artifact = artifacts
-            .put(&key, None, &b"bytes"[..])
-            .await
-            .unwrap();
+        let artifact = artifacts.put(&key, None, &b"bytes"[..]).await.unwrap();
 
         let mut rx = artifacts.subscribe();
         artifacts
@@ -667,15 +662,15 @@ mod tests {
     async fn late_subscriber_misses_earlier_events() {
         let (artifacts, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
-        artifacts
-            .put(&key, None, &b"first"[..])
-            .await
-            .unwrap();
+        artifacts.put(&key, None, &b"first"[..]).await.unwrap();
 
         // Subscribe after the write completed. No event should arrive.
         let mut rx = artifacts.subscribe();
         let outcome = timeout(Duration::from_millis(50), rx.recv()).await;
-        assert!(outcome.is_err(), "late subscriber should not see prior events");
+        assert!(
+            outcome.is_err(),
+            "late subscriber should not see prior events"
+        );
         cleanup(dir);
     }
 

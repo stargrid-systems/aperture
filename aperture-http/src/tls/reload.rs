@@ -8,8 +8,8 @@ use std::error::Error as StdError;
 use std::time::Duration;
 
 use aperture_artifacts::{ArtifactChange, Artifacts, ChangeKind};
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 

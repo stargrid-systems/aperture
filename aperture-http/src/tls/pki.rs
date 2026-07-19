@@ -373,8 +373,22 @@ mod tests {
         assert!(artifacts.locate(&SERVER_CERT).await.unwrap().is_some());
 
         // Capture the four initial digests so we can confirm regeneration.
-        let old_ca_cert = artifacts.artifact(&CA_CERT).await.unwrap().unwrap().latest.digest.clone();
-        let old_ca_key = artifacts.artifact(&CA_KEY).await.unwrap().unwrap().latest.digest.clone();
+        let old_ca_cert = artifacts
+            .artifact(&CA_CERT)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
+        let old_ca_key = artifacts
+            .artifact(&CA_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
         let old_server_cert = artifacts
             .artifact(&SERVER_CERT)
             .await
@@ -401,8 +415,22 @@ mod tests {
 
         ensure_certificates(&artifacts, addr).await.unwrap();
 
-        let new_ca_cert = artifacts.artifact(&CA_CERT).await.unwrap().unwrap().latest.digest.clone();
-        let new_ca_key = artifacts.artifact(&CA_KEY).await.unwrap().unwrap().latest.digest.clone();
+        let new_ca_cert = artifacts
+            .artifact(&CA_CERT)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
+        let new_ca_key = artifacts
+            .artifact(&CA_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
         let new_server_cert = artifacts
             .artifact(&SERVER_CERT)
             .await
@@ -427,8 +455,14 @@ mod tests {
         assert!(artifacts.locate(&SERVER_KEY).await.unwrap().is_some());
         assert!(artifacts.locate(&CA_CERT).await.unwrap().is_some());
         assert!(artifacts.locate(&CA_KEY).await.unwrap().is_some());
-        assert_ne!(new_ca_cert, old_ca_cert, "CA cert should have been regenerated");
-        assert_ne!(new_ca_key, old_ca_key, "CA key should have been regenerated");
+        assert_ne!(
+            new_ca_cert, old_ca_cert,
+            "CA cert should have been regenerated"
+        );
+        assert_ne!(
+            new_ca_key, old_ca_key,
+            "CA key should have been regenerated"
+        );
         assert_ne!(
             new_server_cert, old_server_cert,
             "server cert should have been regenerated"
@@ -598,8 +632,11 @@ mod tests {
         .expect("connect within timeout");
 
         let server_name = ServerName::try_from("localhost").unwrap();
-        let handshake =
-            timeout(Duration::from_secs(2), connector.connect(server_name, stream)).await;
+        let handshake = timeout(
+            Duration::from_secs(2),
+            connector.connect(server_name, stream),
+        )
+        .await;
         // Make sure the server task returns even on failure so its panicked
         // status surfaces.
         let _ = timeout(Duration::from_secs(1), server).await;

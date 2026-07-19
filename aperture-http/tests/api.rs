@@ -6,8 +6,8 @@ use aperture_storage::DbId;
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{HeaderValue, Request, StatusCode};
 use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION};
+use axum::http::{HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use jiff::Timestamp;
 use serde_json::{Value, json};
@@ -35,7 +35,11 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
 async fn seeded_app() -> (Router, Artifacts, Storage) {
     // Unique per call so parallel tests in the same binary do not stomp on
     // each other's blob store.
-    let root = env::temp_dir().join(format!("aperture-api-{}-{}", process::id(), uuid::Uuid::new_v4()));
+    let root = env::temp_dir().join(format!(
+        "aperture-api-{}-{}",
+        process::id(),
+        uuid::Uuid::new_v4()
+    ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
     let artifacts = Artifacts::new(storage.clone(), root);
@@ -498,7 +502,12 @@ async fn put_then_get_round_trips_blob_bytes() {
     let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
     let response = app
         .clone()
-        .oneshot(Request::builder().uri(&blob_uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(&blob_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -585,7 +594,12 @@ async fn put_rejects_html_media_type_parameters() {
     let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
     let response = app
         .clone()
-        .oneshot(Request::builder().uri(&blob_uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(&blob_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     // The sanitised media type is dropped, so the GET falls back to the safe

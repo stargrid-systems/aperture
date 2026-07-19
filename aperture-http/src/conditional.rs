@@ -148,4 +148,3 @@ mod tests {
         assert!(is_not_modified(&headers, &etag, ts));
     }
 }
-

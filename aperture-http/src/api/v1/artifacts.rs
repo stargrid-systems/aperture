@@ -241,7 +241,10 @@ async fn upload_artifact(
     // Percent-encode the key so a multi-segment key like `tls/server-cert`
     // survives routing when the client follows the Location header.
     let encoded_key = utf8_percent_encode(key.as_str(), PATH_SEGMENT);
-    let location = format!("/api/v1/artifacts/{encoded_key}/versions/{}", artifact.digest);
+    let location = format!(
+        "/api/v1/artifacts/{encoded_key}/versions/{}",
+        artifact.digest
+    );
     Ok((
         StatusCode::CREATED,
         [(header::LOCATION, location)],
@@ -360,8 +363,20 @@ fn is_token(s: &str) -> bool {
         b.is_ascii_alphanumeric()
             || matches!(
                 b,
-                b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^'
-                    | b'_' | b'`' | b'|' | b'~'
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
             )
     })
 }

@@ -4,7 +4,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
-use aperture_http::tls::{RotateCertificateDefinition, init_crypto_provider, install_default_rotation_schedule};
+use aperture_http::tls::{
+    RotateCertificateDefinition, init_crypto_provider, install_default_rotation_schedule,
+};
 use aperture_http::{AppState, HttpServer, OpenApiSpec, Spectra, SpectraConfig};
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
