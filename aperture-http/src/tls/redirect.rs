@@ -10,6 +10,17 @@
 //!
 //! Requests without a usable `Host` header are rejected with `400 Bad Request`
 //! rather than guessed: there is no safe default the gateway can assume.
+//!
+//! # Open-redirect note
+//!
+//! The redirect target is built from the verbatim `Host` header the client
+//! sends. Browsers will not let users forge Host, so a direct browser request
+//! cannot be redirected to an attacker-chosen domain. If anything in front of
+//! the gateway (a reverse proxy, a load balancer, a transparent proxy)
+//! forwards attacker-controlled Host values, this router will reflect them.
+//! Either pin the public hostname in the gateway configuration before
+//! exposing the redirect listener behind such a proxy, or strip untrusted
+//! Host values at the proxy.
 
 use axum::Router;
 use axum::extract::Request;

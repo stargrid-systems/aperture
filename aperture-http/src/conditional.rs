@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use axum::http::{HeaderMap, HeaderValue, header};
 use jiff::Timestamp;
 
-/// Formats a timestamp as an RFC 7231 IMF-fixdate header value.
+/// Formats a timestamp as an RFC 9110 IMF-fixdate header value.
 ///
 /// Example output: `Sun, 06 Nov 1994 08:49:37 GMT`.
 pub(crate) fn format_http_date(ts: Timestamp) -> HeaderValue {
@@ -14,7 +14,7 @@ pub(crate) fn format_http_date(ts: Timestamp) -> HeaderValue {
         .expect("HTTP date is always valid ASCII")
 }
 
-/// Parses an RFC 7231 IMF-fixdate string into a timestamp.
+/// Parses an RFC 9110 IMF-fixdate string into a timestamp.
 pub(crate) fn parse_http_date(s: &str) -> Option<Timestamp> {
     let system_time = httpdate::parse_http_date(s).ok()?;
     Timestamp::try_from(system_time).ok()
@@ -30,7 +30,7 @@ pub(crate) fn etag_from_digest(digest: &str) -> HeaderValue {
 /// Returns `true` when the request's `If-None-Match` header matches `etag`.
 ///
 /// Handles the wildcard `"*"`, comma-separated lists, and weak validators
-/// (`W/"..."`) per RFC 9110 §8.8.3.2 (weak comparison algorithm).
+/// (`W/"..."`) per RFC 9110 section 8.8.3.2 (weak comparison algorithm).
 pub(crate) fn matches_etag(headers: &HeaderMap, etag: &HeaderValue) -> bool {
     let Some(value) = headers.get(header::IF_NONE_MATCH) else {
         return false;
@@ -53,7 +53,7 @@ pub(crate) fn matches_etag(headers: &HeaderMap, etag: &HeaderValue) -> bool {
 ///
 /// Evaluates `If-None-Match` first (ETag-based). If absent, falls back to
 /// `If-Modified-Since` (date-based). This precedence is mandated by
-/// RFC 9110 §13.1.3.
+/// RFC 9110 section 13.2.2 (evaluation order).
 pub(crate) fn is_not_modified(
     headers: &HeaderMap,
     etag: &HeaderValue,
@@ -133,7 +133,8 @@ mod tests {
         headers.insert(header::IF_MODIFIED_SINCE, future_date);
         let etag = "\"abc\"".parse().unwrap();
         let ts: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
-        // ETag doesn't match → not 304, even though If-Modified-Since would say 304.
+        // ETag does not match, so this is not 304, even though If-Modified-Since
+        // alone would say 304.
         assert!(!is_not_modified(&headers, &etag, ts));
     }
 
@@ -147,3 +148,4 @@ mod tests {
         assert!(is_not_modified(&headers, &etag, ts));
     }
 }
+

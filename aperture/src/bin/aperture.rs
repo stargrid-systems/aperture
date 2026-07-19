@@ -42,7 +42,10 @@ struct RunArgs {
 
 /// Listener address.
 ///
-/// An empty string means "no listener".
+/// An empty string means "no listener". Anything else is parsed strictly as a
+/// `SocketAddr` (`host:port`), so hostnames like `localhost:8080` are not
+/// supported. Use an IP literal such as `127.0.0.1:8080` or
+/// `[::1]:8080` instead.
 #[derive(Clone, Debug)]
 struct BindAddr(Option<SocketAddr>);
 

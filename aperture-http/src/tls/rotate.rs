@@ -24,6 +24,11 @@ pub struct RotateCertificateInput {
     ///
     /// The bind IP is added to the leaf's Subject Alternative Names when it
     /// differs from the localhost defaults.
+    ///
+    /// Note: the value is captured at schedule-creation time. Reconfiguring
+    /// the gateway to bind a different address does not retroactively update
+    /// existing schedules. Delete and recreate the schedule, or restart the
+    /// gateway, to pick up a new bind address.
     pub bind_addr: String,
 }
 
@@ -64,30 +69,26 @@ impl TaskDefinition for RotateCertificateDefinition {
     type Output = RotateCertificateOutput;
 
     fn capabilities(&self) -> Capabilities {
-        // Safe to interrupt (a partial write is just an extra artifact
-        // version) and safe to re-run later (the cert either still needs
-        // rotation or it does not).
-        Capabilities {
-            cancellable: true,
-            resumable: true,
-        }
+        // The task body writes the new key and the new cert as two separate
+        // artifact versions. If the scheduler aborted it between those writes,
+        // the catalog would hold a fresh key paired with a stale cert, which
+        // rustls rejects on every subsequent reload until another rotation
+        // succeeds. Declaring the task non-cancellable and non-resumable keeps
+        // the scheduler from interrupting it mid-write.
+        Capabilities::NONE
     }
 
     async fn run(
         &self,
         input: RotateCertificateInput,
-        ctx: TaskContext,
+        _ctx: TaskContext,
     ) -> Result<RotateCertificateOutput, RunError> {
         let artifacts = self.artifacts.clone();
         let bind_addr = input.parse_bind_addr()?;
-        tokio::select! {
-            biased;
-            () = ctx.cancellation_token().cancelled() => Err(RunError::Cancelled),
-            rotated = pki::rotate_if_due(&artifacts, bind_addr) => {
-                let rotated = rotated.map_err(|err| RunError::Failed(anyhow::Error::from(err)))?;
-                Ok(RotateCertificateOutput { rotated })
-            }
-        }
+        let rotated = pki::rotate_if_due(&artifacts, bind_addr)
+            .await
+            .map_err(|err| RunError::Failed(anyhow::Error::from(err)))?;
+        Ok(RotateCertificateOutput { rotated })
     }
 }
 

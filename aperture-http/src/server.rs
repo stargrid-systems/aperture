@@ -3,17 +3,28 @@
 use std::error::Error as StdError;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use aperture_artifacts::Artifacts;
 use axum::Router;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::tls::{
     TlsListener, TlsReload, ensure_certificates, load_shared_config, redirect_router,
 };
+
+/// Upper bound on graceful drain after `stop` resolves.
+///
+/// axum's `with_graceful_shutdown` waits forever for in-flight connections by
+/// default. Without an outer timeout, a single slow client can hang the
+/// shutdown indefinitely. The supervisor layers its own per-worker timeout on
+/// top, but here we want connections to close on their own schedule before
+/// the hard kill.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A TLS listener paired with its application router.
 struct TlsEntry {
@@ -29,7 +40,7 @@ struct HttpEntry {
 
 /// Runs the gateway's HTTP stack.
 ///
-/// Owns an optional HTTPS listener, an optional plain-HTTP listener, and an
+/// Owns an optional HTTPS listener, zero or more plain-HTTP listeners, and an
 /// optional TLS certificate reload watcher. All configured listeners and the
 /// reload watcher run concurrently inside [`HttpServer::run`] and drain
 /// together when the `stop` future resolves.
@@ -39,7 +50,7 @@ struct HttpEntry {
 pub struct HttpServer {
     tls: Option<TlsEntry>,
     reload: Option<TlsReload>,
-    http: Option<HttpEntry>,
+    http: Vec<HttpEntry>,
 }
 
 impl HttpServer {
@@ -48,7 +59,7 @@ impl HttpServer {
         Self {
             tls: None,
             reload: None,
-            http: None,
+            http: Vec::new(),
         }
     }
 
@@ -75,9 +86,12 @@ impl HttpServer {
             let shared_config = load_shared_config(&artifacts).await?;
 
             let tcp_listener = TcpListener::bind(https_addr).await?;
+            // Log the actual bound address so an OS-assigned port (":0")
+            // surfaces in the startup banner instead of the requested one.
+            let bound = tcp_listener.local_addr().unwrap_or(https_addr);
             let tls_listener = TlsListener::new(tcp_listener, shared_config.clone());
             let tls_reload = TlsReload::new(artifacts.clone(), shared_config);
-            tracing::info!(%https_addr, "aperture listening (https)");
+            tracing::info!(%bound, "aperture listening (https)");
 
             server = server
                 .serve_tls(tls_listener, app.clone())
@@ -86,14 +100,15 @@ impl HttpServer {
 
         if let Some(http_addr) = http_addr {
             let http_listener = TcpListener::bind(http_addr).await?;
+            let bound = http_listener.local_addr().unwrap_or(http_addr);
             let http_app = match https_addr {
                 Some(https) => {
-                    tracing::info!(%http_addr, "http redirect listening");
+                    tracing::info!(%bound, "http redirect listening");
                     redirect_router(https.port())
                 }
                 None => {
                     tracing::warn!(
-                        %http_addr,
+                        %bound,
                         "serving full API over plain HTTP (https disabled)"
                     );
                     app
@@ -124,9 +139,13 @@ impl HttpServer {
     }
 
     /// Serves `app` over a plain HTTP listener.
+    ///
+    /// Multiple plain HTTP listeners can be attached by calling this method
+    /// more than once. The production gateway only attaches one, but the
+    /// builder stays additive so testing and recovery setups can run several.
     #[must_use]
     pub fn serve_http(mut self, listener: TcpListener, app: Router) -> Self {
-        self.http = Some(HttpEntry { listener, app });
+        self.http.push(HttpEntry { listener, app });
         self
     }
 
@@ -160,7 +179,7 @@ impl HttpServer {
             handles.push(tokio::spawn(reload.run(token)));
         }
 
-        if let Some(HttpEntry { listener, app }) = self.http {
+        for HttpEntry { listener, app } in self.http {
             let token = token.clone();
             handles.push(tokio::spawn(async move {
                 if let Err(err) = axum::serve(listener, app)
@@ -176,6 +195,7 @@ impl HttpServer {
         }
 
         if handles.is_empty() {
+            tracing::debug!("http server has no listeners configured, returning");
             return;
         }
 
@@ -210,10 +230,30 @@ impl Default for HttpServer {
     }
 }
 
-/// Drains all remaining join handles.
-async fn drain(mut handles: FuturesUnordered<JoinHandle<()>>) {
-    while let Some(handle) = handles.next().await {
-        if let Err(err) = handle {
+/// Drains all remaining join handles with a hard ceiling of [`DRAIN_TIMEOUT`].
+///
+/// axum's `with_graceful_shutdown` waits forever for in-flight connections by
+/// default. Without an outer timeout, a single slow client can hang the
+/// shutdown indefinitely. Tasks that do not finish before the deadline are
+/// detached (the `FuturesUnordered` is dropped mid-iteration) and left for
+/// the runtime to clean up at process exit. We do not abort them, so an
+/// in-flight response can still finish writing if the connection drops
+/// cleanly afterwards.
+async fn drain(handles: FuturesUnordered<JoinHandle<()>>) {
+    match timeout(DRAIN_TIMEOUT, drain_all(handles)).await {
+        Ok(()) => tracing::info!("http server drain complete"),
+        Err(_) => tracing::warn!(
+            "http server drain timed out after {:?}, detaching remaining tasks",
+            DRAIN_TIMEOUT
+        ),
+    }
+}
+
+/// Inner drain loop without an outer deadline. Returns when every task has
+/// completed.
+async fn drain_all(mut handles: FuturesUnordered<JoinHandle<()>>) {
+    while let Some(result) = handles.next().await {
+        if let Err(err) = result {
             tracing::error!(
                 error = &err as &dyn StdError,
                 "http server task panicked during drain"
@@ -229,7 +269,7 @@ mod tests {
     use axum::routing::get;
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
-    use tokio::time::{sleep, timeout};
+    use tokio::time::timeout;
 
     use super::*;
 
@@ -247,9 +287,29 @@ mod tests {
         .expect("server with no listeners should return immediately");
     }
 
+    /// Polls `addr` until it accepts a TCP connection, so the test does not
+    /// race against the listener spawning.
+    async fn wait_until_listening(addr: SocketAddr) {
+        use tokio::net::TcpStream;
+        use tokio::time::{sleep, timeout};
+
+        let deadline = Duration::from_secs(2);
+        timeout(deadline, async {
+            loop {
+                if TcpStream::connect(addr).await.is_ok() {
+                    return;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("listener becomes ready within the deadline");
+    }
+
     #[tokio::test]
     async fn run_drains_after_stop_signal() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bound = listener.local_addr().unwrap();
         let server = HttpServer::new()
             .serve_http(listener, Router::new().route("/", get(|| async { "ok" })));
 
@@ -262,7 +322,7 @@ mod tests {
                 .await;
         });
 
-        sleep(Duration::from_millis(100)).await;
+        wait_until_listening(bound).await;
         let _ = tx.send(());
 
         timeout(Duration::from_secs(5), handle)
@@ -274,7 +334,9 @@ mod tests {
     #[tokio::test]
     async fn run_drains_two_listeners_after_stop() {
         let l1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b1 = l1.local_addr().unwrap();
         let l2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b2 = l2.local_addr().unwrap();
 
         let server = HttpServer::new()
             .serve_http(l1, Router::new().route("/", get(|| async { "1" })))
@@ -289,7 +351,8 @@ mod tests {
                 .await;
         });
 
-        sleep(Duration::from_millis(100)).await;
+        wait_until_listening(b1).await;
+        wait_until_listening(b2).await;
         let _ = tx.send(());
 
         timeout(Duration::from_secs(5), handle)

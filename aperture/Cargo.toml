@@ -20,10 +20,10 @@ aperture-tasks = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
 clap = { workspace = true, features = ["std", "derive", "env", "help", "usage", "error-context", "suggestions"] }
 jiff = { workspace = true, features = ["std"] }
-rustls = { workspace = true, features = ["ring"] }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync", "time", "signal"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi", "tracing-log"] }
 uuid = { workspace = true, features = ["std", "v4"] }

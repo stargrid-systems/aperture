@@ -372,9 +372,10 @@ mod tests {
         // Sanity: complete set is in place.
         assert!(artifacts.locate(&SERVER_CERT).await.unwrap().is_some());
 
-        // Drop the server cert. ensure_certificates should regenerate the PKI
-        // (and a new server-cert/key pair along with it).
-        let latest = artifacts
+        // Capture the four initial digests so we can confirm regeneration.
+        let old_ca_cert = artifacts.artifact(&CA_CERT).await.unwrap().unwrap().latest.digest.clone();
+        let old_ca_key = artifacts.artifact(&CA_KEY).await.unwrap().unwrap().latest.digest.clone();
+        let old_server_cert = artifacts
             .artifact(&SERVER_CERT)
             .await
             .unwrap()
@@ -382,16 +383,60 @@ mod tests {
             .latest
             .digest
             .clone();
+        let old_server_key = artifacts
+            .artifact(&SERVER_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
+
+        // Drop the server cert. ensure_certificates should regenerate the PKI
+        // (and a new server-cert/key pair along with it).
         artifacts
-            .evict_version(&SERVER_CERT, &latest)
+            .evict_version(&SERVER_CERT, &old_server_cert)
             .await
             .unwrap();
 
         ensure_certificates(&artifacts, addr).await.unwrap();
+
+        let new_ca_cert = artifacts.artifact(&CA_CERT).await.unwrap().unwrap().latest.digest.clone();
+        let new_ca_key = artifacts.artifact(&CA_KEY).await.unwrap().unwrap().latest.digest.clone();
+        let new_server_cert = artifacts
+            .artifact(&SERVER_CERT)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
+        let new_server_key = artifacts
+            .artifact(&SERVER_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+            .latest
+            .digest
+            .clone();
+
+        // All four artifacts should be present with new digests. The docstring
+        // promises the entire PKI is regenerated, so verifying every digest
+        // changed guards against a future regression that only writes one.
         assert!(artifacts.locate(&SERVER_CERT).await.unwrap().is_some());
         assert!(artifacts.locate(&SERVER_KEY).await.unwrap().is_some());
         assert!(artifacts.locate(&CA_CERT).await.unwrap().is_some());
         assert!(artifacts.locate(&CA_KEY).await.unwrap().is_some());
+        assert_ne!(new_ca_cert, old_ca_cert, "CA cert should have been regenerated");
+        assert_ne!(new_ca_key, old_ca_key, "CA key should have been regenerated");
+        assert_ne!(
+            new_server_cert, old_server_cert,
+            "server cert should have been regenerated"
+        );
+        assert_ne!(
+            new_server_key, old_server_key,
+            "server key should have been regenerated"
+        );
     }
 
     #[tokio::test]
@@ -457,7 +502,7 @@ mod tests {
         install_crypto();
         use std::time::Duration;
 
-        use tokio::time::sleep;
+        use tokio::time::{sleep, timeout};
         use tokio_util::sync::CancellationToken;
 
         let (artifacts, _dir) = fresh_store().await;
@@ -474,16 +519,94 @@ mod tests {
         // Trigger a cert change via the rotation path.
         rotate_certificate(&artifacts, addr).await.unwrap();
 
-        // Wait for debounce (500 ms) + reload I/O.
-        sleep(Duration::from_millis(1500)).await;
-
-        let new = config.load_full();
-        assert!(
-            !Arc::ptr_eq(&old, &new),
-            "watcher did not reload config after cert change"
-        );
-
+        // The watcher debounces for 500 ms, then reloads. Poll for the swap
+        // with a generous outer timeout so the test fails cleanly instead of
+        // hanging on a fixed sleep.
+        let deadline = Duration::from_secs(5);
+        let observed = timeout(deadline, async {
+            loop {
+                let new = config.load_full();
+                if !Arc::ptr_eq(&old, &new) {
+                    return;
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
         token.cancel();
         handle.await.unwrap();
+        assert!(
+            observed.is_ok(),
+            "watcher did not reload config within {deadline:?} after cert change"
+        );
+    }
+
+    /// End-to-end check that the generated PKI actually works for a TLS
+    /// handshake. The unit tests above verify the pieces in isolation. This
+    /// one wires `ensure_certificates`, `load_shared_config`, `TlsListener`,
+    /// and a `TlsConnector` rooted at the generated CA together so a
+    /// composition bug does not slip past the test suite.
+    #[tokio::test]
+    async fn generated_pki_completes_a_real_tls_handshake() {
+        install_crypto();
+        use std::time::Duration;
+
+        use axum::serve::Listener;
+        use rustls::pki_types::ServerName;
+        use rustls::{ClientConfig, RootCertStore};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::time::{sleep, timeout};
+        use tokio_rustls::TlsConnector;
+
+        use super::super::TlsListener;
+
+        let (artifacts, _dir) = fresh_store().await;
+        let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        ensure_certificates(&artifacts, bind_addr).await.unwrap();
+
+        let shared = load_shared_config(&artifacts).await.unwrap();
+
+        let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bound = tcp.local_addr().unwrap();
+        let mut tls_listener = TlsListener::new(tcp, shared);
+
+        let server = tokio::spawn(async move {
+            // One accept is enough. The trait drives the handshake.
+            let _ = tls_listener.accept().await;
+        });
+
+        // Build a client that trusts only the CA we generated. The leaf cert
+        // carries `localhost` and the loopback IPs as SANs, so connecting by
+        // name should verify cleanly.
+        let ca_der = read_artifact(&artifacts, &CA_CERT).await.unwrap();
+        let mut roots = RootCertStore::empty();
+        roots.add(ca_der.as_slice().into()).unwrap();
+        let client_config = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = TlsConnector::from(Arc::new(client_config));
+
+        let stream = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(s) = TcpStream::connect(bound).await {
+                    return s;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("connect within timeout");
+
+        let server_name = ServerName::try_from("localhost").unwrap();
+        let handshake =
+            timeout(Duration::from_secs(2), connector.connect(server_name, stream)).await;
+        // Make sure the server task returns even on failure so its panicked
+        // status surfaces.
+        let _ = timeout(Duration::from_secs(1), server).await;
+        match handshake {
+            Ok(Ok(_)) => { /* handshake completed */ }
+            Ok(Err(err)) => panic!("TLS handshake failed: {err}"),
+            Err(_) => panic!("TLS handshake against generated PKI should complete within timeout"),
+        }
     }
 }

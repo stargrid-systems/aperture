@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
-use aperture_http::tls::{RotateCertificateDefinition, install_default_rotation_schedule};
+use aperture_http::tls::{RotateCertificateDefinition, init_crypto_provider, install_default_rotation_schedule};
 use aperture_http::{AppState, HttpServer, OpenApiSpec, Spectra, SpectraConfig};
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
@@ -76,12 +76,6 @@ pub async fn serve(
 
     supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())
-}
-
-/// Installs the `ring` crypto provider as the process-wide default.
-fn init_crypto_provider() {
-    use rustls::crypto::ring;
-    let _ = ring::default_provider().install_default();
 }
 
 /// Resolves when the process is asked to stop via Ctrl+C or SIGTERM.

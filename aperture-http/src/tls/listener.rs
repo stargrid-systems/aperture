@@ -22,6 +22,11 @@ use super::SharedConfig;
 /// under persistent failures such as fd exhaustion.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
+/// Backoff applied after a TLS handshake failure. A flood of probes that open
+/// a TCP connection and immediately close it (or send garbage) would otherwise
+/// spin the accept loop without any yield.
+const HANDSHAKE_ERROR_BACKOFF: Duration = Duration::from_millis(50);
+
 /// A `TcpListener` that performs TLS on every accepted connection.
 pub struct TlsListener {
     inner: TcpListener,
@@ -59,6 +64,7 @@ impl Listener for TlsListener {
                         %addr,
                         "tls handshake failed"
                     );
+                    sleep(HANDSHAKE_ERROR_BACKOFF).await;
                 }
             }
         }

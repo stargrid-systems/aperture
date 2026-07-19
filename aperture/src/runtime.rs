@@ -15,6 +15,7 @@ use aperture_tasks::{Scheduler, Tasks};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -77,7 +78,17 @@ impl Supervisor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let signal = tokio::spawn(signal);
+        // Bridge the abstract `signal` future into a CancellationToken so we
+        // can poll the "is the signal triggered" state more than once. The
+        // raw JoinHandle would panic if polled after completion.
+        let signal_token = CancellationToken::new();
+        let signal_watcher = {
+            let token = signal_token.clone();
+            tokio::spawn(async move {
+                signal.await;
+                token.cancel();
+            })
+        };
         let early_exit = async {
             for (name, handle) in &mut self.handles {
                 if let Err(err) = handle.await {
@@ -90,13 +101,30 @@ impl Supervisor {
                 }
             }
         };
-        tokio::select! {
+        tokio::pin!(early_exit);
+        // `first_signal` records which branch of the first select fired. If
+        // the signal already fired, there is nothing to wait for during the
+        // drain. If a worker exited early instead, the operator can still
+        // interrupt a slow drain with a second signal.
+        let first_signal = tokio::select! {
             biased;
-            _ = signal => {}
-            _ = early_exit => {}
-        }
+            _ = signal_token.cancelled() => true,
+            _ = early_exit => false,
+        };
         self.trigger();
-        self.await_all().await;
+        let drain = self.await_all();
+        tokio::pin!(drain);
+        if first_signal {
+            drain.await;
+        } else {
+            tokio::select! {
+                _ = &mut drain => {}
+                _ = signal_token.cancelled() => {
+                    tracing::warn!("second shutdown signal received, forcing exit");
+                }
+            }
+        }
+        signal_watcher.abort();
     }
 }
 

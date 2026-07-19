@@ -45,6 +45,10 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
             [
                 (ETAG, image.etag.clone()),
                 (CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+                // The 200 response varies by Accept-Encoding, so the 304 must
+                // advertise the same Vary per RFC 9110 section 15.4.5. The
+                // ETag alone does not distinguish encodings.
+                (VARY, HeaderValue::from_static("accept-encoding")),
             ],
         )
             .into_response();

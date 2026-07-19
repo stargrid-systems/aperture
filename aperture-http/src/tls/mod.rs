@@ -44,3 +44,17 @@ pub async fn load_shared_config(artifacts: &Artifacts) -> Result<SharedConfig, T
     let config = load_server_config(artifacts).await?;
     Ok(Arc::new(ArcSwap::from_pointee(config)))
 }
+
+/// Installs the `ring` crypto provider as the process-wide default.
+///
+/// Panics if a different provider was already installed. The chosen provider
+/// drives cipher suite selection and certificate signing, so silently falling
+/// back to a different one would change the security posture without the
+/// operator's knowledge.
+pub fn init_crypto_provider() {
+    use rustls::crypto::ring;
+
+    ring::default_provider()
+        .install_default()
+        .expect("a crypto provider is already installed, refusing to silently override it");
+}
