@@ -7,6 +7,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::TryStreamExt as _;
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use tokio::fs::File;
 use tokio_util::io::{ReaderStream, StreamReader};
 use utoipa_axum::router::OpenApiRouter;
@@ -23,19 +24,39 @@ use crate::error::ApiError;
 
 /// Maximum request body size for artifact ingestion.
 ///
-/// Applied as a backstop on all write endpoints. The body is streamed to disk,
-/// so this guards against runaway or malicious uploads filling the disk, not
-/// against memory exhaustion. We can promote this to a runtime config later.
+/// The body is streamed to disk, so this guards against runaway or malicious
+/// uploads filling the disk, not against memory exhaustion. The constant is
+/// larger than `i32::MAX`, so it assumes a 64-bit target. We can promote this
+/// to a runtime config later.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// ASCII set that percent-encodes everything unsafe inside a single URL path
+/// segment. `/` is the most important one here, because artifact keys may
+/// contain it (e.g. `tls/server-cert`) and an unencoded slash would shift the
+/// route match.
+const PATH_SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/');
 
 pub fn router() -> OpenApiRouter<AppState> {
     use tower_http::limit::RequestBodyLimitLayer;
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
-        .routes(routes!(upload_artifact, get_artifact))
+        .routes(routes!(get_artifact))
         .routes(routes!(list_versions))
-        .routes(routes!(get_version, delete_version))
+        .routes(routes!(get_version))
+        .routes(routes!(delete_version))
         .routes(routes!(download_artifact_blob))
+        .routes(routes!(upload_artifact))
         .layer(RequestBodyLimitLayer::new(MAX_UPLOAD_BYTES))
 }
 
@@ -166,7 +187,12 @@ async fn delete_version(
 
 /// Uploads a new artifact version.
 ///
-/// The request body is stored as a content-addressed blob.
+/// The request body is stored as a content-addressed blob. Subsequent uploads
+/// of identical bytes do not replace the prior version. Instead, a new
+/// `(key, digest)` row is recorded when the digest differs. This matches the
+/// content-addressed storage model but is not a strict RFC 9110 PUT (which
+/// would replace prior state). Treat this endpoint as "store these bytes under
+/// this key" rather than "set this key to these bytes".
 #[utoipa::path(
     put,
     path = "/{key}",
@@ -177,7 +203,11 @@ async fn delete_version(
         description = "Raw artifact bytes to store",
     ),
     responses(
-        (status = 201, description = "Version stored", body = ArtifactVersionResponse),
+        (status = 201, description = "Version stored", body = ArtifactVersionResponse,
+         headers(
+            ("Location" = String, description = "Path to the newly stored version"),
+         )),
+        (status = 413, description = "Body exceeded the maximum upload size"),
     ),
 )]
 async fn upload_artifact(
@@ -193,9 +223,11 @@ async fn upload_artifact(
     ),
     ApiError,
 > {
-    let media_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok());
+    let media_type = sanitize_media_type(
+        headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+    );
     let stream = request
         .into_body()
         .into_data_stream()
@@ -204,9 +236,12 @@ async fn upload_artifact(
     let artifact = state
         .spectra()
         .artifacts()
-        .put(&key, media_type, reader)
+        .put(&key, media_type.as_deref(), reader)
         .await?;
-    let location = format!("/api/v1/artifacts/{key}/versions/{}", artifact.digest);
+    // Percent-encode the key so a multi-segment key like `tls/server-cert`
+    // survives routing when the client follows the Location header.
+    let encoded_key = utf8_percent_encode(key.as_str(), PATH_SEGMENT);
+    let location = format!("/api/v1/artifacts/{encoded_key}/versions/{}", artifact.digest);
     Ok((
         StatusCode::CREATED,
         [(header::LOCATION, location)],
@@ -224,7 +259,14 @@ async fn upload_artifact(
         ("digest" = String, Path, description = "Content digest"),
     ),
     responses(
-        (status = 200, description = "Blob content"),
+        (status = 200, description = "Blob content",
+         headers(
+            ("ETag" = String, description = "Quoted content digest"),
+            ("Last-Modified" = String, description = "HTTP timestamp of the upload"),
+            ("Cache-Control" = String, description = "Immutable caching directive"),
+            ("X-Content-Type-Options" = String, description = "Always `nosniff`"),
+         )),
+        (status = 304, description = "Not Modified"),
         (status = 404, description = "Unknown version"),
     ),
 )]
@@ -268,10 +310,8 @@ async fn download_artifact_blob(
             ArtifactError::from(err).into()
         }
     })?;
-    let content_type = artifact
-        .media_type
-        .as_deref()
-        .unwrap_or("application/octet-stream");
+    let content_type = sanitize_media_type(artifact.media_type.as_deref())
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
 
     Response::builder()
         .header(header::CONTENT_TYPE, content_type)
@@ -279,6 +319,49 @@ async fn download_artifact_blob(
         .header(header::ETAG, etag)
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
         .header(header::LAST_MODIFIED, last_modified)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from_stream(ReaderStream::new(file)))
         .map_err(ApiError::from)
+}
+
+/// Returns a sanitised media type for storage, or `None` to fall back to the
+/// default `application/octet-stream`.
+///
+/// The value is replayed verbatim on every subsequent GET, so we reject
+/// anything that is not a single token with no parameters. That keeps the
+/// response safe from header injection and removes ambiguity about how a
+/// browser should render the blob. Callers that need a specific media type are
+/// expected to pass a clean value such as `application/pkix-cert`.
+fn sanitize_media_type(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    if raw
+        .bytes()
+        .any(|b| b < 0x20 || b == 0x7F || b == b'\r' || b == b'\n' || b == b';' || b == b',')
+    {
+        return None;
+    }
+    // Reject anything with parameters. Only a bare `type/subtype` is kept.
+    if raw.contains(';') {
+        return None;
+    }
+    let (ty, sub) = raw.split_once('/')?;
+    if !is_token(ty) || !is_token(sub) {
+        return None;
+    }
+    Some(raw.to_owned())
+}
+
+/// Validates that `s` is a valid HTTP token (RFC 9110 token rule).
+fn is_token(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    s.bytes().all(|b| {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^'
+                    | b'_' | b'`' | b'|' | b'~'
+            )
+    })
 }

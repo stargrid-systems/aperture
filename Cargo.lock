@@ -122,10 +122,10 @@ dependencies = [
  "aperture-tasks",
  "clap",
  "jiff",
- "rustls",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -146,6 +146,7 @@ dependencies = [
  "tokio",
  "tracing",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]
@@ -161,9 +162,11 @@ dependencies = [
  "backhand",
  "bytes",
  "futures-util",
+ "http-body-util",
  "httpdate",
  "jiff",
  "mime_guess",
+ "percent-encoding",
  "rcgen",
  "rustls",
  "serde",

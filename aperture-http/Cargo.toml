@@ -22,9 +22,11 @@ axum = { workspace = true, features = ["json", "query", "tokio", "http1"] }
 backhand = { workspace = true, features = ["gzip", "zstd"] }
 bytes = { workspace = true }
 futures-util = { workspace = true }
+http-body-util = { workspace = true }
 httpdate = { workspace = true }
 jiff = { workspace = true, features = ["std", "serde"] }
 mime_guess = { workspace = true }
+percent-encoding = { workspace = true }
 rcgen = { workspace = true, features = ["ring", "x509-parser"] }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 serde = { workspace = true, features = ["std", "derive"] }

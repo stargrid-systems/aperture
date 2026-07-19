@@ -68,7 +68,10 @@ async fn create_task_schedule(
             created_at: now,
         })
         .await?;
-    let schedule = repo.get(id).await?.ok_or(ApiError::INTERNAL)?;
+    let schedule = repo
+        .get(id)
+        .await?
+        .ok_or(ApiError::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::CREATED, Json(schedule.into())))
 }
 
