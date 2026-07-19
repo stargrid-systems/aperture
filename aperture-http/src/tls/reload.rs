@@ -90,7 +90,9 @@ fn handle_change(
         Ok(ArtifactChange {
             key,
             kind: ChangeKind::Written,
+            digest,
         }) if key == SERVER_CERT || key == SERVER_KEY => {
+            tracing::debug!(%key, ?digest, "scheduling TLS reload");
             *deadline = Some(Instant::now() + RELOAD_DEBOUNCE);
         }
         Ok(_) => {}

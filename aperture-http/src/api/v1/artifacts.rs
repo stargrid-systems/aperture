@@ -28,6 +28,11 @@ use crate::error::ApiError;
 /// uploads filling the disk, not against memory exhaustion. The constant is
 /// larger than `i32::MAX`, so it assumes a 64-bit target. We can promote this
 /// to a runtime config later.
+///
+/// Because uploads are bounded by this limit, every stored `size_bytes` fits
+/// comfortably in `u64` and therefore in an HTTP `Content-Length`. The
+/// download handler relies on that invariant when it stamps
+/// `Content-Length: artifact.size_bytes` on the response.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 /// ASCII set that percent-encodes everything unsafe inside a single URL path
@@ -223,11 +228,12 @@ async fn upload_artifact(
     ),
     ApiError,
 > {
-    let media_type = sanitize_media_type(
-        headers
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok()),
-    );
+    // Artifacts::put validates the media type via MediaType::parse, so we just
+    // forward the raw Content-Type header. An invalid value (e.g.
+    // `text/html; charset=utf-8`) is silently dropped and stored as None.
+    let media_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
     let stream = request
         .into_body()
         .into_data_stream()
@@ -236,7 +242,7 @@ async fn upload_artifact(
     let artifact = state
         .spectra()
         .artifacts()
-        .put(&key, media_type.as_deref(), reader)
+        .put(&key, media_type, reader)
         .await?;
     // Percent-encode the key so a multi-segment key like `tls/server-cert`
     // survives routing when the client follows the Location header.
@@ -313,7 +319,12 @@ async fn download_artifact_blob(
             ArtifactError::from(err).into()
         }
     })?;
-    let content_type = sanitize_media_type(artifact.media_type.as_deref())
+    // The stored media type was validated at put time, so we can replay it
+    // verbatim. The fallback keeps the safe default if the artifact has no
+    // media type recorded.
+    let content_type = artifact
+        .media_type
+        .clone()
         .unwrap_or_else(|| "application/octet-stream".to_owned());
 
     Response::builder()
@@ -325,58 +336,4 @@ async fn download_artifact_blob(
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from_stream(ReaderStream::new(file)))
         .map_err(ApiError::from)
-}
-
-/// Returns a sanitised media type for storage, or `None` to fall back to the
-/// default `application/octet-stream`.
-///
-/// The value is replayed verbatim on every subsequent GET, so we reject
-/// anything that is not a single token with no parameters. That keeps the
-/// response safe from header injection and removes ambiguity about how a
-/// browser should render the blob. Callers that need a specific media type are
-/// expected to pass a clean value such as `application/pkix-cert`.
-fn sanitize_media_type(raw: Option<&str>) -> Option<String> {
-    let raw = raw?;
-    if raw
-        .bytes()
-        .any(|b| b < 0x20 || b == 0x7F || b == b'\r' || b == b'\n' || b == b';' || b == b',')
-    {
-        return None;
-    }
-    // Reject anything with parameters. Only a bare `type/subtype` is kept.
-    if raw.contains(';') {
-        return None;
-    }
-    let (ty, sub) = raw.split_once('/')?;
-    if !is_token(ty) || !is_token(sub) {
-        return None;
-    }
-    Some(raw.to_owned())
-}
-
-/// Validates that `s` is a valid HTTP token (RFC 9110 token rule).
-fn is_token(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
-    s.bytes().all(|b| {
-        b.is_ascii_alphanumeric()
-            || matches!(
-                b,
-                b'!' | b'#'
-                    | b'$'
-                    | b'%'
-                    | b'&'
-                    | b'\''
-                    | b'*'
-                    | b'+'
-                    | b'-'
-                    | b'.'
-                    | b'^'
-                    | b'_'
-                    | b'`'
-                    | b'|'
-                    | b'~'
-            )
-    })
 }

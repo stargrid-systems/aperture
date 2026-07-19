@@ -38,7 +38,11 @@ impl From<DownloadSource> for FetchSource {
                 media_type,
             } => FetchSource::Oci {
                 reference,
-                media_type: MediaType::from(media_type),
+                // Validation: DownloadSource arrives via serde in the task
+                // crate, and FromStr runs there. Re-validating here is cheap
+                // defense in depth.
+                media_type: MediaType::parse(&media_type)
+                    .expect("media type validated at deserialization"),
             },
         }
     }

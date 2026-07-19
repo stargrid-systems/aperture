@@ -15,6 +15,8 @@
 
 use aperture_storage::ArtifactKey;
 
+use crate::digest::Digest;
+
 /// What happened to an artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactChange {
@@ -22,6 +24,12 @@ pub struct ArtifactChange {
     pub key: ArtifactKey,
     /// What kind of change occurred.
     pub kind: ChangeKind,
+    /// Content digest of the new latest version (Written), or `None` for
+    /// Removed or when the writer could not compute it.
+    ///
+    /// Subscribers that only care about content-level changes can compare
+    /// this against the last digest they saw and skip no-op refreshes.
+    pub digest: Option<Digest>,
 }
 
 /// Kind of artifact change.
@@ -38,18 +46,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn changes_with_same_key_and_kind_are_equal() {
-        // ArtifactChange carries only the key and the kind. The feed does not
-        // include the digest so subscribers can match on key without having
-        // to know about the underlying content identity.
+    fn changes_with_same_key_kind_and_digest_are_equal() {
         let key = ArtifactKey::new("spectra").unwrap();
+        let digest: Digest = "sha256:0123".parse().unwrap();
         let a = ArtifactChange {
             key: key.clone(),
             kind: ChangeKind::Written,
+            digest: Some(digest.clone()),
         };
         let b = ArtifactChange {
             key,
             kind: ChangeKind::Written,
+            digest: Some(digest),
         };
         assert_eq!(a, b);
     }
@@ -60,10 +68,12 @@ mod tests {
         let written = ArtifactChange {
             key: key.clone(),
             kind: ChangeKind::Written,
+            digest: None,
         };
         let removed = ArtifactChange {
             key,
             kind: ChangeKind::Removed,
+            digest: None,
         };
         assert_ne!(written, removed);
     }

@@ -206,6 +206,7 @@ impl Artifacts {
             self.inner.notify(ArtifactChange {
                 key: key.clone(),
                 kind: ChangeKind::Removed,
+                digest: None,
             });
         }
         Ok(removed)
@@ -217,6 +218,11 @@ impl Artifacts {
     /// is always a valid `Digest` (i.e. `artifact.digest.parse::<Digest>()`
     /// succeeds); the same guarantee holds for any `Artifact` read back from
     /// the catalog.
+    ///
+    /// `media_type` is sanitised via [`MediaType::parse`] before storage. An
+    /// invalid value (parameters, control characters, etc.) is silently
+    /// dropped and stored as `None`. Callers that need to distinguish
+    /// "rejected" from "absent" should validate upstream.
     pub async fn put<R>(
         &self,
         key: &ArtifactKey,
@@ -233,7 +239,9 @@ impl Artifacts {
             key: key.clone(),
             source: "upload".to_owned(),
             digest: digest.to_string(),
-            media_type: media_type.map(|s| s.to_owned()),
+            media_type: media_type
+                .and_then(MediaType::parse)
+                .map(|mt| mt.to_string()),
             version: None,
             size_bytes: size,
             downloaded_at: now,
@@ -247,6 +255,7 @@ impl Artifacts {
         self.inner.notify(ArtifactChange {
             key: key.clone(),
             kind: ChangeKind::Written,
+            digest: Some(digest.clone()),
         });
         Ok(artifact)
     }
@@ -263,9 +272,11 @@ impl Artifacts {
     ) -> Result<Artifact> {
         let (artifact, written) = self.inner.download(&request, &progress).await?;
         if written {
+            let digest = artifact.digest.parse().ok();
             self.inner.notify(ArtifactChange {
                 key: artifact.key.clone(),
                 kind: ChangeKind::Written,
+                digest,
             });
         }
         Ok(artifact)
@@ -609,7 +620,7 @@ mod tests {
             key: ArtifactKey::new("spectra").expect("valid key"),
             source: FetchSource::Oci {
                 reference: reference.to_owned(),
-                media_type: MediaType::from(media_type),
+                media_type: MediaType::parse(media_type).expect("valid media type"),
             },
         }
     }
@@ -636,13 +647,47 @@ mod tests {
         let (artifacts, dir) = fresh_store().await;
         let mut rx = artifacts.subscribe();
         let key = ArtifactKey::new("firmware").unwrap();
-        artifacts
+        let artifact = artifacts
             .put(&key, Some("application/octet-stream"), &b"bytes"[..])
             .await
             .unwrap();
         let change = rx.recv().await.expect("feed emitted an event");
         assert_eq!(change.key, key);
         assert_eq!(change.kind, ChangeKind::Written);
+        assert_eq!(
+            change.digest.map(|d| d.to_string()),
+            Some(artifact.digest.clone()),
+            "Written events must carry the new digest",
+        );
+        cleanup(dir);
+    }
+
+    #[tokio::test]
+    async fn put_drops_invalid_media_type() {
+        // Artifacts::put is the trust boundary for media types. Anything that
+        // would not parse as a clean Content-Type is silently dropped, so a
+        // later GET falls back to the safe default rather than replaying the
+        // garbage value.
+        let (artifacts, dir) = fresh_store().await;
+        let key = ArtifactKey::new("firmware").unwrap();
+        let artifact = artifacts
+            .put(&key, Some("text/html; charset=utf-8"), &b"bytes"[..])
+            .await
+            .unwrap();
+        assert!(
+            artifact.media_type.is_none(),
+            "invalid media type should be dropped"
+        );
+
+        let artifact = artifacts
+            .put(&key, Some("application/octet-stream"), &b"bytes2"[..])
+            .await
+            .unwrap();
+        assert_eq!(
+            artifact.media_type.as_deref(),
+            Some("application/octet-stream")
+        );
+
         cleanup(dir);
     }
 
@@ -660,6 +705,10 @@ mod tests {
         let change = rx.recv().await.expect("feed emitted an event");
         assert_eq!(change.key, key);
         assert_eq!(change.kind, ChangeKind::Removed);
+        assert!(
+            change.digest.is_none(),
+            "Removed events do not carry a digest"
+        );
         cleanup(dir);
     }
 

@@ -15,7 +15,7 @@ pub use self::change::{ArtifactChange, ChangeKind};
 pub use self::digest::{Digest, DigestAlgorithm};
 pub use self::download::{DownloadDefinition, DownloadInput, DownloadOutput, DownloadSource};
 pub use self::error::{ArtifactError, Result};
-pub use self::media_type::MediaType;
+pub use self::media_type::{InvalidMediaType, MediaType};
 
 mod artifacts;
 mod blob;

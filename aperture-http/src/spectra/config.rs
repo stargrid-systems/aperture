@@ -23,7 +23,7 @@ impl Default for SpectraConfig {
         Self {
             key: SPECTRA_KEY.clone(),
             source: SOURCE.to_owned(),
-            media_type: MediaType::from(MEDIA_TYPE),
+            media_type: MediaType::parse(MEDIA_TYPE).expect("well-known media type"),
         }
     }
 }
