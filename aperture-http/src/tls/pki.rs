@@ -217,9 +217,7 @@ fn extract_leaf_identity(der: &[u8]) -> Result<(DistinguishedName, Vec<SanType>)
 }
 
 /// Converts an x509-parser subject DN into an rcgen `DistinguishedName`.
-fn x509_name_to_rcgen(
-    name: &X509Name<'_>,
-) -> Result<DistinguishedName, TlsError> {
+fn x509_name_to_rcgen(name: &X509Name<'_>) -> Result<DistinguishedName, TlsError> {
     let mut dn = DistinguishedName::new();
     for attr in name.iter_attributes() {
         let oid_iter = attr.attr_type().iter();

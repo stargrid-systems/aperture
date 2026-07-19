@@ -3,16 +3,23 @@
 //!
 //! Certificates are stored as artifacts. On first run a self-signed CA and
 //! server certificate are generated automatically.
+//!
+//! This module is private to the crate. The crate boundary exposes only
+//! `RotateCertificateDefinition`, `install_default_rotation_schedule`, and
+//! `init_crypto_provider` (see `lib.rs`). Everything else stays internal so
+//! the `TlsEndpoint` pairing of listener + reload watcher can be enforced
+//! structurally without leaking implementation types.
 
 use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::ArtifactKey;
 use arc_swap::ArcSwap;
+use tokio::net::TcpListener;
 
 pub use self::error::TlsError;
 pub use self::listener::TlsListener;
-pub use self::pki::{ensure_certificates, load_server_config, reload_certificates};
+pub use self::pki::{ensure_certificates, load_server_config};
 pub use self::redirect::redirect_router;
 pub use self::reload::TlsReload;
 pub use self::rotate::{RotateCertificateDefinition, install_default_rotation_schedule};
@@ -33,6 +40,39 @@ const SERVER_KEY: ArtifactKey = ArtifactKey::from_static("tls/server-key");
 
 /// Shared, hot-swappable server configuration.
 pub type SharedConfig = Arc<ArcSwap<rustls::ServerConfig>>;
+
+/// A TLS listener paired with its certificate reload watcher.
+///
+/// Construction guarantees both pieces exist together: the listener cannot
+/// outlive its reload watcher, and a reload watcher cannot run without a
+/// listener to consume the swaps. `HttpServer::serve_tls` is the only way
+/// to attach TLS to the server, so the invariant is structural.
+///
+/// Build one with [`TlsEndpoint::new`], which loads the current cert from
+/// artifacts and wires the change feed to the shared config.
+pub struct TlsEndpoint {
+    listener: TlsListener,
+    reload: TlsReload,
+}
+
+impl TlsEndpoint {
+    /// Builds a TLS endpoint from `tcp_listener`, loading the current cert
+    /// from `artifacts` and subscribing to future changes.
+    pub async fn new(artifacts: Artifacts, tcp_listener: TcpListener) -> Result<Self, TlsError> {
+        let shared = load_shared_config(&artifacts).await?;
+        Ok(Self {
+            listener: TlsListener::new(tcp_listener, shared.clone()),
+            reload: TlsReload::new(artifacts, shared),
+        })
+    }
+
+    /// Splits the endpoint into its listener and reload watcher.
+    ///
+    /// Used by `HttpServer::run` to spawn the two halves independently.
+    pub fn into_parts(self) -> (TlsListener, TlsReload) {
+        (self.listener, self.reload)
+    }
+}
 
 /// Loads the server config from artifacts and wraps it in a [`SharedConfig`]
 /// ready for hot-swapping.

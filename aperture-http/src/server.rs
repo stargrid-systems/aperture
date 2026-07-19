@@ -13,22 +13,21 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::tls::{
-    TlsListener, TlsReload, ensure_certificates, load_shared_config, redirect_router,
-};
+use crate::tls::{TlsEndpoint, TlsListener, TlsReload, ensure_certificates, redirect_router};
 
 /// Upper bound on graceful drain after `stop` resolves.
 ///
 /// axum's `with_graceful_shutdown` waits forever for in-flight connections by
 /// default. Without an outer timeout, a single slow client can hang the
 /// shutdown indefinitely. The supervisor layers its own per-worker timeout on
-/// top, but here we want connections to close on their own schedule before
+/// top, but here we want connections to close on their own scale before
 /// the hard kill.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A TLS listener paired with its application router.
+/// A TLS listener paired with its application router and reload watcher.
 struct TlsEntry {
     listener: TlsListener,
+    reload: TlsReload,
     app: Router,
 }
 
@@ -40,16 +39,14 @@ struct HttpEntry {
 
 /// Runs the gateway's HTTP stack.
 ///
-/// Owns an optional HTTPS listener, zero or more plain-HTTP listeners, and an
-/// optional TLS certificate reload watcher. All configured listeners and the
-/// reload watcher run concurrently inside [`HttpServer::run`] and drain
-/// together when the `stop` future resolves.
+/// Owns an optional HTTPS endpoint (listener + reload watcher), zero or more
+/// plain-HTTP listeners, and drains them together when `stop` resolves.
 ///
 /// Construct with [`HttpServer::start`] for the standard gateway setup, or
-/// build piece by piece via [`HttpServer::new`] and the builder methods.
+/// build piece by piece via [`HttpServer::new`] and [`HttpServer::serve_tls`]
+/// / [`HttpServer::serve_http`].
 pub struct HttpServer {
     tls: Option<TlsEntry>,
-    reload: Option<TlsReload>,
     http: Vec<HttpEntry>,
 }
 
@@ -58,7 +55,6 @@ impl HttpServer {
     pub fn new() -> Self {
         Self {
             tls: None,
-            reload: None,
             http: Vec::new(),
         }
     }
@@ -68,8 +64,7 @@ impl HttpServer {
     /// - both set: HTTPS listener plus an HTTP listener that redirects to it
     /// - https only: HTTPS listener serving the full API
     /// - http only: plain HTTP listener serving the full API (recovery mode)
-    /// - neither: no listeners (the returned [`HttpServer::run`] returns
-    ///   immediately)
+    /// - neither: no listeners ([`HttpServer::run`] returns immediately)
     ///
     /// The TLS PKI is ensured and the reload watcher is attached only when
     /// HTTPS is enabled.
@@ -83,19 +78,13 @@ impl HttpServer {
 
         if let Some(https_addr) = https_addr {
             ensure_certificates(&artifacts, https_addr).await?;
-            let shared_config = load_shared_config(&artifacts).await?;
-
             let tcp_listener = TcpListener::bind(https_addr).await?;
             // Log the actual bound address so an OS-assigned port (":0")
             // surfaces in the startup banner instead of the requested one.
             let bound = tcp_listener.local_addr().unwrap_or(https_addr);
-            let tls_listener = TlsListener::new(tcp_listener, shared_config.clone());
-            let tls_reload = TlsReload::new(artifacts.clone(), shared_config);
             tracing::info!(%bound, "aperture listening (https)");
-
-            server = server
-                .serve_tls(tls_listener, app.clone())
-                .with_tls_reload(tls_reload);
+            let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener).await?;
+            server = server.serve_tls(endpoint, app.clone());
         }
 
         if let Some(http_addr) = http_addr {
@@ -120,21 +109,18 @@ impl HttpServer {
         Ok(server)
     }
 
-    /// Serves `app` over the TLS listener.
-    #[must_use]
-    pub fn serve_tls(mut self, listener: TlsListener, app: Router) -> Self {
-        self.tls = Some(TlsEntry { listener, app });
-        self
-    }
-
-    /// Attaches a TLS reload watcher.
+    /// Serves `app` over the TLS endpoint (listener + reload watcher).
     ///
-    /// Only effective when [`serve_tls`] is also used.
-    ///
-    /// [`serve_tls`]: HttpServer::serve_tls
+    /// The endpoint bundles both halves so you cannot accidentally run a TLS
+    /// listener without its reload watcher.
     #[must_use]
-    pub fn with_tls_reload(mut self, reload: TlsReload) -> Self {
-        self.reload = Some(reload);
+    pub fn serve_tls(mut self, endpoint: TlsEndpoint, app: Router) -> Self {
+        let (listener, reload) = endpoint.into_parts();
+        self.tls = Some(TlsEntry {
+            listener,
+            reload,
+            app,
+        });
         self
     }
 
@@ -149,7 +135,7 @@ impl HttpServer {
         self
     }
 
-    /// Runs all configured listeners and the reload watcher until `stop`
+    /// Runs all configured listeners and reload watchers until `stop`
     /// resolves, then drains in-flight connections.
     ///
     /// If any listener exits before `stop`, the remaining listeners are
@@ -159,11 +145,16 @@ impl HttpServer {
 
         let mut handles: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
 
-        if let Some(TlsEntry { listener, app }) = self.tls {
-            let token = token.clone();
+        if let Some(TlsEntry {
+            listener,
+            reload,
+            app,
+        }) = self.tls
+        {
+            let listener_token = token.clone();
             handles.push(tokio::spawn(async move {
                 if let Err(err) = axum::serve(listener, app)
-                    .with_graceful_shutdown(async move { token.cancelled().await })
+                    .with_graceful_shutdown(async move { listener_token.cancelled().await })
                     .await
                 {
                     tracing::error!(
@@ -172,11 +163,8 @@ impl HttpServer {
                     );
                 }
             }));
-        }
-
-        if let Some(reload) = self.reload {
-            let token = token.clone();
-            handles.push(tokio::spawn(reload.run(token)));
+            let reload_token = token.clone();
+            handles.push(tokio::spawn(reload.run(reload_token)));
         }
 
         for HttpEntry { listener, app } in self.http {
