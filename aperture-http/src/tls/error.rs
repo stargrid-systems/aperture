@@ -20,8 +20,13 @@ pub enum TlsError {
     #[error("no server certificate found in artifacts")]
     NoCertificate,
 
-    #[error("certificate parse error: {0}")]
-    CertParse(String),
+    /// Holds the underlying parse failure (x509-parser, rustls, etc.) so the
+    /// source chain is preserved across the error boundary.
+    #[error("certificate parse failed")]
+    CertParse {
+        #[source]
+        source: anyhow::Error,
+    },
 
     #[error("blocking task failed: {0}")]
     Join(#[from] JoinError),

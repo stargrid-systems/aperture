@@ -418,9 +418,10 @@ impl Inner {
                 media_type,
             } => {
                 let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(anyhow::format_err!(
-                        "invalid reference {reference:?}: {err}"
-                    ))
+                    ArtifactError::Fetch(
+                        anyhow::Error::from(err)
+                            .context(format!("invalid reference {reference:?}")),
+                    )
                 })?;
                 self.oci.resolve(&reference, media_type).await?
             }
@@ -465,9 +466,10 @@ impl Inner {
                 media_type,
             } => {
                 let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(anyhow::format_err!(
-                        "invalid reference {reference:?}: {err}"
-                    ))
+                    ArtifactError::Fetch(
+                        anyhow::Error::from(err)
+                            .context(format!("invalid reference {reference:?}")),
+                    )
                 })?;
                 self.fetch_oci(&reference, media_type, progress).await
             }

@@ -195,8 +195,9 @@ pub async fn reload_certificates(
 /// own lifetime regardless of the default rotation policy.
 async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
     let der = read_artifact(artifacts, &SERVER_CERT).await?;
-    let (_, cert) = x509_parser::parse_x509_certificate(&der)
-        .map_err(|e| TlsError::CertParse(format!("x509 parse failed: {e}")))?;
+    let (_, cert) = x509_parser::parse_x509_certificate(&der).map_err(|e| TlsError::CertParse {
+        source: anyhow::Error::from(e),
+    })?;
     let validity = cert.validity();
     // `time_to_expiration` returns None when the cert is not currently valid
     // (expired or not-yet-effective). Either way, rotation is wanted.
@@ -246,8 +247,9 @@ fn build_server_config(cert_der: &[u8], key_der: &[u8]) -> Result<ServerConfig, 
     use rustls::version::{TLS12, TLS13};
 
     let cert_chain = vec![CertificateDer::from(cert_der.to_vec())];
-    let key = PrivateKeyDer::try_from(key_der.to_vec())
-        .map_err(|e| TlsError::CertParse(format!("key parse failed: {e}")))?;
+    let key = PrivateKeyDer::try_from(key_der.to_vec()).map_err(|e| TlsError::CertParse {
+        source: anyhow::anyhow!("key parse failed: {e}"),
+    })?;
 
     Ok(
         ServerConfig::builder_with_protocol_versions(&[&TLS13, &TLS12])

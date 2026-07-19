@@ -59,7 +59,9 @@ impl FromStr for BindAddr {
         s.parse::<SocketAddr>()
             .map(Some)
             .map(BindAddr)
-            .map_err(|e| anyhow::format_err!("invalid socket address {s:?}: {e}"))
+            .map_err(|err| {
+                anyhow::Error::from(err).context(format!("invalid socket address {s:?}"))
+            })
     }
 }
 
