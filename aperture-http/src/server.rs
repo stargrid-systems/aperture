@@ -52,41 +52,54 @@ impl HttpServer {
         }
     }
 
-    /// Sets up the standard gateway HTTP stack.
+    /// Sets up the gateway HTTP stack from the two optional listener addrs.
     ///
-    /// Ensures TLS certificates exist, binds the HTTPS listener, attaches the
-    /// certificate reload watcher, and optionally binds a second HTTP listener
-    /// that either redirects to HTTPS or serves the full API in plain HTTP
-    /// (recovery mode).
+    /// - both set: HTTPS listener plus an HTTP listener that redirects to it
+    /// - https only: HTTPS listener serving the full API
+    /// - http only: plain HTTP listener serving the full API (recovery mode)
+    /// - neither: no listeners (the returned [`HttpServer::run`] returns
+    ///   immediately)
+    ///
+    /// The TLS PKI is ensured and the reload watcher is attached only when
+    /// HTTPS is enabled.
     pub async fn start(
         artifacts: Artifacts,
-        https_addr: SocketAddr,
+        https_addr: Option<SocketAddr>,
         http_addr: Option<SocketAddr>,
-        insecure_http: bool,
         app: Router,
     ) -> anyhow::Result<Self> {
-        ensure_certificates(&artifacts, https_addr).await?;
-        let shared_config = load_shared_config(&artifacts).await?;
+        let mut server = HttpServer::new();
 
-        let tcp_listener = TcpListener::bind(https_addr).await?;
-        let tls_listener = TlsListener::new(tcp_listener, shared_config.clone());
-        let tls_reload = TlsReload::new(artifacts.clone(), shared_config);
-        tracing::info!(%https_addr, "aperture listening (https)");
+        if let Some(https_addr) = https_addr {
+            ensure_certificates(&artifacts, https_addr).await?;
+            let shared_config = load_shared_config(&artifacts).await?;
 
-        let mut server = HttpServer::new()
-            .serve_tls(tls_listener, app.clone())
-            .with_tls_reload(tls_reload);
+            let tcp_listener = TcpListener::bind(https_addr).await?;
+            let tls_listener = TlsListener::new(tcp_listener, shared_config.clone());
+            let tls_reload = TlsReload::new(artifacts.clone(), shared_config);
+            tracing::info!(%https_addr, "aperture listening (https)");
+
+            server = server
+                .serve_tls(tls_listener, app.clone())
+                .with_tls_reload(tls_reload);
+        }
 
         if let Some(http_addr) = http_addr {
             let http_listener = TcpListener::bind(http_addr).await?;
-            if insecure_http {
-                tracing::warn!(%http_addr, "serving full API over plain HTTP (insecure mode)");
-                server = server.serve_http(http_listener, app);
-            } else {
-                tracing::info!(%http_addr, "http redirect listening");
-                let redirect = redirect_router(https_addr.port());
-                server = server.serve_http(http_listener, redirect);
-            }
+            let http_app = match https_addr {
+                Some(https) => {
+                    tracing::info!(%http_addr, "http redirect listening");
+                    redirect_router(https.port())
+                }
+                None => {
+                    tracing::warn!(
+                        %http_addr,
+                        "serving full API over plain HTTP (https disabled)"
+                    );
+                    app
+                }
+            };
+            server = server.serve_http(http_listener, http_app);
         }
 
         Ok(server)

@@ -19,19 +19,26 @@ mod runtime;
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Runs the gateway HTTPS server until the process is terminated.
+/// Runs the gateway until the process is terminated.
 ///
-/// `https_addr` is the HTTPS listener. `http_addr`, if given, starts a second
-/// listener that either redirects to HTTPS (default) or serves the full API
-/// over plain HTTP when `insecure_http` is set (recovery mode).
+/// `https_addr` and `http_addr` are independently optional:
+///
+/// - both set: HTTP listener redirects to HTTPS (default gateway setup)
+/// - https only: HTTPS serves the full API
+/// - http only: plain HTTP serves the full API (recovery mode)
+/// - neither: the supervisor runs with no listeners
+///
+/// The TLS PKI and certificate rotation schedule are only touched when
+/// `https_addr` is set. Both are idempotent, so disabling HTTPS leaves
+/// any previously generated artifacts intact.
 pub async fn serve(
-    https_addr: SocketAddr,
+    https_addr: Option<SocketAddr>,
     http_addr: Option<SocketAddr>,
-    insecure_http: bool,
     data_dir: PathBuf,
 ) -> anyhow::Result<()> {
-    if http_addr == Some(https_addr) {
-        anyhow::bail!("--https-addr and --http-addr must differ (both were {https_addr})");
+    if matches!((https_addr, http_addr), (Some(a), Some(b)) if a == b) {
+        let addr = https_addr.unwrap();
+        anyhow::bail!("--https-addr and --http-addr must differ (both were {addr})");
     }
 
     let deferred_log_worker = logging::init();
@@ -53,12 +60,14 @@ pub async fn serve(
     let spectra = Spectra::new(artifacts.clone(), tasks.clone(), SpectraConfig::default());
     spectra.activate_if_present().await?;
 
-    install_default_rotation_schedule(&storage, https_addr).await?;
+    if let Some(addr) = https_addr {
+        install_default_rotation_schedule(&storage, addr).await?;
+    }
 
     let state = AppState::new(VERSION, boot_id, storage.clone(), spectra, tasks.clone());
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(artifacts, https_addr, http_addr, insecure_http, app).await?;
+    let server = HttpServer::start(artifacts, https_addr, http_addr, app).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);

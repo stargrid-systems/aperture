@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
 use tokio::runtime;
@@ -26,36 +27,37 @@ enum Command {
 #[derive(Debug, Args)]
 struct RunArgs {
     /// Address to bind the HTTPS server.
+    /// Pass an empty string to disable HTTPS entirely (recovery mode).
     #[arg(long, env = "APERTURE_HTTPS_ADDR", default_value = "[::1]:8443")]
-    https_addr: SocketAddr,
-    /// Address for the HTTP listener (redirects to HTTPS by default).
+    https_addr: BindAddr,
+    /// Address for the HTTP listener.
+    /// Redirects to HTTPS when HTTPS is enabled, otherwise serves the full API.
     /// Pass an empty string to disable the HTTP listener entirely.
-    #[arg(
-        long,
-        env = "APERTURE_HTTP_ADDR",
-        default_value = "[::1]:8080",
-        value_parser = parse_optional_addr,
-    )]
-    http_addr: Option<SocketAddr>,
-    /// Serve the full API over plain HTTP instead of redirecting to HTTPS.
-    /// Intended for certificate recovery only.
-    #[arg(long, env = "APERTURE_INSECURE_HTTP", default_value_t = false)]
-    insecure_http: bool,
+    #[arg(long, env = "APERTURE_HTTP_ADDR", default_value = "[::1]:8080")]
+    http_addr: BindAddr,
     /// Directory for runtime data and cached components.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
 }
 
-/// Parses an HTTP listener address.
+/// Listener address.
 ///
 /// An empty string means "no listener".
-fn parse_optional_addr(s: &str) -> anyhow::Result<Option<SocketAddr>> {
-    if s.is_empty() {
-        return Ok(None);
+#[derive(Clone, Debug)]
+struct BindAddr(Option<SocketAddr>);
+
+impl FromStr for BindAddr {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        if s.is_empty() {
+            return Ok(BindAddr(None));
+        }
+        s.parse::<SocketAddr>()
+            .map(Some)
+            .map(BindAddr)
+            .map_err(|e| anyhow::format_err!("invalid socket address {s:?}: {e}"))
     }
-    s.parse::<SocketAddr>()
-        .map(Some)
-        .map_err(|e| anyhow::format_err!("invalid socket address {s:?}: {e}"))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -67,9 +69,8 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Openapi => block_on(emit_openapi()),
         Command::Run(args) => block_on(aperture::serve(
-            args.https_addr,
-            args.http_addr,
-            args.insecure_http,
+            args.https_addr.0,
+            args.http_addr.0,
             args.data_dir,
         )),
     }
