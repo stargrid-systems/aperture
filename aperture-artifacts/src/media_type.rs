@@ -4,28 +4,32 @@
 //! Construction runs the validation rule (bare `type/subtype`, no parameters,
 //! no control characters) so callers do not need to re-check.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
+use serde::de::Error as DeError;
+use serde::{Deserialize, Serialize};
+use utoipa::openapi::schema::Type;
+use utoipa::openapi::{ObjectBuilder, RefOr, Schema};
+use utoipa::{PartialSchema, ToSchema};
+
 /// A content media type, for example `application/vnd.spectra.squashfs`.
 ///
-/// Validated at construction. See [`MediaType::parse`].
+/// Validated at construction via [`FromStr`] (or [`MediaType::new`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MediaType(Box<str>);
 
 impl MediaType {
+    /// Wraps `s` after validation. Returns the validated media type, or
+    /// [`InvalidMediaType`] when `s` is not a bare `type/subtype`.
+    pub fn new(s: &str) -> Result<Self, InvalidMediaType> {
+        s.parse()
+    }
+
     /// Returns the media type as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Parses `s` as a media type, returning `None` if it is invalid.
-    ///
-    /// A valid media type is a bare `type/subtype` with no parameters. Both
-    /// halves must be RFC 9110 HTTP tokens. Control characters, semicolons
-    /// (which would start a parameter list), and commas are rejected.
-    pub fn parse(s: &str) -> Option<Self> {
-        is_valid(s).then(|| Self(s.into()))
     }
 }
 
@@ -43,6 +47,43 @@ impl FromStr for MediaType {
     }
 }
 
+impl Serialize for MediaType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for MediaType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(&s).map_err(DeError::custom)
+    }
+}
+
+impl PartialSchema for MediaType {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .schema_type(Type::String)
+            .description(Some(Cow::Borrowed(
+                "A bare 'type/subtype' media type with no parameters.",
+            )))
+            .build()
+            .into()
+    }
+}
+
+impl ToSchema for MediaType {
+    fn name() -> Cow<'static, str> {
+        Cow::Borrowed("MediaType")
+    }
+}
+
 /// Returned when a media type fails validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error(
@@ -50,7 +91,7 @@ impl FromStr for MediaType {
 )]
 pub struct InvalidMediaType;
 
-/// Validates `s` as a media type per the rules on [`MediaType::parse`].
+/// Validates `s` as a media type per the rules on [`MediaType`].
 fn is_valid(s: &str) -> bool {
     if s.bytes()
         .any(|b| b < 0x20 || b == 0x7F || b == b';' || b == b',')
@@ -96,43 +137,51 @@ mod tests {
 
     #[test]
     fn accepts_bare_type_subtype() {
-        assert!(MediaType::parse("application/octet-stream").is_some());
-        assert!(MediaType::parse("application/vnd.spectra.squashfs").is_some());
-        assert!(MediaType::parse("application/vnd.docker.image.rootfs.diff.tar.gzip").is_some());
+        assert!("application/octet-stream".parse::<MediaType>().is_ok());
+        assert!(
+            "application/vnd.spectra.squashfs"
+                .parse::<MediaType>()
+                .is_ok()
+        );
+        assert!(
+            "application/vnd.docker.image.rootfs.diff.tar.gzip"
+                .parse::<MediaType>()
+                .is_ok()
+        );
     }
 
     #[test]
     fn rejects_parameters() {
-        assert!(MediaType::parse("text/html; charset=utf-8").is_none());
+        assert!("text/html; charset=utf-8".parse::<MediaType>().is_err());
     }
 
     #[test]
     fn rejects_commas() {
-        assert!(MediaType::parse("text/html,text/plain").is_none());
+        assert!("text/html,text/plain".parse::<MediaType>().is_err());
     }
 
     #[test]
     fn rejects_control_chars() {
-        assert!(MediaType::parse("text/html\n").is_none());
-        assert!(MediaType::parse("text/html\r").is_none());
-        assert!(MediaType::parse("text/ht\tml").is_none());
+        assert!("text/html\n".parse::<MediaType>().is_err());
+        assert!("text/html\r".parse::<MediaType>().is_err());
+        assert!("text/ht\tml".parse::<MediaType>().is_err());
     }
 
     #[test]
     fn rejects_missing_slash() {
-        assert!(MediaType::parse("text").is_none());
+        assert!("text".parse::<MediaType>().is_err());
     }
 
     #[test]
     fn rejects_empty_halves() {
-        assert!(MediaType::parse("/html").is_none());
-        assert!(MediaType::parse("text/").is_none());
+        assert!("/html".parse::<MediaType>().is_err());
+        assert!("text/".parse::<MediaType>().is_err());
     }
 
     #[test]
     fn rejects_invalid_token_chars() {
-        assert!(MediaType::parse("text/html ").is_none());
-        assert!(MediaType::parse("text/<html>").is_none());
+        assert!("text/html ".parse::<MediaType>().is_err());
+        assert!("text/<html>".parse::<MediaType>().is_err());
     }
 
     #[test]

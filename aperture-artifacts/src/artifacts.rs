@@ -216,17 +216,15 @@ impl Artifacts {
     ///
     /// Returns the stored version. The `digest` field of the returned artifact
     /// is always a valid `Digest` (i.e. `artifact.digest.parse::<Digest>()`
-    /// succeeds); the same guarantee holds for any `Artifact` read back from
+    /// succeeds). The same guarantee holds for any `Artifact` read back from
     /// the catalog.
     ///
-    /// `media_type` is sanitised via [`MediaType::parse`] before storage. An
-    /// invalid value (parameters, control characters, etc.) is silently
-    /// dropped and stored as `None`. Callers that need to distinguish
-    /// "rejected" from "absent" should validate upstream.
+    /// `media_type` is stored verbatim. Callers must validate upstream if they
+    /// need to reject invalid values.
     pub async fn put<R>(
         &self,
         key: &ArtifactKey,
-        media_type: Option<&str>,
+        media_type: Option<&MediaType>,
         reader: R,
     ) -> Result<Artifact>
     where
@@ -239,9 +237,7 @@ impl Artifacts {
             key: key.clone(),
             source: "upload".to_owned(),
             digest: digest.to_string(),
-            media_type: media_type
-                .and_then(MediaType::parse)
-                .map(|mt| mt.to_string()),
+            media_type: media_type.map(|mt| mt.to_string()),
             version: None,
             size_bytes: size,
             downloaded_at: now,
@@ -620,7 +616,7 @@ mod tests {
             key: ArtifactKey::new("spectra").expect("valid key"),
             source: FetchSource::Oci {
                 reference: reference.to_owned(),
-                media_type: MediaType::parse(media_type).expect("valid media type"),
+                media_type: media_type.parse().expect("valid media type"),
             },
         }
     }
@@ -648,7 +644,11 @@ mod tests {
         let mut rx = artifacts.subscribe();
         let key = ArtifactKey::new("firmware").unwrap();
         let artifact = artifacts
-            .put(&key, Some("application/octet-stream"), &b"bytes"[..])
+            .put(
+                &key,
+                Some(&"application/octet-stream".parse().unwrap()),
+                &b"bytes"[..],
+            )
             .await
             .unwrap();
         let change = rx.recv().await.expect("feed emitted an event");
@@ -663,24 +663,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn put_drops_invalid_media_type() {
-        // Artifacts::put is the trust boundary for media types. Anything that
-        // would not parse as a clean Content-Type is silently dropped, so a
-        // later GET falls back to the safe default rather than replaying the
-        // garbage value.
+    async fn put_records_media_type_verbatim() {
+        // Artifacts::put no longer sanitises the media type. The HTTP layer
+        // validates upstream via FromStr, so anything reaching the store is
+        // already known good and is stored verbatim.
         let (artifacts, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
         let artifact = artifacts
-            .put(&key, Some("text/html; charset=utf-8"), &b"bytes"[..])
-            .await
-            .unwrap();
-        assert!(
-            artifact.media_type.is_none(),
-            "invalid media type should be dropped"
-        );
-
-        let artifact = artifacts
-            .put(&key, Some("application/octet-stream"), &b"bytes2"[..])
+            .put(
+                &key,
+                Some(&"application/octet-stream".parse().unwrap()),
+                &b"bytes2"[..],
+            )
             .await
             .unwrap();
         assert_eq!(

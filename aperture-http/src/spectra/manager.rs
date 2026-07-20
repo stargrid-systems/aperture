@@ -84,7 +84,7 @@ impl Spectra {
             key: self.config.key.clone(),
             source: DownloadSource::Oci {
                 reference: self.config.source.clone(),
-                media_type: self.config.media_type.as_str().to_owned(),
+                media_type: self.config.media_type.clone(),
             },
         };
         self.tasks

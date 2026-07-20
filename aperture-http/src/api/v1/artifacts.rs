@@ -2,7 +2,7 @@
 
 use std::io;
 
-use aperture_artifacts::{ArtifactError, ArtifactKey};
+use aperture_artifacts::{ArtifactError, ArtifactKey, MediaType};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
@@ -229,12 +229,13 @@ async fn upload_artifact(
     ),
     ApiError,
 > {
-    // Artifacts::put validates the media type via MediaType::parse, so we just
-    // forward the raw Content-Type header. An invalid value (e.g.
-    // `text/html; charset=utf-8`) is silently dropped and stored as None.
+    // Parse Content-Type as a MediaType at the boundary. An invalid value
+    // (e.g. `text/html; charset=utf-8` with parameters) is rejected here so
+    // the store never sees garbage.
     let media_type = headers
         .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok());
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<MediaType>().ok());
     let stream = request
         .into_body()
         .into_data_stream()
@@ -243,7 +244,7 @@ async fn upload_artifact(
     let artifact = state
         .spectra()
         .artifacts()
-        .put(&key, media_type, reader)
+        .put(&key, media_type.as_ref(), reader)
         .await?;
     // Percent-encode the key so a multi-segment key like `tls/server-cert`
     // survives routing when the client follows the Location header.

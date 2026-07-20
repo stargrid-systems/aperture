@@ -26,7 +26,7 @@ pub enum DownloadSource {
         /// The image reference, for example `ghcr.io/org/image:tag`.
         reference: String,
         /// The media type of the layer to pull.
-        media_type: String,
+        media_type: MediaType,
     },
 }
 
@@ -38,11 +38,7 @@ impl From<DownloadSource> for FetchSource {
                 media_type,
             } => FetchSource::Oci {
                 reference,
-                // Validation: DownloadSource arrives via serde in the task
-                // crate, and FromStr runs there. Re-validating here is cheap
-                // defense in depth.
-                media_type: MediaType::parse(&media_type)
-                    .expect("media type validated at deserialization"),
+                media_type,
             },
         }
     }

@@ -26,15 +26,10 @@ impl OciFetcher {
     /// registry, without transferring it. This is a manifest lookup only.
     pub async fn resolve(&self, reference: &Reference, media_type: &MediaType) -> Result<Resolved> {
         let layer = self.resolve_layer(reference, media_type).await?;
-        let registry_media_type = MediaType::parse(&layer.media_type).ok_or_else(|| {
-            ArtifactError::Fetch(anyhow::anyhow!(
-                "registry returned invalid media type {:?}",
-                layer.media_type
-            ))
-        })?;
+        let digest: Digest = layer.digest.parse()?;
         Ok(Resolved {
-            digest: layer.digest.parse()?,
-            media_type: registry_media_type,
+            digest,
+            media_type: media_type.clone(),
             size: layer.size.max(0) as u64,
             version: reference.tag().map(str::to_owned),
         })
@@ -43,6 +38,10 @@ impl OciFetcher {
     /// Streams the single layer matching `media_type` from `reference` into
     /// `sink`, reporting transferred bytes into `progress`. Returns the digest
     /// the registry advertises so the caller can verify the stored bytes.
+    ///
+    /// `media_type` is the validated media type of the layer to pull. The
+    /// returned [`FetchMeta`] echoes it back so the caller can record the
+    /// actual type without re-parsing.
     pub async fn fetch(
         &self,
         reference: &Reference,
@@ -52,12 +51,6 @@ impl OciFetcher {
     ) -> Result<FetchMeta> {
         let layer = self.resolve_layer(reference, media_type).await?;
         let expected: Digest = layer.digest.parse()?;
-        let media_type = MediaType::parse(&layer.media_type).ok_or_else(|| {
-            ArtifactError::Fetch(anyhow::anyhow!(
-                "registry returned invalid media type {:?}",
-                layer.media_type
-            ))
-        })?;
         progress.set_total(layer.size.max(0) as u64);
 
         self.client
@@ -67,7 +60,7 @@ impl OciFetcher {
 
         Ok(FetchMeta {
             expected_digest: expected,
-            media_type,
+            media_type: media_type.clone(),
         })
     }
 
