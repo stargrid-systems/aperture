@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use aperture_artifacts::Digest;
+use aperture_storage::Digest;
 use axum::http::{HeaderMap, HeaderValue, header};
 use jiff::Timestamp;
 

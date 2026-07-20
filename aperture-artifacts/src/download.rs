@@ -1,12 +1,11 @@
 //! The download task: fetching an artifact, modelled as a [`TaskDefinition`].
 
-use aperture_storage::ArtifactKey;
+use aperture_storage::{ArtifactKey, MediaType};
 use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::artifacts::{Artifacts, FetchRequest, FetchSource};
-use crate::media_type::MediaType;
 
 /// Input for a download task: what to fetch and where from.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

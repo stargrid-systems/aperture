@@ -10,10 +10,9 @@ use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
 use tokio::fs;
 use tokio::signal::ctrl_c;
-use uuid::Uuid;
-
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
+use uuid::Uuid;
 
 use self::runtime::TasksWorker;
 

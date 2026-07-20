@@ -11,9 +11,7 @@
 //! [`Artifacts::subscribe`]: crate::Artifacts::subscribe
 //! [`Receiver`]: tokio::sync::broadcast::Receiver
 
-use aperture_storage::ArtifactKey;
-
-use crate::digest::Digest;
+use aperture_storage::{ArtifactKey, Digest};
 
 /// What happened to an artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]

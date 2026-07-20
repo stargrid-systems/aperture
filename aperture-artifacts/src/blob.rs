@@ -9,10 +9,10 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use aperture_storage::{Digest, DigestAlgorithm};
 use tokio::fs;
 use tokio::io::{self, AsyncRead};
 
-use crate::digest::{Digest, DigestAlgorithm};
 use crate::error::Result;
 use crate::hash_writer::HashWriter;
 

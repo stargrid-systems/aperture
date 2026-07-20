@@ -1,3 +1,4 @@
+use aperture_storage::{Digest, MediaType};
 use aperture_tasks::ProgressHandle;
 use oci_client::manifest::{OciDescriptor, OciImageManifest};
 use oci_client::secrets::RegistryAuth;
@@ -5,9 +6,7 @@ use oci_client::{Client, Reference};
 use tokio::io::AsyncWrite;
 
 use super::{FetchMeta, Resolved};
-use crate::digest::Digest;
 use crate::error::{ArtifactError, Result};
-use crate::media_type::MediaType;
 
 /// Fetches OCI image layers from a registry.
 pub struct OciFetcher {

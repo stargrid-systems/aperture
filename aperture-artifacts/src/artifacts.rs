@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use aperture_storage::{
-    Artifact, ArtifactKey, ArtifactKeyEntry, DbId, ListQuery, Page, Storage, VersionSort,
+    Artifact, ArtifactKey, ArtifactKeyEntry, DbId, Digest, ListQuery, MediaType, Page, Storage,
+    VersionSort,
 };
 use aperture_tasks::ProgressHandle;
 use jiff::{SignedDuration, Timestamp};
@@ -21,11 +22,9 @@ use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
 use crate::blob::BlobStore;
 use crate::change::{ArtifactChange, ChangeKind};
-use crate::digest::Digest;
 use crate::error::{ArtifactError, Result};
 use crate::fetch::{FetchMeta, Fetched, OciFetcher, Resolved};
 use crate::hash_writer::HashWriter;
-use crate::media_type::MediaType;
 use crate::progress::ProgressWriter;
 
 /// Capacity of the in-process change feed.

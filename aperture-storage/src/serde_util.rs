@@ -1,10 +1,11 @@
 //! Small helpers for serde impls on `FromStr` + `Display` newtypes.
 
+use std::fmt::{self, Display};
 use std::marker::PhantomData;
 use std::str::FromStr;
 
-use serde::de::{self, Visitor};
 use serde::Deserializer;
+use serde::de::{self, Visitor};
 
 /// Deserializes a `T: FromStr` from a string, borrowing from the input when
 /// the deserializer can offer a borrowed `&str`.
@@ -18,18 +19,18 @@ pub(super) fn deserialize_from_str<'de, D, T>(deserializer: D) -> Result<T, D::E
 where
     D: Deserializer<'de>,
     T: FromStr,
-    T::Err: std::fmt::Display,
+    T::Err: Display,
 {
     struct FromStrVisitor<T>(PhantomData<T>);
 
     impl<'de, T> Visitor<'de> for FromStrVisitor<T>
     where
         T: FromStr,
-        T::Err: std::fmt::Display,
+        T::Err: Display,
     {
         type Value = T;
 
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
             f.write_str("a string")
         }
 

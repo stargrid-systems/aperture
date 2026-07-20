@@ -1,8 +1,7 @@
 //! DTOs for the artifact catalog endpoints.
 
-use aperture_artifacts::{
-    Artifact, ArtifactKeyEntry, Digest, ListQuery, MediaType, Page as StoragePage, VersionSort,
-};
+use aperture_artifacts::{Artifact, ArtifactKeyEntry, ListQuery, Page as StoragePage, VersionSort};
+use aperture_storage::{Digest, MediaType};
 use jiff::Timestamp;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};

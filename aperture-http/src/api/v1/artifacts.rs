@@ -2,7 +2,8 @@
 
 use std::io;
 
-use aperture_artifacts::{ArtifactError, ArtifactKey, Digest, MediaType};
+use aperture_artifacts::ArtifactError;
+use aperture_storage::{ArtifactKey, Digest, MediaType};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};

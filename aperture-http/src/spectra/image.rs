@@ -6,7 +6,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aperture_artifacts::Digest;
+use aperture_storage::Digest;
 use backhand::{FilesystemReader, InnerNode, SquashfsFileReader};
 use mime_guess::Mime;
 use tokio::task::spawn_blocking;
