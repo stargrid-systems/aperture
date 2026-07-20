@@ -8,10 +8,7 @@ use aperture_http::{AppState, HttpServer, OpenApiSpec, Spectra, SpectraConfig, S
 use aperture_runtime::Supervisor;
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
-use tokio::fs;
-use tokio::signal::ctrl_c;
-#[cfg(unix)]
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::{fs, signal};
 use uuid::Uuid;
 
 use self::runtime::TasksWorker;
@@ -66,11 +63,13 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> anyhow::Result<()> {
 /// Resolves when the process is asked to stop via Ctrl+C or SIGTERM.
 async fn shutdown_signal() {
     let interrupt = async {
-        ctrl_c().await.expect("failed to install Ctrl+C handler");
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
     };
     #[cfg(unix)]
     let terminate = async {
-        signal(SignalKind::terminate())
+        signal::unix::signal(signal::unix::SignalKind::terminate())
             .expect("failed to install SIGTERM handler")
             .recv()
             .await;
