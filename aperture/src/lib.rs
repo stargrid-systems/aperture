@@ -4,10 +4,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
-use aperture_http::{
-    AppState, HttpServer, OpenApiSpec, RotateCertificateDefinition, Spectra, SpectraConfig,
-    init_crypto_provider, install_default_rotation_schedule,
-};
+use aperture_http::{AppState, HttpServer, OpenApiSpec, Spectra, SpectraConfig};
 use aperture_runtime::Supervisor;
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
@@ -22,31 +19,10 @@ mod runtime;
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Runs the gateway until the process is terminated.
-///
-/// `https_addr` and `http_addr` are independently optional:
-///
-/// - both set: HTTP listener redirects to HTTPS (default gateway setup)
-/// - https only: HTTPS serves the full API
-/// - http only: plain HTTP serves the full API (recovery mode)
-/// - neither: the supervisor runs with no listeners
-///
-/// The TLS PKI and certificate rotation schedule are only touched when
-/// `https_addr` is set. Both are idempotent, so disabling HTTPS leaves
-/// any previously generated artifacts intact.
-pub async fn serve(
-    https_addr: Option<SocketAddr>,
-    http_addr: Option<SocketAddr>,
-    data_dir: PathBuf,
-) -> anyhow::Result<()> {
-    if matches!((https_addr, http_addr), (Some(a), Some(b)) if a == b) {
-        let addr = https_addr.unwrap();
-        anyhow::bail!("--https-addr and --http-addr must differ (both were {addr})");
-    }
-
+/// Runs the gateway HTTP server until the process is terminated.
+pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> anyhow::Result<()> {
     let deferred_log_worker = logging::init();
 
-    init_crypto_provider();
     let boot_id = Uuid::new_v4();
     let (artifacts, storage) = open_artifacts(&data_dir).await?;
 
@@ -63,14 +39,10 @@ pub async fn serve(
     let spectra = Spectra::new(artifacts.clone(), tasks.clone(), SpectraConfig::default());
     spectra.activate_if_present().await?;
 
-    if https_addr.is_some() {
-        install_default_rotation_schedule(&storage).await?;
-    }
-
     let state = AppState::new(VERSION, boot_id, storage.clone(), spectra, tasks.clone());
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(artifacts, https_addr, http_addr, app).await?;
+    let server = HttpServer::start(addr, app).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
@@ -118,8 +90,7 @@ pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
 
 /// Registers every task kind the gateway supports.
 fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
-    registry.register(DownloadDefinition::new(artifacts.clone()));
-    registry.register(RotateCertificateDefinition::new(artifacts));
+    registry.register(DownloadDefinition::new(artifacts));
 }
 
 /// Opens the storage database and blob store under `data_dir`.

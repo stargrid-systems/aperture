@@ -1,18 +1,15 @@
-//! Unified HTTP server: owns all listeners and the TLS reload watcher.
+//! HTTP server: owns the listeners and drains them on shutdown.
 
 use std::fmt::Debug;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use aperture_artifacts::Artifacts;
 use aperture_runtime::{Stop, Worker, WorkerSet};
 use axum::Router;
 use axum::serve::Listener;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-
-use crate::tls::{TlsEndpoint, TlsListener, TlsReload, ensure_certificates, redirect_router};
 
 /// Upper bound on graceful drain after `stop` resolves.
 ///
@@ -23,13 +20,6 @@ use crate::tls::{TlsEndpoint, TlsListener, TlsReload, ensure_certificates, redir
 /// kill.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A TLS listener paired with its application router and reload watcher.
-struct TlsEntry {
-    listener: TlsListener,
-    reload: TlsReload,
-    app: Router,
-}
-
 /// A plain HTTP listener paired with its application router.
 struct HttpEntry {
     listener: TcpListener,
@@ -38,89 +28,29 @@ struct HttpEntry {
 
 /// Runs the gateway's HTTP stack.
 ///
-/// Owns an optional HTTPS endpoint (listener + reload watcher), zero or more
-/// plain-HTTP listeners, and drains them together when `stop` resolves.
+/// Owns zero or more plain-HTTP listeners and drains them together when
+/// `stop` resolves.
 ///
 /// Construct with [`HttpServer::start`] for the standard gateway setup, or
-/// build piece by piece via [`HttpServer::new`] and [`HttpServer::serve_tls`]
-/// / [`HttpServer::serve_http`].
+/// build piece by piece via [`HttpServer::new`] and [`HttpServer::serve_http`].
 pub struct HttpServer {
-    tls: Option<TlsEntry>,
     http: Vec<HttpEntry>,
 }
 
 impl HttpServer {
     /// Creates an empty server with no listeners.
     pub fn new() -> Self {
-        Self {
-            tls: None,
-            http: Vec::new(),
-        }
+        Self { http: Vec::new() }
     }
 
-    /// Sets up the gateway HTTP stack from the two optional listener addrs.
-    ///
-    /// - both set: HTTPS listener plus an HTTP listener that redirects to it
-    /// - https only: HTTPS listener serving the full API
-    /// - http only: plain HTTP listener serving the full API (recovery mode)
-    /// - neither: no listeners ([`HttpServer::run`] returns immediately)
-    ///
-    /// The TLS PKI is ensured and the reload watcher is attached only when
-    /// HTTPS is enabled.
-    pub async fn start(
-        artifacts: Artifacts,
-        https_addr: Option<SocketAddr>,
-        http_addr: Option<SocketAddr>,
-        app: Router,
-    ) -> anyhow::Result<Self> {
-        let mut server = HttpServer::new();
-
-        if let Some(https_addr) = https_addr {
-            ensure_certificates(&artifacts, https_addr).await?;
-            let tcp_listener = TcpListener::bind(https_addr).await?;
-            // Log the actual bound address so an OS-assigned port (":0")
-            // surfaces in the startup banner instead of the requested one.
-            let bound = tcp_listener.local_addr().unwrap_or(https_addr);
-            tracing::info!(%bound, "aperture listening (https)");
-            let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener).await?;
-            server = server.serve_tls(endpoint, app.clone());
-        }
-
-        if let Some(http_addr) = http_addr {
-            let http_listener = TcpListener::bind(http_addr).await?;
-            let bound = http_listener.local_addr().unwrap_or(http_addr);
-            let http_app = match https_addr {
-                Some(https) => {
-                    tracing::info!(%bound, "http redirect listening");
-                    redirect_router(https.port())
-                }
-                None => {
-                    tracing::warn!(
-                        %bound,
-                        "serving full API over plain HTTP (https disabled)"
-                    );
-                    app
-                }
-            };
-            server = server.serve_http(http_listener, http_app);
-        }
-
-        Ok(server)
-    }
-
-    /// Serves `app` over the TLS endpoint (listener + reload watcher).
-    ///
-    /// The endpoint bundles both halves so you cannot accidentally run a TLS
-    /// listener without its reload watcher.
-    #[must_use]
-    pub fn serve_tls(mut self, endpoint: TlsEndpoint, app: Router) -> Self {
-        let (listener, reload) = endpoint.into_parts();
-        self.tls = Some(TlsEntry {
-            listener,
-            reload,
-            app,
-        });
-        self
+    /// Binds `addr` and serves `app` over a plain HTTP listener.
+    pub async fn start(addr: SocketAddr, app: Router) -> anyhow::Result<Self> {
+        let listener = TcpListener::bind(addr).await?;
+        // Log the actual bound address so an OS-assigned port (":0")
+        // surfaces in the startup banner instead of the requested one.
+        let bound = listener.local_addr().unwrap_or(addr);
+        tracing::info!(%bound, "aperture listening");
+        Ok(Self::new().serve_http(listener, app))
     }
 
     /// Serves `app` over a plain HTTP listener.
@@ -134,28 +64,14 @@ impl HttpServer {
         self
     }
 
-    /// Runs all configured listeners and reload watchers until `stop`
-    /// resolves, then drains in-flight connections.
+    /// Runs all configured listeners until `stop` resolves, then drains
+    /// in-flight connections.
     ///
     /// If any listener exits before `stop`, the remaining listeners are
     /// drained immediately.
     pub async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
         let token = CancellationToken::new();
         let mut workers = WorkerSet::new();
-
-        if let Some(TlsEntry {
-            listener,
-            reload,
-            app,
-        }) = self.tls
-        {
-            let listener_token = token.clone();
-            workers.spawn("https", async move {
-                serve_until_cancelled(listener, app, listener_token).await;
-            });
-            let reload_token = token.clone();
-            workers.spawn("tls-reload", reload.run(reload_token));
-        }
 
         for HttpEntry { listener, app } in self.http {
             let listener_token = token.clone();
@@ -170,8 +86,8 @@ impl HttpServer {
 
         tokio::pin!(stop);
         // Wait for either the stop signal or any worker to exit on its own.
-        // Either branch cancels the token, which the listeners and reload
-        // watcher observe as their graceful-shutdown trigger.
+        // Either branch cancels the token, which the listeners observe as
+        // their graceful-shutdown trigger.
         tokio::select! {
             biased;
             _ = &mut stop => {

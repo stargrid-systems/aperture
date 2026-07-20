@@ -20,9 +20,6 @@ use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, Ver
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig};
-pub use self::tls::{
-    RotateCertificateDefinition, init_crypto_provider, install_default_rotation_schedule,
-};
 
 mod api;
 mod conditional;
@@ -30,7 +27,6 @@ mod dto;
 mod error;
 mod server;
 mod spectra;
-mod tls;
 
 /// Shared application state handed to every request handler.
 #[derive(Clone)]
