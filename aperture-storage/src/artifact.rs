@@ -29,7 +29,7 @@ mod col {
     pub const VERSION: &str = "version";
 }
 
-/// Columns selected for an [`Artifact`], in [`row_to_artifact`] order.
+/// Columns selected for an [`Artifact`], in [`Artifact::try_from`] order.
 const ARTIFACT_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KEY,
@@ -146,7 +146,7 @@ impl ArtifactRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_artifact(&row)?)),
+            Some(row) => Ok(Some(Artifact::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -164,7 +164,7 @@ impl ArtifactRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_artifact(&row)?)),
+            Some(row) => Ok(Some(Artifact::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -188,7 +188,7 @@ impl ArtifactRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_artifact_key(&row)?)),
+            Some(row) => Ok(Some(ArtifactKeyEntry::from_row(&row)?)),
             None => Ok(None),
         }
     }
@@ -233,7 +233,7 @@ impl ArtifactRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_artifact_key(&row)?);
+            items.push(ArtifactKeyEntry::from_row(&row)?);
         }
         Ok(paginator.finish(items, |key| {
             (
@@ -282,7 +282,7 @@ impl ArtifactRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_artifact(&row)?);
+            items.push(Artifact::try_from(&row)?);
         }
         Ok(paginator.finish(items, |artifact| {
             let value = match sort {
@@ -307,7 +307,7 @@ impl ArtifactRepository {
             .map_err(StorageError::from_turso)?;
         let mut artifacts = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            artifacts.push(row_to_artifact(&row)?);
+            artifacts.push(Artifact::try_from(&row)?);
         }
         Ok(artifacts)
     }
@@ -326,23 +326,31 @@ impl ArtifactRepository {
     }
 }
 
-fn row_to_artifact(row: &Row) -> Result<Artifact> {
-    Ok(Artifact {
-        id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
-        key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
-        source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
-        digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST)?,
-        media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE)?,
-        version: ARTIFACT_COLUMNS.extract(row, col::VERSION)?,
-        size_bytes: ARTIFACT_COLUMNS.extract(row, col::SIZE_BYTES)?,
-        downloaded_at: ARTIFACT_COLUMNS.extract(row, col::DOWNLOADED_AT)?,
-        verified_at: ARTIFACT_COLUMNS.extract(row, col::VERIFIED_AT)?,
-    })
+impl TryFrom<&Row> for Artifact {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(Artifact {
+            id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
+            key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
+            source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
+            digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST)?,
+            media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE)?,
+            version: ARTIFACT_COLUMNS.extract(row, col::VERSION)?,
+            size_bytes: ARTIFACT_COLUMNS.extract(row, col::SIZE_BYTES)?,
+            downloaded_at: ARTIFACT_COLUMNS.extract(row, col::DOWNLOADED_AT)?,
+            verified_at: ARTIFACT_COLUMNS.extract(row, col::VERIFIED_AT)?,
+        })
+    }
 }
 
-fn row_to_artifact_key(row: &Row) -> Result<ArtifactKeyEntry> {
-    Ok(ArtifactKeyEntry {
-        latest: row_to_artifact(row)?,
-        version_count: get(row, ARTIFACT_COLUMNS.len())?,
-    })
+impl ArtifactKeyEntry {
+    /// Builds an [`ArtifactKeyEntry`] from a row in `ARTIFACT_COLUMNS` order
+    /// followed by the version count column.
+    fn from_row(row: &Row) -> Result<Self> {
+        Ok(ArtifactKeyEntry {
+            latest: Artifact::try_from(row)?,
+            version_count: get(row, ARTIFACT_COLUMNS.len())?,
+        })
+    }
 }

@@ -11,11 +11,13 @@ use backhand::{FilesystemReader, InnerNode, SquashfsFileReader};
 use mime_guess::Mime;
 use tokio::task::spawn_blocking;
 
+use crate::conditional::Etag;
+
 /// An opened squashfs image plus the index of files it holds.
 pub(super) struct SpectraImage {
     pub(super) fs: Arc<FilesystemReader<'static>>,
     files: HashMap<String, SquashfsFileReader>,
-    pub(super) etag: HeaderValue,
+    pub(super) etag: Etag,
 }
 
 impl SpectraImage {
@@ -32,8 +34,10 @@ impl SpectraImage {
                 }
             })
             .collect();
-        let etag = HeaderValue::from_str(&format!("\"{digest}\""))
-            .unwrap_or_else(|_| HeaderValue::from_static("\"spectra\""));
+        let etag = Etag::wrap(
+            HeaderValue::from_str(&format!("\"{digest}\""))
+                .unwrap_or_else(|_| HeaderValue::from_static("\"spectra\"")),
+        );
         Ok(Self {
             fs: Arc::new(fs),
             files,

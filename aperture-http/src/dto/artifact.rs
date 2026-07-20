@@ -42,6 +42,13 @@ impl From<ArtifactKeyEntry> for ArtifactSummaryResponse {
     }
 }
 
+impl ArtifactSummaryResponse {
+    /// Maps a storage page of keys into the response envelope.
+    pub fn page(page: StoragePage<ArtifactKeyEntry>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
+    }
+}
+
 /// One stored version of an artifact.
 #[derive(Debug, Clone, serde::Serialize, ToSchema)]
 pub struct ArtifactVersionResponse {
@@ -75,6 +82,13 @@ impl From<Artifact> for ArtifactVersionResponse {
             downloaded_at: artifact.downloaded_at,
             verified_at: artifact.verified_at,
         }
+    }
+}
+
+impl ArtifactVersionResponse {
+    /// Maps a storage page of versions into the response envelope.
+    pub fn page(page: StoragePage<Artifact>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
     }
 }
 
@@ -157,14 +171,4 @@ impl VersionListParams {
             .map(Into::into)
             .unwrap_or(VersionSort::DownloadedAt)
     }
-}
-
-/// Maps a storage page of keys into the response envelope.
-pub fn artifact_page(page: StoragePage<ArtifactKeyEntry>) -> Page<ArtifactSummaryResponse> {
-    Page::from_storage(page, ArtifactSummaryResponse::from)
-}
-
-/// Maps a storage page of versions into the response envelope.
-pub fn version_page(page: StoragePage<Artifact>) -> Page<ArtifactVersionResponse> {
-    Page::from_storage(page, ArtifactVersionResponse::from)
 }

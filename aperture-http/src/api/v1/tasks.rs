@@ -9,9 +9,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::dto::{
-    CreateTaskRequest, Page, TaskDefinitionResponse, TaskListParams, TaskResponse, task_page,
-};
+use crate::dto::{CreateTaskRequest, Page, TaskDefinitionResponse, TaskListParams, TaskResponse};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -57,7 +55,7 @@ async fn list_tasks(
         .map(|task| (task.id, task.progress))
         .collect();
 
-    Ok(Json(task_page(page, &live)))
+    Ok(Json(TaskResponse::page(page, &live)))
 }
 
 /// Creates a task of the given kind and starts it.

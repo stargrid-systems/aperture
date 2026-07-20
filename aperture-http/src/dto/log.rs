@@ -87,6 +87,13 @@ impl From<Event> for LogEventResponse {
     }
 }
 
+impl LogEventResponse {
+    /// Maps a storage page of events into the response envelope.
+    pub fn page(page: StoragePage<Event>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
+    }
+}
+
 /// A tracing span, returned by `GET /api/v1/logs/spans`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogSpanResponse {
@@ -126,6 +133,13 @@ impl From<Span> for LogSpanResponse {
             ended_at: span.ended_at,
             fields: span.fields,
         }
+    }
+}
+
+impl LogSpanResponse {
+    /// Maps a storage page of spans into the response envelope.
+    pub fn page(page: StoragePage<Span>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
     }
 }
 
@@ -231,16 +245,6 @@ pub struct LogTargetListParams {
     pub q: Option<String>,
 }
 
-/// Maps a storage page of events into the response envelope.
-pub fn event_page(page: StoragePage<Event>) -> Page<LogEventResponse> {
-    Page::from_storage(page, LogEventResponse::from)
-}
-
-/// Maps a storage page of spans into the response envelope.
-pub fn span_page(page: StoragePage<Span>) -> Page<LogSpanResponse> {
-    Page::from_storage(page, LogSpanResponse::from)
-}
-
 /// One boot session observed in the log store, returned by
 /// `GET /api/v1/logs/boots`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -257,17 +261,19 @@ pub struct BootResponse {
     pub is_current: bool,
 }
 
-/// Maps a list of storage [`BootInfo`] into boot responses, marking the
-/// current boot id.
-pub fn boots_response(boots: Vec<BootInfo>, current_boot_id: Uuid) -> Vec<BootResponse> {
-    boots
-        .into_iter()
-        .map(|b| BootResponse {
-            is_current: b.boot_id == current_boot_id,
-            boot_id: b.boot_id,
-            first_seen: b.first_seen,
-            last_seen: b.last_seen,
-            event_count: b.event_count,
-        })
-        .collect()
+impl BootResponse {
+    /// Maps a list of storage [`BootInfo`] into boot responses, marking the
+    /// current boot id.
+    pub fn from_boots(boots: Vec<BootInfo>, current_boot_id: Uuid) -> Vec<Self> {
+        boots
+            .into_iter()
+            .map(|b| Self {
+                is_current: b.boot_id == current_boot_id,
+                boot_id: b.boot_id,
+                first_seen: b.first_seen,
+                last_seen: b.last_seen,
+                event_count: b.event_count,
+            })
+            .collect()
+    }
 }

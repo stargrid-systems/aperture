@@ -282,14 +282,13 @@ impl TaskListParams {
 /// A task list request carried a malformed JSON filter.
 pub struct InvalidFilter;
 
-/// Maps a storage page of tasks into the response envelope, attaching live
-/// progress to running tasks from `live` (keyed by task id).
-pub fn task_page(
-    page: StoragePage<TaskInvocation>,
-    live: &HashMap<DbId, Progress>,
-) -> Page<TaskResponse> {
-    Page::from_storage(page, |task| {
-        let progress = live.get(&task.id).cloned();
-        TaskResponse::new(task, progress)
-    })
+impl TaskResponse {
+    /// Maps a storage page of tasks into the response envelope, attaching live
+    /// progress to running tasks from `live` (keyed by task id).
+    pub fn page(page: StoragePage<TaskInvocation>, live: &HashMap<DbId, Progress>) -> Page<Self> {
+        Page::from_storage(page, |task| {
+            let progress = live.get(&task.id).cloned();
+            Self::new(task, progress)
+        })
+    }
 }

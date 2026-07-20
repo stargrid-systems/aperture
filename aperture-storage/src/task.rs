@@ -32,7 +32,8 @@ mod col {
     pub const STATUS: &str = "status";
 }
 
-/// Columns selected for a [`TaskInvocation`], in [`row_to_task`] order.
+/// Columns selected for a [`TaskInvocation`], in [`TaskInvocation::try_from`]
+/// order.
 const TASK_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KIND,
@@ -388,7 +389,7 @@ impl TaskRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_task(&row)?)),
+            Some(row) => Ok(Some(TaskInvocation::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -448,7 +449,7 @@ impl TaskRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_task(&row)?);
+            items.push(TaskInvocation::try_from(&row)?);
         }
         Ok(paginator.finish(items, |task| {
             (CursorValue::Int(task.id.get()), task.id.get())
@@ -469,7 +470,7 @@ impl TaskRepository {
             .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            tasks.push(row_to_task(&row)?);
+            tasks.push(TaskInvocation::try_from(&row)?);
         }
         Ok(tasks)
     }
@@ -492,7 +493,7 @@ impl TaskRepository {
             .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            tasks.push(row_to_task(&row)?);
+            tasks.push(TaskInvocation::try_from(&row)?);
         }
         Ok(tasks)
     }
@@ -502,19 +503,23 @@ fn db_values(statuses: &[TaskStatus]) -> Vec<&'static str> {
     statuses.iter().map(|status| status.as_db()).collect()
 }
 
-fn row_to_task(row: &Row) -> Result<TaskInvocation> {
-    Ok(TaskInvocation {
-        id: TASK_COLUMNS.extract(row, col::ID)?,
-        kind: TASK_COLUMNS.extract(row, col::KIND)?,
-        parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
-        status: TASK_COLUMNS.extract(row, col::STATUS)?,
-        input: TASK_COLUMNS.extract(row, col::INPUT)?,
-        output: TASK_COLUMNS.extract(row, col::OUTPUT)?,
-        error: TASK_COLUMNS.extract(row, col::ERROR)?,
-        created_at: TASK_COLUMNS.extract(row, col::CREATED_AT)?,
-        started_at: TASK_COLUMNS.extract(row, col::STARTED_AT)?,
-        finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT)?,
-    })
+impl TryFrom<&Row> for TaskInvocation {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(TaskInvocation {
+            id: TASK_COLUMNS.extract(row, col::ID)?,
+            kind: TASK_COLUMNS.extract(row, col::KIND)?,
+            parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
+            status: TASK_COLUMNS.extract(row, col::STATUS)?,
+            input: TASK_COLUMNS.extract(row, col::INPUT)?,
+            output: TASK_COLUMNS.extract(row, col::OUTPUT)?,
+            error: TASK_COLUMNS.extract(row, col::ERROR)?,
+            created_at: TASK_COLUMNS.extract(row, col::CREATED_AT)?,
+            started_at: TASK_COLUMNS.extract(row, col::STARTED_AT)?,
+            finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT)?,
+        })
+    }
 }
 
 #[cfg(test)]

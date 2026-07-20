@@ -10,19 +10,18 @@ use uuid::Uuid;
 
 pub use self::artifact::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, VersionListParams,
-    VersionSortParam, artifact_page, version_page,
+    VersionSortParam,
 };
 pub use self::log::{
     BootResponse, LevelResponse, LogEventResponse, LogListParams, LogSpanDetailResponse,
-    LogSpanListParams, LogSpanResponse, LogTargetListParams, boots_response, event_page, span_page,
+    LogSpanListParams, LogSpanResponse, LogTargetListParams,
 };
 pub use self::task::{
     CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
-    task_page,
 };
 pub use self::task_schedule::{
     CreateTaskScheduleRequest, TaskScheduleListParams, TaskScheduleResponse,
-    UpdateTaskScheduleRequest, task_schedule_page,
+    UpdateTaskScheduleRequest,
 };
 
 mod artifact;

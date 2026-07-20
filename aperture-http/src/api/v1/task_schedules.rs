@@ -11,7 +11,7 @@ use super::operation_ids;
 use crate::AppState;
 use crate::dto::{
     CreateTaskScheduleRequest, Page, TaskScheduleListParams, TaskScheduleResponse,
-    UpdateTaskScheduleRequest, task_schedule_page,
+    UpdateTaskScheduleRequest,
 };
 use crate::error::ApiError;
 
@@ -39,7 +39,7 @@ async fn list_task_schedules(
 ) -> Result<Json<Page<TaskScheduleResponse>>, ApiError> {
     let repo = state.storage().task_schedules()?;
     let page = repo.list(&params.to_query()).await?;
-    Ok(Json(task_schedule_page(page)))
+    Ok(Json(TaskScheduleResponse::page(page)))
 }
 
 /// Creates a new periodic task schedule.

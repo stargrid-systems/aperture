@@ -16,7 +16,7 @@ use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId, Record as TracingRecord};
-use tracing::{Event, Level as TracingLevel, Subscriber};
+use tracing::{Event, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
@@ -212,7 +212,7 @@ where
             tracing_id,
             parent_tracing_id,
             name: meta.name().to_owned(),
-            level: tracing_to_db_level(meta.level()),
+            level: Level::from(meta.level()),
             target: meta.target().to_owned(),
             file: meta.file().map(str::to_owned),
             line: meta.line(),
@@ -249,7 +249,7 @@ where
 
         self.try_send(Record::Event(EventMsg {
             span_tracing_id,
-            level: tracing_to_db_level(meta.level()),
+            level: Level::from(meta.level()),
             target,
             message: visitor.take_message(),
             timestamp: Timestamp::now(),
@@ -404,17 +404,6 @@ async fn close_remaining_spans(repo: &LogRepository) {
             error = &err as &dyn StdError,
             "failed to close open spans on shutdown"
         );
-    }
-}
-
-/// Maps a `tracing::Level` to the storage `Level`.
-fn tracing_to_db_level(level: &TracingLevel) -> Level {
-    match *level {
-        TracingLevel::TRACE => Level::Trace,
-        TracingLevel::DEBUG => Level::Debug,
-        TracingLevel::INFO => Level::Info,
-        TracingLevel::WARN => Level::Warn,
-        TracingLevel::ERROR => Level::Error,
     }
 }
 

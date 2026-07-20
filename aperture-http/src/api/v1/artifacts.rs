@@ -26,10 +26,9 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::conditional::{etag_from_digest, format_http_date, is_not_modified};
+use crate::conditional::{Etag, HttpDate};
 use crate::dto::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, Page, VersionListParams,
-    artifact_page, version_page,
 };
 use crate::error::ApiError;
 
@@ -93,7 +92,7 @@ async fn list_artifacts(
         .artifacts()
         .list_artifacts(params.q.as_deref(), &params.to_query())
         .await?;
-    Ok(Json(artifact_page(page)))
+    Ok(Json(ArtifactSummaryResponse::page(page)))
 }
 
 /// Returns one artifact key with its newest version.
@@ -144,7 +143,7 @@ async fn list_versions(
             &params.to_query(),
         )
         .await?;
-    Ok(Json(version_page(page)))
+    Ok(Json(ArtifactVersionResponse::page(page)))
 }
 
 /// Returns one stored version.
@@ -301,19 +300,19 @@ async fn download_artifact_blob(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let etag = etag_from_digest(&artifact.digest);
-    let last_modified = format_http_date(artifact.downloaded_at);
+    let etag = Etag::from_digest(&artifact.digest);
+    let last_modified = HttpDate::from_timestamp(artifact.downloaded_at);
 
-    if is_not_modified(&headers, &etag, artifact.downloaded_at) {
+    if etag.is_not_modified(&headers, artifact.downloaded_at) {
         return Ok((
             StatusCode::NOT_MODIFIED,
             [
-                (header::ETAG, etag),
+                (header::ETAG, etag.as_header().clone()),
                 (
                     header::CACHE_CONTROL,
                     HeaderValue::from_static("public, max-age=31536000, immutable"),
                 ),
-                (header::LAST_MODIFIED, last_modified),
+                (header::LAST_MODIFIED, last_modified.as_header()),
             ],
         )
             .into_response());
@@ -341,9 +340,9 @@ async fn download_artifact_blob(
     Response::builder()
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_LENGTH, artifact.size_bytes)
-        .header(header::ETAG, etag)
+        .header(header::ETAG, etag.as_header().clone())
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-        .header(header::LAST_MODIFIED, last_modified)
+        .header(header::LAST_MODIFIED, last_modified.as_header())
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from_stream(ReaderStream::new(file)))
         .map_err(ApiError::from)
