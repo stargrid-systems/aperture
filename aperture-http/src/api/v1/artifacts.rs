@@ -230,10 +230,7 @@ async fn upload_artifact(
         .await?;
     // Artifact keys are URL-safe ([a-zA-Z0-9._-]) so they round-trip through
     // a single path segment without percent-encoding.
-    let location = format!(
-        "/api/v1/artifacts/{key}/versions/{}",
-        artifact.digest
-    );
+    let location = format!("/api/v1/artifacts/{key}/versions/{}", artifact.digest);
     Ok((
         StatusCode::CREATED,
         [(header::LOCATION, location)],

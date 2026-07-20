@@ -278,8 +278,14 @@ mod tests {
 
     #[test]
     fn rejects_traversal_only_when_whole_key_is_dot_or_dotdot() {
-        assert_eq!(ArtifactKey::new(".").unwrap_err(), InvalidArtifactKey::Traversal);
-        assert_eq!(ArtifactKey::new("..").unwrap_err(), InvalidArtifactKey::Traversal);
+        assert_eq!(
+            ArtifactKey::new(".").unwrap_err(),
+            InvalidArtifactKey::Traversal
+        );
+        assert_eq!(
+            ArtifactKey::new("..").unwrap_err(),
+            InvalidArtifactKey::Traversal
+        );
         // Embedding `..` inside a larger key is fine now that `/` is forbidden.
         assert!(ArtifactKey::new("a..b").is_ok());
     }

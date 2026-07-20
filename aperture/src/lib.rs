@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
-use aperture_http::{AppState, HttpServer, OpenApiSpec, Spectra, SpectraConfig};
+use aperture_http::{AppState, HttpServer, OpenApiSpec, Spectra, SpectraConfig, SpectraWorker};
 use aperture_runtime::Supervisor;
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
@@ -39,7 +39,13 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> anyhow::Result<()> {
     let spectra = Spectra::new(artifacts.clone(), tasks.clone(), SpectraConfig::default());
     spectra.activate_if_present().await?;
 
-    let state = AppState::new(VERSION, boot_id, storage.clone(), spectra, tasks.clone());
+    let state = AppState::new(
+        VERSION,
+        boot_id,
+        storage.clone(),
+        spectra.clone(),
+        tasks.clone(),
+    );
     let app = aperture_http::app(state);
 
     let server = HttpServer::start(addr, app).await?;
@@ -48,6 +54,7 @@ pub async fn serve(addr: SocketAddr, data_dir: PathBuf) -> anyhow::Result<()> {
     supervisor.spawn("http", server);
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
     supervisor.spawn("log", log_worker);
+    supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
 
     supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())

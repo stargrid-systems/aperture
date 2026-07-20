@@ -19,7 +19,7 @@ use self::api::router as api_routes;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
-pub use self::spectra::{Spectra, SpectraConfig};
+pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
 
 mod api;
 mod conditional;

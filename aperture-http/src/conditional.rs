@@ -20,8 +20,7 @@ impl HttpDate {
 
     /// Parses an RFC 9110 IMF-fixdate string.
     pub(crate) fn parse(s: &str) -> Result<Self, InvalidHttpDate> {
-        let system_time =
-            httpdate::parse_http_date(s).map_err(InvalidHttpDate::ParseError)?;
+        let system_time = httpdate::parse_http_date(s).map_err(InvalidHttpDate::ParseError)?;
         let ts = Timestamp::try_from(system_time)
             .map_err(|err| InvalidHttpDate::OutOfRange(err.to_string()))?;
         Ok(Self(ts))
@@ -65,9 +64,7 @@ impl Etag {
     ///
     /// The digest is always valid ASCII (`sha256:hex...`), so this never fails.
     pub(crate) fn from_digest(digest: &Digest) -> Self {
-        Self::wrap(
-            HeaderValue::from_str(&format!("\"{digest}\"")).expect("digest is valid ASCII"),
-        )
+        Self::wrap(HeaderValue::from_str(&format!("\"{digest}\"")).expect("digest is valid ASCII"))
     }
 
     /// Returns `true` when the request's `If-None-Match` header matches this
