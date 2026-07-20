@@ -212,6 +212,7 @@ name = "aperture-tasks"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aperture-runtime",
  "aperture-storage",
  "futures-util",
  "jiff",

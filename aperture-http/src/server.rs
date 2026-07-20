@@ -1,7 +1,6 @@
 //! HTTP server: owns the listeners and drains them on shutdown.
 
 use std::fmt::Debug;
-use std::future::Future;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -64,17 +63,16 @@ impl HttpServer {
         self
     }
 
-    /// Runs all configured listeners until `stop` resolves, then drains
+    /// Runs all configured listeners until `stop` is cancelled, then drains
     /// in-flight connections.
     ///
     /// If any listener exits before `stop`, the remaining listeners are
     /// drained immediately.
-    pub async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
-        let token = CancellationToken::new();
+    pub async fn run(self, stop: CancellationToken) {
         let mut workers = WorkerSet::new();
 
         for HttpEntry { listener, app } in self.http {
-            let listener_token = token.clone();
+            let listener_token = stop.clone();
             workers.spawn("http", async move {
                 serve_until_cancelled(listener, app, listener_token).await;
             });
@@ -84,14 +82,12 @@ impl HttpServer {
             return;
         }
 
-        tokio::pin!(stop);
         // Wait for either the stop signal or any worker to exit on its own.
         // Either branch cancels the token, which the listeners observe as
         // their graceful-shutdown trigger.
         tokio::select! {
             biased;
-            _ = &mut stop => {
-                token.cancel();
+            () = stop.cancelled() => {
                 workers.drain(DRAIN_TIMEOUT).await;
             }
             name = workers.wait_for_any_exit() => {
@@ -101,7 +97,7 @@ impl HttpServer {
                         "http worker exited early, draining remaining workers"
                     );
                 }
-                token.cancel();
+                stop.cancel();
                 workers.drain(DRAIN_TIMEOUT).await;
             }
         }
@@ -135,8 +131,7 @@ impl Default for HttpServer {
 }
 
 /// Adapter that lets [`HttpServer`] be driven by a `aperture-runtime`
-/// supervisor. The supervisor hands us a `stop` future; we forward it to
-/// `HttpServer::run`.
+/// supervisor. The supervisor hands us a stop token.
 impl Worker for HttpServer {
     async fn run(self, stop: Stop) {
         HttpServer::run(self, stop).await;
@@ -149,7 +144,6 @@ mod tests {
 
     use axum::routing::get;
     use tokio::net::TcpListener;
-    use tokio::sync::oneshot;
     use tokio::time::timeout;
 
     use super::*;
@@ -157,12 +151,13 @@ mod tests {
     #[tokio::test]
     async fn empty_server_returns_immediately() {
         let server = HttpServer::new();
-        let (_tx, rx) = oneshot::channel::<()>();
+        let token = CancellationToken::new();
+        // Drop the only clone so the watcher arm in `run` would fire, but the
+        // server has no listeners to wait on anyway.
+        drop(token);
         timeout(
             Duration::from_millis(100),
-            server.run(async move {
-                let _ = rx.await;
-            }),
+            server.run(CancellationToken::new()),
         )
         .await
         .expect("server with no listeners should return immediately");
@@ -194,17 +189,14 @@ mod tests {
         let server = HttpServer::new()
             .serve_http(listener, Router::new().route("/", get(|| async { "ok" })));
 
-        let (tx, rx) = oneshot::channel();
+        let token = CancellationToken::new();
+        let cancel = token.clone();
         let handle = tokio::spawn(async move {
-            server
-                .run(async move {
-                    let _ = rx.await;
-                })
-                .await;
+            server.run(token).await;
         });
 
         wait_until_listening(bound).await;
-        let _ = tx.send(());
+        cancel.cancel();
 
         timeout(Duration::from_secs(5), handle)
             .await
@@ -223,18 +215,15 @@ mod tests {
             .serve_http(l1, Router::new().route("/", get(|| async { "1" })))
             .serve_http(l2, Router::new().route("/", get(|| async { "2" })));
 
-        let (tx, rx) = oneshot::channel();
+        let token = CancellationToken::new();
+        let cancel = token.clone();
         let handle = tokio::spawn(async move {
-            server
-                .run(async move {
-                    let _ = rx.await;
-                })
-                .await;
+            server.run(token).await;
         });
 
         wait_until_listening(b1).await;
         wait_until_listening(b2).await;
-        let _ = tx.send(());
+        cancel.cancel();
 
         timeout(Duration::from_secs(5), handle)
             .await

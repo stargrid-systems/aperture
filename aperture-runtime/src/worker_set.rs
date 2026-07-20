@@ -95,17 +95,17 @@ impl WorkerSet {
         Some(name)
     }
 
-    /// Awaits every still-running task with a hard `deadline`.
+    /// Awaits every still-running task with a hard `time_limit`.
     ///
-    /// Tasks that finish before the deadline are awaited normally. Tasks that
-    /// do not finish are detached (the `WorkerSet` is dropped mid-iteration)
-    /// and left for the runtime to clean up at process exit. Panics are
-    /// logged at `error` level.
-    pub async fn drain(self, deadline: Duration) {
-        match timeout(deadline, self.drain_all()).await {
+    /// Tasks that finish before the time limit is reached are awaited
+    /// normally. Tasks that do not finish are detached (the `WorkerSet` is
+    /// dropped mid-iteration) and left for the runtime to clean up at process
+    /// exit. Panics are logged at `error` level.
+    pub async fn drain(self, time_limit: Duration) {
+        match timeout(time_limit, self.drain_all()).await {
             Ok(()) => tracing::info!("worker set drain complete"),
             Err(_) => tracing::warn!(
-                "worker set drain timed out after {deadline:?}, detaching remaining tasks"
+                "worker set drain timed out after {time_limit:?}, detaching remaining tasks"
             ),
         }
     }

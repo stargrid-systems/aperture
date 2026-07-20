@@ -122,7 +122,7 @@ pub struct LogWorker {
 }
 
 impl Worker for LogWorker {
-    async fn run(mut self, mut stop: Stop) {
+    async fn run(mut self, stop: Stop) {
         let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
         let mut interval = interval(FLUSH_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -130,7 +130,7 @@ impl Worker for LogWorker {
         loop {
             tokio::select! {
                 biased;
-                () = &mut stop => {
+                () = stop.cancelled() => {
                     while let Ok(record) = self.rx.try_recv() {
                         batch.push(record);
                     }

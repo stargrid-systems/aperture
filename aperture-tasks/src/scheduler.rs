@@ -1,11 +1,10 @@
 //! Periodic task scheduler driver.
 
 use std::error::Error;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use aperture_runtime::Stop;
 use aperture_storage::TaskScheduleRepository;
 use jiff::Timestamp;
 use tokio::time::{MissedTickBehavior, interval};
@@ -13,8 +12,6 @@ use tokio::time::{MissedTickBehavior, interval};
 use crate::Tasks;
 
 const TICK_BATCH: usize = 32;
-
-pub(crate) type Stop = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 #[derive(Clone)]
 pub struct Scheduler {
@@ -61,7 +58,7 @@ impl Scheduler {
                         error = &err as &dyn Error,
                         schedule_id = schedule.id.get(),
                         kind = %schedule.kind,
-                        "schedule spawn failed; advancing to next interval",
+                        "schedule spawn failed, advancing to next interval",
                     );
                     // Advance anyway so a permanently-broken schedule does not
                     // fire on every tick.
@@ -81,16 +78,16 @@ impl Scheduler {
         Ok(spawned)
     }
 
-    /// Ticks at `tick_interval`; the first tick fires immediately so missed
+    /// Ticks at `tick_interval`. The first tick fires immediately so missed
     /// schedules are caught up without waiting a full interval. Exits when
-    /// `stop` resolves. Errors inside a tick are logged.
-    pub async fn run(self, tick_interval: Duration, mut stop: Stop) {
+    /// `stop` is cancelled. Errors inside a tick are logged.
+    pub async fn run(self, tick_interval: Duration, stop: Stop) {
         let mut ticker = interval(tick_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 biased;
-                () = &mut stop => return,
+                () = stop.cancelled() => return,
                 _ = ticker.tick() => {}
             }
             if let Err(err) = self.tick().await {
