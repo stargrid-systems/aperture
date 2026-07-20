@@ -1,6 +1,6 @@
 [package]
 name = "aperture-storage"
-version = "0.1.0"
+version.workspace = true
 description = "Aperture storage layer."
 authors.workspace = true
 edition.workspace = true
