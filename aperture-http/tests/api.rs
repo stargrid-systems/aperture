@@ -399,7 +399,7 @@ async fn task_schedule_lifecycle() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched["kind"], "download");
 
-    // Patch only the interval; enabled stays true.
+    // Patch only the interval. Enabled stays true.
     let (status, updated) = patch_json(
         &app,
         &format!("/api/v1/task-schedules/{id}"),
@@ -410,7 +410,7 @@ async fn task_schedule_lifecycle() {
     assert_eq!(updated["interval"], "PT1H");
     assert_eq!(updated["enabled"], true);
 
-    // Patch only enabled; interval stays as set above.
+    // Patch only enabled. Interval stays as set above.
     let (status, updated) = patch_json(
         &app,
         &format!("/api/v1/task-schedules/{id}"),

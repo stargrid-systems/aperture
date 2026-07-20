@@ -291,7 +291,7 @@ impl Paginator {
         let last = rows.last();
 
         let (next_cursor, prev_cursor) = match self.step {
-            // Forward: more ahead iff we fetched an extra; a previous page
+            // Forward: more ahead iff we fetched an extra. A previous page
             // exists iff we arrived here from a cursor.
             Step::After => (
                 if has_extra {
@@ -305,7 +305,7 @@ impl Paginator {
                     None
                 },
             ),
-            // Backward: we came from ahead, so a next page always exists; more
+            // Backward: we came from ahead, so a next page always exists. More
             // behind iff we fetched an extra.
             Step::Before => (
                 cursor_at(last, Step::After),
@@ -397,7 +397,7 @@ mod tests {
             ..Default::default()
         };
         let paginator = Paginator::new(&query, Order::Asc).unwrap();
-        // Rows fetched in flipped (desc) order; finish reverses to base order.
+        // Rows fetched in flipped (desc) order. Finish reverses to base order.
         let page = paginator.finish(vec![3i64, 2, 1], |n| (CursorValue::Int(*n), *n));
         assert_eq!(page.items, vec![2, 3]);
         assert!(page.next_cursor.is_some());

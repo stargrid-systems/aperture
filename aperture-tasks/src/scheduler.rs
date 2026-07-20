@@ -23,6 +23,12 @@ struct Inner {
     tasks: Tasks,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SchedulerError {
+    #[error(transparent)]
+    Storage(#[from] aperture_storage::StorageError),
+}
+
 impl Scheduler {
     pub fn new(schedules: TaskScheduleRepository, tasks: Tasks) -> Self {
         Self {
@@ -95,12 +101,6 @@ impl Scheduler {
             }
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum SchedulerError {
-    #[error(transparent)]
-    Storage(#[from] aperture_storage::StorageError),
 }
 
 #[cfg(test)]

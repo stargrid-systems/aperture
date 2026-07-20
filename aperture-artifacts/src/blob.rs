@@ -212,7 +212,7 @@ impl BlobStore {
 /// Derefs to the underlying [`fs::File`] for writing. While alive, its path is
 /// registered as active so [`BlobStore::clear_temp`] will not remove it.
 /// Dropping the handle unregisters the path, marking the file as removable. The
-/// file itself is not deleted on drop, since that would block; a later
+/// file itself is not deleted on drop, since that would block. A later
 /// [`BlobStore::clear_temp`] reclaims it if it was never placed.
 pub struct TempFile {
     path: PathBuf,

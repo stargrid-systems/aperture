@@ -110,7 +110,7 @@ impl DeferredLogWorker {
 }
 
 /// Drains the layer's channel and batch-inserts records into the database.
-/// Produced by [`DeferredLogWorker::connect`]; drive it via a [`Supervisor`]
+/// Produced by [`DeferredLogWorker::connect`]. Drive it via a [`Supervisor`]
 /// so it shuts down alongside the rest of the gateway.
 ///
 /// [`Supervisor`]: crate::runtime::Supervisor
@@ -390,7 +390,7 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
     if let Err(err) = insert_outcome {
         tracing::warn!(
             error = &err as &dyn StdError,
-            "log batch insert failed; rolling back"
+            "log batch insert failed, rolling back"
         );
         // The records we tried to flush are lost. The caller already drained
         // them out of `batch`, so the only recovery is to drop the tx.

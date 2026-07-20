@@ -136,6 +136,33 @@ const fn is_dot_dot(bytes: &[u8]) -> bool {
     bytes.len() == 2 && bytes[0] == b'.' && bytes[1] == b'.'
 }
 
+/// Errors returned when an artifact key fails validation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidArtifactKey {
+    /// The key was empty.
+    #[error("artifact key is empty")]
+    Empty,
+    /// The key started with `/`.
+    #[error("artifact key must not start with '/'")]
+    AbsolutePath,
+    /// The key contained a NUL byte.
+    #[error("artifact key must not contain NUL bytes")]
+    NulByte,
+    /// The key contained an ASCII control character.
+    #[error("artifact key must not contain control characters")]
+    ControlChar,
+    /// The key is exactly `.` or `..`.
+    #[error("artifact key must not be '.' or '..'")]
+    Traversal,
+    /// The key exceeded 1024 bytes.
+    #[error("artifact key must not exceed {MAX_LEN} bytes")]
+    TooLong,
+    /// The key contained a character outside the URL-safe whitelist
+    /// `[a-zA-Z0-9._-]`.
+    #[error("artifact key must only contain URL-safe chars [a-zA-Z0-9._-]")]
+    InvalidChar,
+}
+
 impl fmt::Display for ArtifactKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -183,33 +210,6 @@ impl<'de> serde::Deserialize<'de> for ArtifactKey {
         let s = String::deserialize(deserializer)?;
         Self::new(s).map_err(DeError::custom)
     }
-}
-
-/// Errors returned when an artifact key fails validation.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum InvalidArtifactKey {
-    /// The key was empty.
-    #[error("artifact key is empty")]
-    Empty,
-    /// The key started with `/`.
-    #[error("artifact key must not start with '/'")]
-    AbsolutePath,
-    /// The key contained a NUL byte.
-    #[error("artifact key must not contain NUL bytes")]
-    NulByte,
-    /// The key contained an ASCII control character.
-    #[error("artifact key must not contain control characters")]
-    ControlChar,
-    /// The key is exactly `.` or `..`.
-    #[error("artifact key must not be '.' or '..'")]
-    Traversal,
-    /// The key exceeded 1024 bytes.
-    #[error("artifact key must not exceed {MAX_LEN} bytes")]
-    TooLong,
-    /// The key contained a character outside the URL-safe whitelist
-    /// `[a-zA-Z0-9._-]`.
-    #[error("artifact key must only contain URL-safe chars [a-zA-Z0-9._-]")]
-    InvalidChar,
 }
 
 impl PartialSchema for ArtifactKey {

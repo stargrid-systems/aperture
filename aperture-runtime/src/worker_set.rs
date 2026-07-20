@@ -23,7 +23,7 @@ use tokio::time::timeout;
 /// - drain every worker with a hard timeout on shutdown.
 ///
 /// `WorkerSet` does not own a cancellation token. The supervisor is
-/// responsible for distributing stop signals; the set just tracks join
+/// responsible for distributing stop signals. The set just tracks join
 /// handles and reports on their state.
 pub struct WorkerSet {
     handles: FuturesUnordered<NamedHandle>,
