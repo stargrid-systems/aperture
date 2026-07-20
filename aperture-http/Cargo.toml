@@ -30,7 +30,7 @@ percent-encoding = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["rt", "net", "sync", "time", "fs"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "sync", "time", "fs"] }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true, features = ["io", "rt"] }
 tower-http = { workspace = true, features = ["trace", "limit"] }
@@ -40,8 +40,5 @@ utoipa-axum = { workspace = true }
 uuid = { workspace = true, features = ["std", "serde"] }
 
 [dev-dependencies]
-aperture-artifacts = { workspace = true }
-jiff = { workspace = true, features = ["std"] }
-serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["full"] }
 tower = { workspace = true, features = ["util"] }
