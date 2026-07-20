@@ -326,25 +326,11 @@ impl Paginator {
 }
 
 fn to_hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
-        out.push(char::from_digit((byte & 0x0F) as u32, 16).expect("nibble"));
-    }
-    out
+    hex::encode(bytes)
 }
 
 fn from_hex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(text.len() / 2);
-    for pair in text.as_bytes().as_chunks::<2>().0 {
-        let hi = (pair[0] as char).to_digit(16)?;
-        let lo = (pair[1] as char).to_digit(16)?;
-        out.push((hi * 16 + lo) as u8);
-    }
-    Some(out)
+    hex::decode(text).ok()
 }
 
 #[cfg(test)]

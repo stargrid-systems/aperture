@@ -20,6 +20,7 @@ aperture-tasks = { workspace = true }
 
 anyhow = { workspace = true, features = ["std"] }
 clap = { workspace = true, features = ["std", "derive", "env", "help", "usage", "error-context", "suggestions"] }
+hex = { workspace = true, features = ["alloc"] }
 jiff = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }

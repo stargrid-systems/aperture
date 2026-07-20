@@ -141,7 +141,7 @@ impl Visit for FieldCollector {
     }
 
     fn record_bytes(&mut self, field: &Field, value: &[u8]) {
-        self.collect_str(field.name(), DisplayAsHex(value));
+        self.collect_str(field.name(), hex::encode(value));
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
@@ -213,16 +213,5 @@ struct DisplayAsDebug<T>(T);
 impl<T: fmt::Debug> fmt::Display for DisplayAsDebug<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0)
-    }
-}
-
-struct DisplayAsHex<T>(T);
-
-impl<T: AsRef<[u8]>> fmt::Display for DisplayAsHex<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0
-            .as_ref()
-            .iter()
-            .try_for_each(|byte| write!(f, "{byte:02x}"))
     }
 }

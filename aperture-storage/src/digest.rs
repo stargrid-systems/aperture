@@ -27,10 +27,9 @@ pub struct Digest {
 impl Digest {
     /// Builds a digest from a raw hash byte slice, hex-encoding it.
     pub fn from_hash(algorithm: DigestAlgorithm, hash: &[u8]) -> Self {
-        let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
         Self {
             algorithm,
-            hex: hex.into_boxed_str(),
+            hex: hex::encode(hash).into_boxed_str(),
         }
     }
 
