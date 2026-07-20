@@ -5,13 +5,13 @@ use std::fmt;
 use std::result::Result as StdResult;
 use std::str::FromStr;
 
-use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use turso::Value;
 use utoipa::openapi::schema::Type;
 use utoipa::openapi::{ObjectBuilder, RefOr, Schema};
 
 use crate::error::{Result, StorageError};
+use crate::serde_util::deserialize_from_str;
 use crate::sql::{FromSql, ToSql};
 
 /// A content digest, for example `sha256:abc123...`.
@@ -78,7 +78,7 @@ impl Serialize for Digest {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.collect_str(self)
     }
 }
 
@@ -87,8 +87,7 @@ impl<'de> Deserialize<'de> for Digest {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        Self::from_str(&s).map_err(DeError::custom)
+        deserialize_from_str(deserializer)
     }
 }
 

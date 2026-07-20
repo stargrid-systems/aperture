@@ -9,13 +9,13 @@ use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::de::Error as DeError;
 use turso::Value;
 use utoipa::openapi::schema::Type;
 use utoipa::openapi::{ObjectBuilder, RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
 
 use crate::error::StorageError;
+use crate::serde_util::deserialize_from_str;
 use crate::sql::{FromSql, ToSql};
 
 /// Maximum byte length of an artifact key.
@@ -198,7 +198,7 @@ impl serde::Serialize for ArtifactKey {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(self.as_str())
+        serializer.collect_str(self)
     }
 }
 
@@ -207,8 +207,7 @@ impl<'de> serde::Deserialize<'de> for ArtifactKey {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        Self::new(s).map_err(DeError::custom)
+        deserialize_from_str(deserializer)
     }
 }
 

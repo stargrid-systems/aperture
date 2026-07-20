@@ -41,6 +41,7 @@ mod media_type;
 mod migration;
 mod page;
 mod query;
+mod serde_util;
 mod sql;
 mod task;
 mod task_schedule;
