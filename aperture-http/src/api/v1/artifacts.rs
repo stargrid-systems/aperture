@@ -320,9 +320,6 @@ async fn download_artifact_blob(
             ArtifactError::from(err).into()
         }
     })?;
-    // The stored media type was validated at put time, so we can replay it
-    // verbatim. The fallback keeps the safe default if the artifact has no
-    // media type recorded.
     let content_type = artifact
         .media_type
         .clone()
