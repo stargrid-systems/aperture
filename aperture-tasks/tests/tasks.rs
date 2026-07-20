@@ -138,7 +138,7 @@ impl TaskDefinition for Fail {
 
     async fn run(&self, _input: Empty, _ctx: TaskContext) -> Result<Empty, RunError> {
         Err(RunError::Failed(
-            anyhow::anyhow!("root cause")
+            anyhow::format_err!("root cause")
                 .context("middle")
                 .context("outer failure"),
         ))
