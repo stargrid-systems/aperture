@@ -173,9 +173,9 @@ impl Drop for PreparingGuard {
 ///
 /// Construct with [`SpectraWorker::new`] using a clone of the [`Spectra`] that
 /// is also shared with HTTP handlers. The worker itself does not run the
-/// download. Downloads are triggered lazily by HTTP requests via
-/// [`Spectra::ensure_started`]. The worker only makes sure any in-flight
-/// prepare task is cancelled and joined before the process exits.
+/// download. Downloads are triggered lazily by HTTP requests. The worker only
+/// makes sure any in-flight prepare task is cancelled and joined before the
+/// process exits.
 pub struct SpectraWorker(Spectra);
 
 impl SpectraWorker {
