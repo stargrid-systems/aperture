@@ -12,7 +12,7 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
-pub fn router() -> OpenApiRouter<AppState> {
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_logs))
         .routes(routes!(list_log_targets))

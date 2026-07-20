@@ -336,11 +336,13 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
             return;
         }
     };
-    for record in batch.drain(..) {
-        match record {
-            Record::SpanStart(s) => {
-                let _ = tx
-                    .insert_span(SpanRecord {
+    // Any insert error poisons the transaction. Fail fast so we do not waste
+    // time on doomed follow-up inserts.
+    let insert_outcome: Result<(), aperture_storage::StorageError> = async {
+        for record in batch.drain(..) {
+            match record {
+                Record::SpanStart(s) => {
+                    tx.insert_span(SpanRecord {
                         tracing_id: s.tracing_id,
                         parent_tracing_id: s.parent_tracing_id,
                         boot_id,
@@ -352,19 +354,17 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         started_at: s.started_at,
                         fields: &s.fields,
                     })
-                    .await;
-            }
-            Record::SpanFields(f) => {
-                let _ = tx
-                    .update_span_fields(f.tracing_id, boot_id, &f.fields)
-                    .await;
-            }
-            Record::SpanEnd(s) => {
-                let _ = tx.close_span(s.tracing_id, boot_id, s.ended_at).await;
-            }
-            Record::Event(e) => {
-                let _ = tx
-                    .insert_event(EventRecord {
+                    .await?;
+                }
+                Record::SpanFields(f) => {
+                    tx.update_span_fields(f.tracing_id, boot_id, &f.fields)
+                        .await?;
+                }
+                Record::SpanEnd(s) => {
+                    tx.close_span(s.tracing_id, boot_id, s.ended_at).await?;
+                }
+                Record::Event(e) => {
+                    tx.insert_event(EventRecord {
                         span_tracing_id: e.span_tracing_id,
                         level: e.level,
                         target: &e.target,
@@ -375,14 +375,29 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         boot_id,
                         fields: &e.fields,
                     })
-                    .await;
+                    .await?;
+                }
             }
         }
+        let count = dropped.load(Ordering::Relaxed);
+        if count > 0 {
+            tx.record_dropped(count, Timestamp::now(), boot_id).await?;
+        }
+        Ok(())
     }
+    .await;
+
+    if let Err(err) = insert_outcome {
+        tracing::warn!(
+            error = &err as &dyn StdError,
+            "log batch insert failed; rolling back"
+        );
+        // The records we tried to flush are lost. The caller already drained
+        // them out of `batch`, so the only recovery is to drop the tx.
+        return;
+    }
+
     let count = dropped.load(Ordering::Relaxed);
-    if count > 0 {
-        let _ = tx.record_dropped(count, Timestamp::now(), boot_id).await;
-    }
     match tx.commit().await {
         Ok(()) => {
             if count > 0 {

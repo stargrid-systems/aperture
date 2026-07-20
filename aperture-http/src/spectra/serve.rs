@@ -9,6 +9,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, RETRY_AFTER, VARY,
+    X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -23,6 +24,12 @@ use super::image::SpectraImage;
 use crate::AppState;
 
 const PLACEHOLDER: &str = include_str!("installing.html");
+
+const CACHE_NO_CACHE: HeaderValue = HeaderValue::from_static("no-cache");
+const CACHE_NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
+const VARY_ACCEPT_ENCODING: HeaderValue = HeaderValue::from_static("accept-encoding");
+const NOSNIFF: HeaderValue = HeaderValue::from_static("nosniff");
+const OCTET_STREAM: HeaderValue = HeaderValue::from_static("application/octet-stream");
 
 /// Serves the current frontend, or a self-refreshing placeholder while it is
 /// still being installed.
@@ -43,11 +50,11 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
             StatusCode::NOT_MODIFIED,
             [
                 (ETAG, image.etag.clone().into()),
-                (CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+                (CACHE_CONTROL, CACHE_NO_CACHE.clone()),
                 // The 200 response varies by Accept-Encoding, so the 304 must
                 // advertise the same Vary per RFC 9110 section 15.4.5. The
                 // ETag alone does not distinguish encodings.
-                (VARY, HeaderValue::from_static("accept-encoding")),
+                (VARY, VARY_ACCEPT_ENCODING.clone()),
             ],
         )
             .into_response();
@@ -60,13 +67,14 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
 
     let stream = SquashfsFileStream::new(Arc::clone(&image.fs), resolved.file);
     let content_type = HeaderValue::from_str(resolved.content_type.as_ref())
-        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+        .unwrap_or_else(|_| OCTET_STREAM.clone());
     let mut response = Response::new(Body::from_stream(stream));
     let headers = response.headers_mut();
     headers.insert(CONTENT_TYPE, content_type);
     headers.insert(ETAG, image.etag.clone().into());
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
+    headers.insert(CACHE_CONTROL, CACHE_NO_CACHE.clone());
+    headers.insert(VARY, VARY_ACCEPT_ENCODING.clone());
+    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF.clone());
     if let Some(encoding) = resolved.encoding {
         headers.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
     }
@@ -167,7 +175,8 @@ fn placeholder() -> Response {
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     headers.insert(RETRY_AFTER, HeaderValue::from_static("2"));
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(CACHE_CONTROL, CACHE_NO_STORE.clone());
+    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF.clone());
     response
 }
 

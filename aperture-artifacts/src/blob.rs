@@ -49,8 +49,24 @@ impl BlobStore {
     }
 
     /// Returns whether the blob with `digest` is already stored.
+    ///
+    /// IO errors other than "file not found" are logged and treated as
+    /// "not present". A misconfigured store should not crash the gateway, but
+    /// operators will see the warning.
     pub async fn contains(&self, digest: &Digest) -> bool {
-        fs::try_exists(self.path(digest)).await.unwrap_or(false)
+        use std::error::Error as StdError;
+        use std::io::ErrorKind;
+        match fs::try_exists(self.path(digest)).await {
+            Ok(exists) => exists,
+            Err(err) if err.kind() == ErrorKind::NotFound => false,
+            Err(err) => {
+                tracing::warn!(
+                    error = &err as &dyn StdError,
+                    "blob existence check failed, treating as missing"
+                );
+                false
+            }
+        }
     }
 
     /// Lists the digests of all stored blobs.
