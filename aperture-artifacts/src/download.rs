@@ -1,6 +1,6 @@
 //! The download task: fetching an artifact, modelled as a [`TaskDefinition`].
 
-use aperture_storage::{ArtifactKey, MediaType};
+use aperture_storage::{ArtifactKey, Digest, MediaType};
 use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -47,7 +47,7 @@ impl From<DownloadSource> for FetchSource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DownloadOutput {
     /// Content digest of the stored blob.
-    pub digest: String,
+    pub digest: Digest,
     /// Stored blob size in bytes.
     pub size_bytes: u64,
     /// Human-readable version, if known.
@@ -100,7 +100,7 @@ impl TaskDefinition for DownloadDefinition {
             }
         };
         Ok(DownloadOutput {
-            digest: artifact.digest.to_string(),
+            digest: artifact.digest,
             size_bytes: artifact.size_bytes,
             version: artifact.version,
         })
