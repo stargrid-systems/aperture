@@ -1,6 +1,8 @@
 //! Content-addressed blob store.
 
 use std::collections::HashSet;
+use std::error::Error as StdError;
+use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -54,8 +56,6 @@ impl BlobStore {
     /// "not present". A misconfigured store should not crash the gateway, but
     /// operators will see the warning.
     pub async fn contains(&self, digest: &Digest) -> bool {
-        use std::error::Error as StdError;
-        use std::io::ErrorKind;
         match fs::try_exists(self.path(digest)).await {
             Ok(exists) => exists,
             Err(err) if err.kind() == ErrorKind::NotFound => false,
@@ -76,7 +76,7 @@ impl BlobStore {
     pub async fn list(&self) -> Result<Vec<Digest>> {
         let mut algorithms = match fs::read_dir(self.blobs_dir()).await {
             Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(err) => return Err(err.into()),
         };
         let mut digests = Vec::new();
@@ -88,7 +88,7 @@ impl BlobStore {
             };
             let mut hashes = match fs::read_dir(algorithm.path()).await {
                 Ok(entries) => entries,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
                 Err(err) => return Err(err.into()),
             };
             while let Some(hash) = hashes.next_entry().await? {
@@ -115,7 +115,7 @@ impl BlobStore {
     pub async fn clear_temp(&self) -> Result<()> {
         let mut entries = match fs::read_dir(self.tmp_dir()).await {
             Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
             Err(err) => return Err(err.into()),
         };
         while let Some(entry) = entries.next_entry().await? {
@@ -252,7 +252,7 @@ impl Drop for TempFile {
 async fn remove_if_exists(path: &Path) -> Result<()> {
     match fs::remove_file(path).await {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err.into()),
     }
 }

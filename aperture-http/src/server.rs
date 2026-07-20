@@ -1,6 +1,8 @@
 //! HTTP server: owns the listeners and drains them on shutdown.
 
+use std::error::Error as StdError;
 use std::fmt::Debug;
+use std::future::IntoFuture as _;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -111,9 +113,6 @@ where
     L::Io: Send,
     L::Addr: Debug + Send,
 {
-    use std::error::Error as StdError;
-    use std::future::IntoFuture as _;
-
     let serve =
         axum::serve(listener, app).with_graceful_shutdown(async move { token.cancelled().await });
     if let Err(err) = serve.into_future().await {

@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::TryStreamExt as _;
 use tokio::fs::File;
 use tokio_util::io::{ReaderStream, StreamReader};
+use tower_http::limit::RequestBodyLimitLayer;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -36,7 +37,6 @@ use crate::error::ApiError;
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
 pub(crate) fn router() -> OpenApiRouter<AppState> {
-    use tower_http::limit::RequestBodyLimitLayer;
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
         .routes(routes!(get_artifact))

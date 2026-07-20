@@ -7,6 +7,7 @@ use aperture_storage::StorageError;
 use aperture_tasks::{SchedulerError, TaskError};
 use axum::http::{Error as HttpError, StatusCode};
 use axum::response::{IntoResponse, Response};
+use http_body_util::LengthLimitError;
 
 /// An error turned into an HTTP response.
 ///
@@ -105,8 +106,6 @@ impl IntoResponse for ApiError {
 /// `io::Error`. Detect it here so we can answer with `413 Payload Too Large`
 /// instead of a misleading `500`.
 fn chain_contains_length_limit(err: &(dyn StdError + 'static)) -> bool {
-    use http_body_util::LengthLimitError;
-
     let mut current: Option<&(dyn StdError + 'static)> = Some(err);
     while let Some(e) = current {
         if e.is::<LengthLimitError>() {
