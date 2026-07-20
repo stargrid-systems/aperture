@@ -217,7 +217,7 @@ mod tests {
     const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/site.sqfs");
 
     fn image() -> Arc<SpectraImage> {
-        Arc::new(SpectraImage::open(Path::new(FIXTURE), "sha256:test").unwrap())
+        Arc::new(SpectraImage::open(Path::new(FIXTURE), &"sha256:abcd".parse().unwrap()).unwrap())
     }
 
     fn request(uri: &str, headers: &[(HeaderName, &str)]) -> Request {
@@ -239,7 +239,7 @@ mod tests {
     async fn serves_index_with_digest_etag() {
         let response = serve(image(), request("/", &[]));
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().get(ETAG).unwrap(), "\"sha256:test\"");
+        assert_eq!(response.headers().get(ETAG).unwrap(), "\"sha256:abcd\"");
         assert!(
             response
                 .headers()
@@ -258,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn revalidates_with_matching_etag() {
-        let response = serve(image(), request("/", &[(IF_NONE_MATCH, "\"sha256:test\"")]));
+        let response = serve(image(), request("/", &[(IF_NONE_MATCH, "\"sha256:abcd\"")]));
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     }
 

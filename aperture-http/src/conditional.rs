@@ -2,6 +2,7 @@
 
 use std::time::SystemTime;
 
+use aperture_artifacts::Digest;
 use axum::http::{HeaderMap, HeaderValue, header};
 use jiff::Timestamp;
 
@@ -49,7 +50,7 @@ impl Etag {
     /// Builds a quoted strong ETag from a content digest.
     ///
     /// The digest is always valid ASCII (`sha256:hex...`), so this never fails.
-    pub(crate) fn from_digest(digest: &str) -> Self {
+    pub(crate) fn from_digest(digest: &Digest) -> Self {
         Self::wrap(HeaderValue::from_str(&format!("\"{digest}\"")).expect("digest is valid ASCII"))
     }
 

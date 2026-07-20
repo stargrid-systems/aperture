@@ -2,7 +2,7 @@
 
 use std::io;
 
-use aperture_artifacts::{ArtifactError, ArtifactKey, MediaType};
+use aperture_artifacts::{ArtifactError, ArtifactKey, Digest, MediaType};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
@@ -129,7 +129,7 @@ async fn list_versions(
         .list_versions(
             &key,
             params.sort(),
-            params.media_type.as_deref(),
+            params.media_type.as_ref(),
             params.version.as_deref(),
             &params.to_query(),
         )
@@ -153,7 +153,7 @@ async fn list_versions(
 )]
 async fn get_version(
     State(state): State<AppState>,
-    Path((key, digest)): Path<(ArtifactKey, String)>,
+    Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<Json<ArtifactVersionResponse>, ApiError> {
     let version = state.spectra().artifacts().version(&key, &digest).await?;
     version
@@ -177,7 +177,7 @@ async fn get_version(
 )]
 async fn delete_version(
     State(state): State<AppState>,
-    Path((key, digest)): Path<(ArtifactKey, String)>,
+    Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<StatusCode, ApiError> {
     let evicted = state
         .spectra()
@@ -283,7 +283,7 @@ async fn upload_artifact(
 )]
 async fn download_artifact_blob(
     State(state): State<AppState>,
-    Path((key, digest)): Path<(ArtifactKey, String)>,
+    Path((key, digest)): Path<(ArtifactKey, Digest)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let artifacts = state.spectra().artifacts();
@@ -321,13 +321,14 @@ async fn download_artifact_blob(
             ArtifactError::from(err).into()
         }
     })?;
-    let content_type = artifact
-        .media_type
-        .clone()
-        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let content_type = artifact.media_type.clone().unwrap_or_else(|| {
+        "application/octet-stream"
+            .parse()
+            .expect("valid media type")
+    });
 
     Response::builder()
-        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_TYPE, content_type.to_string())
         .header(header::CONTENT_LENGTH, artifact.size_bytes)
         .header(header::ETAG, etag.as_header().clone())
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")

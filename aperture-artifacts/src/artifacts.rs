@@ -151,7 +151,11 @@ impl Artifacts {
     }
 
     /// Returns the blob of the `(key, digest)` version, if present on disk.
-    pub async fn locate_version(&self, key: &ArtifactKey, digest: &str) -> Result<Option<Located>> {
+    pub async fn locate_version(
+        &self,
+        key: &ArtifactKey,
+        digest: &Digest,
+    ) -> Result<Option<Located>> {
         self.inner.locate_version(key, digest).await
     }
 
@@ -176,7 +180,7 @@ impl Artifacts {
         &self,
         key: &ArtifactKey,
         sort: VersionSort,
-        media_type: Option<&str>,
+        media_type: Option<&MediaType>,
         version: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Artifact>> {
@@ -189,7 +193,7 @@ impl Artifacts {
     }
 
     /// Returns the `(key, digest)` version, if stored.
-    pub async fn version(&self, key: &ArtifactKey, digest: &str) -> Result<Option<Artifact>> {
+    pub async fn version(&self, key: &ArtifactKey, digest: &Digest) -> Result<Option<Artifact>> {
         Ok(self
             .inner
             .storage
@@ -200,7 +204,7 @@ impl Artifacts {
 
     /// Removes the `(key, digest)` version, and its blob if no other version
     /// references it. Returns whether the version existed.
-    pub async fn evict_version(&self, key: &ArtifactKey, digest: &str) -> Result<bool> {
+    pub async fn evict_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<bool> {
         let removed = self.inner.evict_version(key, digest).await?;
         if removed {
             self.inner.notify(ArtifactChange {
@@ -236,8 +240,8 @@ impl Artifacts {
             id: DbId::from(0),
             key: key.clone(),
             source: "upload".to_owned(),
-            digest: digest.to_string(),
-            media_type: media_type.map(|mt| mt.to_string()),
+            digest: digest.clone(),
+            media_type: media_type.cloned(),
             version: None,
             size_bytes: size,
             downloaded_at: now,
@@ -268,11 +272,10 @@ impl Artifacts {
     ) -> Result<Artifact> {
         let (artifact, written) = self.inner.download(&request, &progress).await?;
         if written {
-            let digest = artifact.digest.parse().ok();
             self.inner.notify(ArtifactChange {
                 key: artifact.key.clone(),
                 kind: ChangeKind::Written,
-                digest,
+                digest: Some(artifact.digest.clone()),
             });
         }
         Ok(artifact)
@@ -303,27 +306,26 @@ impl Inner {
         }
     }
 
-    async fn locate_version(&self, key: &ArtifactKey, digest: &str) -> Result<Option<Located>> {
+    async fn locate_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<Option<Located>> {
         match self.storage.artifacts()?.get_version(key, digest).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,
             None => Ok(None),
         }
     }
 
-    async fn locate_digest(&self, raw: &str) -> Result<Option<Located>> {
-        let digest: Digest = raw.parse()?;
-        if !self.blobs.contains(&digest).await {
+    async fn locate_digest(&self, digest: &Digest) -> Result<Option<Located>> {
+        if !self.blobs.contains(digest).await {
             return Ok(None);
         }
         Ok(Some(Located {
-            path: self.blobs.path(&digest),
-            digest,
+            path: self.blobs.path(digest),
+            digest: digest.clone(),
         }))
     }
 
     /// Removes a stored version, and its blob when no other version still
     /// references that digest. Returns whether the version existed.
-    async fn evict_version(&self, key: &ArtifactKey, digest: &str) -> Result<bool> {
+    async fn evict_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<bool> {
         let repository = self.storage.artifacts()?;
         let Some(artifact) = repository.get_version(key, digest).await? else {
             return Ok(false);
@@ -336,18 +338,7 @@ impl Inner {
             .iter()
             .any(|version| version.digest == artifact.digest);
         if !still_referenced {
-            match artifact.digest.parse::<Digest>() {
-                Ok(parsed) => {
-                    self.blobs.remove(&parsed).await?;
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        key = %artifact.key,
-                        digest = %artifact.digest,
-                        "unparseable digest during eviction; blob may leak"
-                    );
-                }
-            }
+            self.blobs.remove(&artifact.digest).await?;
         }
         Ok(true)
     }
@@ -365,11 +356,12 @@ impl Inner {
         let repository = self.storage.artifacts()?;
         let now = Timestamp::now();
         let resolved = self.resolve(request, now).await?;
-        let digest_str = resolved.digest.to_string();
 
         // Fast path: this version is already recorded and its blob is present.
         // Read-only, so no lock is needed.
-        if let Some(existing) = repository.get_version(&request.key, &digest_str).await?
+        if let Some(existing) = repository
+            .get_version(&request.key, &resolved.digest)
+            .await?
             && self.blobs.contains(&resolved.digest).await
         {
             return Ok((existing, false));
@@ -381,7 +373,10 @@ impl Inner {
         let _guard = lock.lock().await;
 
         // Re-check under the lock: another caller may have finished meanwhile.
-        if let Some(existing) = repository.get_version(&request.key, &digest_str).await? {
+        if let Some(existing) = repository
+            .get_version(&request.key, &resolved.digest)
+            .await?
+        {
             return Ok((existing, false));
         }
         // The blob is present (shared from another key), so record without
@@ -539,16 +534,8 @@ impl Inner {
         let mut tracked: HashSet<Digest> = HashSet::new();
 
         for artifact in repository.all_versions().await? {
-            let Ok(digest) = artifact.digest.parse::<Digest>() else {
-                // An unreadable digest can never match a blob, so drop the row.
-                repository
-                    .delete_version(&artifact.key, &artifact.digest)
-                    .await?;
-                report.removed_entries += 1;
-                continue;
-            };
-            if self.blobs.contains(&digest).await {
-                tracked.insert(digest);
+            if self.blobs.contains(&artifact.digest).await {
+                tracked.insert(artifact.digest.clone());
             } else {
                 repository
                     .delete_version(&artifact.key, &artifact.digest)
@@ -587,8 +574,8 @@ fn build_artifact(
         id: DbId::from(0),
         key: request.key.clone(),
         source: request.source_str().to_owned(),
-        digest: digest.to_string(),
-        media_type: Some(media_type.to_string()),
+        digest: digest.clone(),
+        media_type: Some(media_type.clone()),
         version,
         size_bytes: size,
         downloaded_at: at,
@@ -656,7 +643,7 @@ mod tests {
         assert_eq!(change.kind, ChangeKind::Written);
         assert_eq!(
             change.digest.map(|d| d.to_string()),
-            Some(artifact.digest.clone()),
+            Some(artifact.digest.to_string()),
             "Written events must carry the new digest",
         );
         cleanup(dir);
@@ -678,7 +665,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            artifact.media_type.as_deref(),
+            artifact.media_type.as_ref().map(|mt| mt.as_str()),
             Some("application/octet-stream")
         );
 
