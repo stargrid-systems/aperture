@@ -419,12 +419,7 @@ impl Inner {
                 reference,
                 media_type,
             } => {
-                let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(
-                        anyhow::Error::from(err)
-                            .context(format!("invalid reference {reference:?}")),
-                    )
-                })?;
+                let reference = parse_reference(reference)?;
                 self.oci.resolve(&reference, media_type).await?
             }
         };
@@ -467,12 +462,7 @@ impl Inner {
                 reference,
                 media_type,
             } => {
-                let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(
-                        anyhow::Error::from(err)
-                            .context(format!("invalid reference {reference:?}")),
-                    )
-                })?;
+                let reference = parse_reference(reference)?;
                 self.fetch_oci(&reference, media_type, progress).await
             }
         }
@@ -553,6 +543,15 @@ impl Inner {
 
         Ok(report)
     }
+}
+
+/// Parses an OCI reference string, attaching context on failure.
+fn parse_reference(reference: &str) -> Result<Reference> {
+    reference.parse().map_err(|err| {
+        ArtifactError::Fetch(
+            anyhow::Error::from(err).context(format!("invalid reference {reference:?}")),
+        )
+    })
 }
 
 /// Whether a resolution made at `resolved_at` is still fresh at `now`.

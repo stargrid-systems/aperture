@@ -19,9 +19,12 @@ impl HttpDate {
     }
 
     /// Parses an RFC 9110 IMF-fixdate string.
-    pub(crate) fn parse(s: &str) -> Option<Self> {
-        let system_time = httpdate::parse_http_date(s).ok()?;
-        Timestamp::try_from(system_time).ok().map(Self)
+    pub(crate) fn parse(s: &str) -> Result<Self, InvalidHttpDate> {
+        let system_time =
+            httpdate::parse_http_date(s).map_err(InvalidHttpDate::ParseError)?;
+        let ts = Timestamp::try_from(system_time)
+            .map_err(|err| InvalidHttpDate::OutOfRange(err.to_string()))?;
+        Ok(Self(ts))
     }
 
     /// Returns the underlying timestamp.
@@ -35,6 +38,17 @@ impl HttpDate {
         HeaderValue::from_str(&httpdate::fmt_http_date(system_time))
             .expect("HTTP date is always valid ASCII")
     }
+}
+
+/// Returned when an HTTP-date string fails parsing.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InvalidHttpDate {
+    /// The string was not a valid IMF-fixdate.
+    #[error("invalid HTTP date: {0}")]
+    ParseError(#[source] httpdate::Error),
+    /// The parsed time is outside the range [`Timestamp`] can represent.
+    #[error("HTTP date out of range: {0}")]
+    OutOfRange(String),
 }
 
 /// A quoted ETag suitable for use as an HTTP header value.
@@ -51,12 +65,9 @@ impl Etag {
     ///
     /// The digest is always valid ASCII (`sha256:hex...`), so this never fails.
     pub(crate) fn from_digest(digest: &Digest) -> Self {
-        Self::wrap(HeaderValue::from_str(&format!("\"{digest}\"")).expect("digest is valid ASCII"))
-    }
-
-    /// Returns the wrapped header value.
-    pub(crate) fn as_header(&self) -> &HeaderValue {
-        &self.0
+        Self::wrap(
+            HeaderValue::from_str(&format!("\"{digest}\"")).expect("digest is valid ASCII"),
+        )
     }
 
     /// Returns `true` when the request's `If-None-Match` header matches this
@@ -94,11 +105,17 @@ impl Etag {
         }
         if let Some(value) = headers.get(header::IF_MODIFIED_SINCE)
             && let Ok(s) = value.to_str()
-            && let Some(since) = HttpDate::parse(s)
+            && let Ok(since) = HttpDate::parse(s)
         {
             return last_modified <= since.to_timestamp();
         }
         false
+    }
+}
+
+impl From<Etag> for HeaderValue {
+    fn from(etag: Etag) -> Self {
+        etag.0
     }
 }
 
@@ -173,5 +190,10 @@ mod tests {
         headers.insert(header::IF_MODIFIED_SINCE, future_date.as_header());
         let ts: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
         assert!(etag("\"abc\"").is_not_modified(&headers, ts));
+    }
+
+    #[test]
+    fn http_date_parse_returns_error_on_garbage() {
+        assert!(HttpDate::parse("not a date").is_err());
     }
 }

@@ -42,7 +42,7 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
         return (
             StatusCode::NOT_MODIFIED,
             [
-                (ETAG, image.etag.as_header().clone()),
+                (ETAG, image.etag.clone().into()),
                 (CACHE_CONTROL, HeaderValue::from_static("no-cache")),
                 // The 200 response varies by Accept-Encoding, so the 304 must
                 // advertise the same Vary per RFC 9110 section 15.4.5. The
@@ -53,7 +53,7 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
             .into_response();
     }
 
-    let accepted = accepted_encodings(request.headers());
+    let accepted = AcceptedEncodings::from_headers(request.headers());
     let Some(resolved) = image.resolve(request.uri().path(), accepted.br, accepted.gzip) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -64,7 +64,7 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
     let mut response = Response::new(Body::from_stream(stream));
     let headers = response.headers_mut();
     headers.insert(CONTENT_TYPE, content_type);
-    headers.insert(ETAG, image.etag.as_header().clone());
+    headers.insert(ETAG, image.etag.clone().into());
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
     if let Some(encoding) = resolved.encoding {
@@ -171,37 +171,41 @@ fn placeholder() -> Response {
     response
 }
 
-fn accepted_encodings(headers: &HeaderMap) -> AcceptedEncodings {
-    let value = headers
-        .get(ACCEPT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let mut out = AcceptedEncodings::default();
-    for entry in value.split(',') {
-        let mut parts = entry.splitn(2, ';');
-        let name = parts.next().unwrap_or("").trim();
-        let q = parts
-            .next()
-            .and_then(|p| p.trim().strip_prefix("q="))
-            .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(1.0);
-        if q > 0.0 {
-            if name.eq_ignore_ascii_case("br") {
-                out.br = true;
-            }
-            if name.eq_ignore_ascii_case("gzip") {
-                out.gzip = true;
-            }
-        }
-    }
-    out
-}
-
 /// The `Accept-Encoding` preferences we care about, parsed from a request.
 #[derive(Debug, Clone, Copy, Default)]
 struct AcceptedEncodings {
     br: bool,
     gzip: bool,
+}
+
+impl AcceptedEncodings {
+    /// Parses `Accept-Encoding` from `headers`. A missing or unparseable
+    /// header yields no accepted encodings.
+    fn from_headers(headers: &HeaderMap) -> Self {
+        let value = headers
+            .get(ACCEPT_ENCODING)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let mut out = Self::default();
+        for entry in value.split(',') {
+            let mut parts = entry.splitn(2, ';');
+            let name = parts.next().unwrap_or("").trim();
+            let q = parts
+                .next()
+                .and_then(|p| p.trim().strip_prefix("q="))
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(1.0);
+            if q > 0.0 {
+                if name.eq_ignore_ascii_case("br") {
+                    out.br = true;
+                }
+                if name.eq_ignore_ascii_case("gzip") {
+                    out.gzip = true;
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]

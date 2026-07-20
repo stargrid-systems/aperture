@@ -280,7 +280,7 @@ async fn download_artifact_blob(
         return Ok((
             StatusCode::NOT_MODIFIED,
             [
-                (header::ETAG, etag.as_header().clone()),
+                (header::ETAG, etag.into()),
                 (
                     header::CACHE_CONTROL,
                     HeaderValue::from_static("public, max-age=31536000, immutable"),
@@ -311,7 +311,7 @@ async fn download_artifact_blob(
     Response::builder()
         .header(header::CONTENT_TYPE, content_type.to_string())
         .header(header::CONTENT_LENGTH, artifact.size_bytes)
-        .header(header::ETAG, etag.as_header().clone())
+        .header(header::ETAG, HeaderValue::from(etag))
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
         .header(header::LAST_MODIFIED, last_modified.as_header())
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
