@@ -9,7 +9,6 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::TryStreamExt as _;
-use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use tokio::fs::File;
 use tokio_util::io::{ReaderStream, StreamReader};
 use utoipa_axum::router::OpenApiRouter;
@@ -36,24 +35,7 @@ use crate::error::ApiError;
 /// `Content-Length: artifact.size_bytes` on the response.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
-/// ASCII set that percent-encodes everything unsafe inside a single URL path
-/// segment. `/` is the most important one here, because artifact keys may
-/// contain it (e.g. `tls/server-cert`) and an unencoded slash would shift the
-/// route match.
-const PATH_SEGMENT: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'"')
-    .add(b'#')
-    .add(b'%')
-    .add(b'<')
-    .add(b'>')
-    .add(b'?')
-    .add(b'`')
-    .add(b'{')
-    .add(b'}')
-    .add(b'/');
-
-pub fn router() -> OpenApiRouter<AppState> {
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     use tower_http::limit::RequestBodyLimitLayer;
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
@@ -246,11 +228,10 @@ async fn upload_artifact(
         .artifacts()
         .put(&key, media_type.as_ref(), reader)
         .await?;
-    // Percent-encode the key so a multi-segment key like `tls/server-cert`
-    // survives routing when the client follows the Location header.
-    let encoded_key = utf8_percent_encode(key.as_str(), PATH_SEGMENT);
+    // Artifact keys are URL-safe ([a-zA-Z0-9._-]) so they round-trip through
+    // a single path segment without percent-encoding.
     let location = format!(
-        "/api/v1/artifacts/{encoded_key}/versions/{}",
+        "/api/v1/artifacts/{key}/versions/{}",
         artifact.digest
     );
     Ok((

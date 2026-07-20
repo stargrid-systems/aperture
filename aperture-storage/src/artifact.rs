@@ -49,7 +49,7 @@ const ARTIFACT_COLUMNS: Columns = Columns::new(&[
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
     pub id: DbId,
-    /// Logical key, for example `spectra` or `tool/avrdude`.
+    /// Logical key, for example `spectra` or `tls_server-cert`.
     pub key: ArtifactKey,
     /// Where it came from (an image reference or a URL).
     pub source: String,

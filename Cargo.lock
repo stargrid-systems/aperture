@@ -166,7 +166,6 @@ dependencies = [
  "httpdate",
  "jiff",
  "mime_guess",
- "percent-encoding",
  "serde",
  "serde_json",
  "thiserror",

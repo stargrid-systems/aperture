@@ -1,6 +1,6 @@
 //! The typed artifact key: a logical identifier for a stored component.
 //!
-//! Keys are short stable strings, for example `spectra` or `tls/server-cert`.
+//! Keys are short stable strings, for example `spectra` or `tls_server-cert`.
 //! They appear as the `key` column of the artifact catalog and as the path
 //! segment of the artifact HTTP API. Wrapping the string in a newtype keeps
 //! the call sites honest and centralises validation.
@@ -25,14 +25,19 @@ pub const MAX_LEN: usize = 1024;
 ///
 /// Construct with [`ArtifactKey::new`] (validated) or
 /// [`ArtifactKey::from_str`].
+///
+/// Keys are URL-safe: they may only contain `[a-zA-Z0-9._-]`. This guarantees
+/// they round-trip through a single HTTP path segment without percent-encoding
+/// and never collide with route separators.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArtifactKey(Cow<'static, str>);
 
 impl ArtifactKey {
     /// Wraps `key` after validation.
     ///
-    /// Rejects empty, absolute paths, path traversal segments (`.` or `..`),
-    /// NUL bytes, control characters, and keys longer than 1024 bytes.
+    /// Rejects empty, too long, and characters outside `[a-zA-Z0-9._-]`.
+    /// Also rejects the literal strings `.` and `..` to prevent path-traversal
+    /// confusion in callers that join the key with file paths.
     pub fn new(key: impl Into<Cow<'static, str>>) -> Result<Self, InvalidArtifactKey> {
         let key = key.into();
         validate(key.as_bytes())?;
@@ -57,9 +62,12 @@ impl ArtifactKey {
                 panic!("artifact key must not contain control characters")
             }
             Err(InvalidArtifactKey::Traversal) => {
-                panic!("artifact key must not contain '.' or '..' segments")
+                panic!("artifact key must not be '.' or '..'")
             }
             Err(InvalidArtifactKey::TooLong) => panic!("artifact key exceeds max length"),
+            Err(InvalidArtifactKey::InvalidChar) => {
+                panic!("artifact key must be URL-safe [a-zA-Z0-9._-]")
+            }
         }
     }
 
@@ -86,10 +94,8 @@ const fn validate(bytes: &[u8]) -> Result<(), InvalidArtifactKey> {
     }
 
     let mut i = 0;
-    let mut segment_start = 0;
     let mut found_nul = false;
     let mut found_control = false;
-    let mut found_traversal = false;
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -97,37 +103,37 @@ const fn validate(bytes: &[u8]) -> Result<(), InvalidArtifactKey> {
             found_nul = true;
         } else if b < 0x20 || b == 0x7F {
             found_control = true;
-        }
-
-        if b == b'/' {
-            if is_traversal_segment(bytes, segment_start, i) {
-                found_traversal = true;
-            }
-            segment_start = i + 1;
+        } else if !is_url_safe(b) {
+            return Err(InvalidArtifactKey::InvalidChar);
         }
         i += 1;
     }
-    if is_traversal_segment(bytes, segment_start, bytes.len()) {
-        found_traversal = true;
-    }
 
     if found_nul {
-        Err(InvalidArtifactKey::NulByte)
-    } else if found_control {
-        Err(InvalidArtifactKey::ControlChar)
-    } else if found_traversal {
-        Err(InvalidArtifactKey::Traversal)
-    } else {
-        Ok(())
+        return Err(InvalidArtifactKey::NulByte);
     }
+    if found_control {
+        return Err(InvalidArtifactKey::ControlChar);
+    }
+    if is_dot(bytes) || is_dot_dot(bytes) {
+        return Err(InvalidArtifactKey::Traversal);
+    }
+    Ok(())
 }
 
-const fn is_traversal_segment(bytes: &[u8], start: usize, end: usize) -> bool {
-    let len = end - start;
-    if len == 1 && bytes[start] == b'.' {
-        return true;
-    }
-    len == 2 && bytes[start] == b'.' && bytes[start + 1] == b'.'
+/// Whether `b` is in the URL-safe whitelist `[a-zA-Z0-9._-]`.
+const fn is_url_safe(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-'
+}
+
+/// Whether `bytes` is exactly `b"."`.
+const fn is_dot(bytes: &[u8]) -> bool {
+    bytes.len() == 1 && bytes[0] == b'.'
+}
+
+/// Whether `bytes` is exactly `b".."`.
+const fn is_dot_dot(bytes: &[u8]) -> bool {
+    bytes.len() == 2 && bytes[0] == b'.' && bytes[1] == b'.'
 }
 
 impl fmt::Display for ArtifactKey {
@@ -194,12 +200,16 @@ pub enum InvalidArtifactKey {
     /// The key contained an ASCII control character.
     #[error("artifact key must not contain control characters")]
     ControlChar,
-    /// The key contained a `.` or `..` segment.
-    #[error("artifact key must not contain '.' or '..' segments")]
+    /// The key is exactly `.` or `..`.
+    #[error("artifact key must not be '.' or '..'")]
     Traversal,
     /// The key exceeded 1024 bytes.
     #[error("artifact key must not exceed {MAX_LEN} bytes")]
     TooLong,
+    /// The key contained a character outside the URL-safe whitelist
+    /// `[a-zA-Z0-9._-]`.
+    #[error("artifact key must only contain URL-safe chars [a-zA-Z0-9._-]")]
+    InvalidChar,
 }
 
 impl PartialSchema for ArtifactKey {
@@ -208,7 +218,7 @@ impl PartialSchema for ArtifactKey {
             .schema_type(Type::String)
             .max_length(Some(MAX_LEN))
             .description(Some(Cow::Borrowed(
-                "Logical artifact identifier, for example `spectra` or `tls/server-cert`.",
+                "Logical artifact identifier, for example `spectra` or `tls_server-cert`.",
             )))
             .build()
             .into()
@@ -247,8 +257,9 @@ mod tests {
     #[test]
     fn accepts_simple_keys() {
         assert!(ArtifactKey::new("spectra").is_ok());
-        assert!(ArtifactKey::new("tls/server-cert").is_ok());
-        assert!(ArtifactKey::new("tool/avrdude").is_ok());
+        assert!(ArtifactKey::new("tls_server-cert").is_ok());
+        assert!(ArtifactKey::new("tool_avrdude").is_ok());
+        assert!(ArtifactKey::new("firmware.v2").is_ok());
         assert!(ArtifactKey::new("a").is_ok());
     }
 
@@ -266,15 +277,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_traversal() {
-        assert_eq!(
-            ArtifactKey::new("a/../b").unwrap_err(),
-            InvalidArtifactKey::Traversal
-        );
-        assert_eq!(
-            ArtifactKey::new("./a").unwrap_err(),
-            InvalidArtifactKey::Traversal
-        );
+    fn rejects_traversal_only_when_whole_key_is_dot_or_dotdot() {
+        assert_eq!(ArtifactKey::new(".").unwrap_err(), InvalidArtifactKey::Traversal);
+        assert_eq!(ArtifactKey::new("..").unwrap_err(), InvalidArtifactKey::Traversal);
+        // Embedding `..` inside a larger key is fine now that `/` is forbidden.
+        assert!(ArtifactKey::new("a..b").is_ok());
     }
 
     #[test]
@@ -290,6 +297,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_url_unsafe_chars() {
+        // `/` is the most important rejection. Without it, multi-segment keys
+        // would collide with route separators.
+        assert_eq!(
+            ArtifactKey::new("tls/server-cert").unwrap_err(),
+            InvalidArtifactKey::InvalidChar
+        );
+        assert_eq!(
+            ArtifactKey::new("space here").unwrap_err(),
+            InvalidArtifactKey::InvalidChar
+        );
+        assert_eq!(
+            ArtifactKey::new("hash#tag").unwrap_err(),
+            InvalidArtifactKey::InvalidChar
+        );
+        assert_eq!(
+            ArtifactKey::new("q?query").unwrap_err(),
+            InvalidArtifactKey::InvalidChar
+        );
+        assert_eq!(
+            ArtifactKey::new("percent%encoded").unwrap_err(),
+            InvalidArtifactKey::InvalidChar
+        );
+    }
+
+    #[test]
     fn rejects_overlong() {
         let s = "a".repeat(MAX_LEN + 1);
         assert_eq!(
@@ -300,8 +333,8 @@ mod tests {
 
     #[test]
     fn roundtrips_through_str() {
-        let key = ArtifactKey::new("tls/server-cert").unwrap();
-        assert_eq!(key.as_str(), "tls/server-cert");
-        assert_eq!(key.to_string(), "tls/server-cert");
+        let key = ArtifactKey::new("tls_server-cert").unwrap();
+        assert_eq!(key.as_str(), "tls_server-cert");
+        assert_eq!(key.to_string(), "tls_server-cert");
     }
 }

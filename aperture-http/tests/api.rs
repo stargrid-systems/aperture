@@ -532,10 +532,10 @@ async fn put_then_get_round_trips_blob_bytes() {
 }
 
 #[tokio::test]
-async fn put_url_encodes_location_for_multi_segment_key() {
-    // Regression test: a key like `tls/server-cert` contains a slash. The
-    // Location header must percent-encode it so following the link routes
-    // back to the resource instead of producing a 404.
+async fn put_rejects_slash_in_key() {
+    // Artifact keys must be URL-safe. A `%2F` in the URL decodes to `/`
+    // before routing, so the artifact key validator sees `tls/server-cert`
+    // and rejects it.
     let (app, _artifacts, _storage) = seeded_app().await;
 
     let response = app
@@ -550,22 +550,7 @@ async fn put_url_encodes_location_for_multi_segment_key() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let location = response
-        .headers()
-        .get(LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    assert!(
-        location.starts_with("/api/v1/artifacts/tls%2Fserver-cert/versions/"),
-        "Location must encode the slash, got {location}"
-    );
-
-    // Following the encoded Location must succeed.
-    let (status, _) = get_json(&app, &location).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
