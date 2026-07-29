@@ -102,3 +102,65 @@ fn chain_contains_length_limit(err: &(dyn StdError + 'static)) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use aperture_artifacts::ArtifactError;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::extract::Request;
+    use axum::http::{Request as HttpRequest, StatusCode};
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::post;
+    use futures_util::TryStreamExt as _;
+    use tokio::io::AsyncReadExt;
+    use tokio_util::io::StreamReader;
+    use tower::ServiceExt;
+    use tower_http::limit::RequestBodyLimitLayer;
+
+    use super::{ApiError, chain_contains_length_limit};
+
+    #[test]
+    fn unrelated_io_error_is_not_a_length_limit() {
+        assert!(!chain_contains_length_limit(&io::Error::other("boom")));
+    }
+
+    // Reproduces the upload router's body pipeline (RequestBodyLimitLayer +
+    // into_data_stream + map_err(io::Error::other)) with a tiny limit, then
+    // confirms the genuine limit error maps to 413 through the real
+    // From<ArtifactError> conversion. tower-http's limit wrapper surfaces the
+    // LengthLimitError as a source node, unlike a plain Box<dyn Error>, so the
+    // pipeline must be exercised end to end rather than hand-built.
+    #[tokio::test]
+    async fn oversized_upload_maps_to_payload_too_large() {
+        async fn upload(request: Request) -> Response {
+            let stream = request
+                .into_body()
+                .into_data_stream()
+                .map_err(io::Error::other);
+            let mut reader = StreamReader::new(stream);
+            let mut buf = Vec::new();
+            match reader.read_to_end(&mut buf).await {
+                Ok(_) => StatusCode::OK.into_response(),
+                Err(err) => ApiError::from(ArtifactError::from(err)).into_response(),
+            }
+        }
+
+        let app = Router::new()
+            .route("/", post(upload))
+            .layer(RequestBodyLimitLayer::new(8));
+        let response = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/")
+                    .body(Body::from(vec![0u8; 64]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+}
