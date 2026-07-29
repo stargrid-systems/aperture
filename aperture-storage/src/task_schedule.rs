@@ -24,7 +24,8 @@ mod col {
     pub const NEXT_RUN_AT: &str = "next_run_at";
 }
 
-/// Columns selected for a [`TaskSchedule`], in [`row_to_schedule`] order.
+/// Columns selected for a [`TaskSchedule`], in [`TaskSchedule::try_from`]
+/// order.
 const SCHEDULE_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KIND,
@@ -112,7 +113,7 @@ impl TaskScheduleRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_schedule(&row)?)),
+            Some(row) => Ok(Some(TaskSchedule::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -141,7 +142,7 @@ impl TaskScheduleRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_schedule(&row)?);
+            items.push(TaskSchedule::try_from(&row)?);
         }
         Ok(paginator.finish(items, |schedule| {
             (CursorValue::Int(schedule.id.get()), schedule.id.get())
@@ -208,7 +209,7 @@ impl TaskScheduleRepository {
             .map_err(StorageError::from_turso)?;
         let mut out = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            out.push(row_to_schedule(&row)?);
+            out.push(TaskSchedule::try_from(&row)?);
         }
         Ok(out)
     }
@@ -251,16 +252,20 @@ impl TaskScheduleRepository {
     }
 }
 
-fn row_to_schedule(row: &Row) -> Result<TaskSchedule> {
-    Ok(TaskSchedule {
-        id: SCHEDULE_COLUMNS.extract(row, col::ID)?,
-        kind: SCHEDULE_COLUMNS.extract(row, col::KIND)?,
-        input: SCHEDULE_COLUMNS.extract(row, col::INPUT)?,
-        interval: SCHEDULE_COLUMNS.extract(row, col::INTERVAL_US)?,
-        next_run_at: SCHEDULE_COLUMNS.extract(row, col::NEXT_RUN_AT)?,
-        last_run_at: SCHEDULE_COLUMNS.extract(row, col::LAST_RUN_AT)?,
-        last_task_id: SCHEDULE_COLUMNS.extract(row, col::LAST_TASK_ID)?,
-        enabled: SCHEDULE_COLUMNS.extract(row, col::ENABLED)?,
-        created_at: SCHEDULE_COLUMNS.extract(row, col::CREATED_AT)?,
-    })
+impl TryFrom<&Row> for TaskSchedule {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(TaskSchedule {
+            id: SCHEDULE_COLUMNS.extract(row, col::ID)?,
+            kind: SCHEDULE_COLUMNS.extract(row, col::KIND)?,
+            input: SCHEDULE_COLUMNS.extract(row, col::INPUT)?,
+            interval: SCHEDULE_COLUMNS.extract(row, col::INTERVAL_US)?,
+            next_run_at: SCHEDULE_COLUMNS.extract(row, col::NEXT_RUN_AT)?,
+            last_run_at: SCHEDULE_COLUMNS.extract(row, col::LAST_RUN_AT)?,
+            last_task_id: SCHEDULE_COLUMNS.extract(row, col::LAST_TASK_ID)?,
+            enabled: SCHEDULE_COLUMNS.extract(row, col::ENABLED)?,
+            created_at: SCHEDULE_COLUMNS.extract(row, col::CREATED_AT)?,
+        })
+    }
 }

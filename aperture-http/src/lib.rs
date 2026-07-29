@@ -17,12 +17,15 @@ use uuid::Uuid;
 
 use self::api::router as api_routes;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
+pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
-pub use self::spectra::{Spectra, SpectraConfig};
+pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
 
 mod api;
+mod conditional;
 mod dto;
 mod error;
+mod server;
 mod spectra;
 
 /// Shared application state handed to every request handler.
@@ -36,8 +39,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Wraps the gateway version, boot id, storage handle, Spectra frontend,
-    /// and task manager for use as request state.
     pub fn new(
         version: &'static str,
         boot_id: Uuid,
@@ -114,9 +115,11 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Projects the registered task kinds into the spec: it adds each kind's input
-/// and output component schemas, then a discriminated `CreateTaskInput` union
-/// over the per-kind create bodies, and points `POST /tasks` at it.
+/// Projects registered task kinds into the OpenAPI spec.
+///
+/// Adds each kind's input/output component schemas, builds a discriminated
+/// `CreateTaskInput` one-of over the per-kind create bodies, and points
+/// `POST /tasks` at it.
 fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
     if descriptors.is_empty() {
         return;

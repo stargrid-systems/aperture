@@ -1,16 +1,17 @@
 //! Where the Spectra frontend comes from.
 
-use aperture_artifacts::MediaType;
+use aperture_storage::{ArtifactKey, MediaType};
 
-pub(super) const NAME: &str = "spectra";
-pub(super) const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.1";
-pub(super) const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
+const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.1";
+const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
+
+const SPECTRA_KEY: ArtifactKey = ArtifactKey::from_static("spectra");
 
 /// The image and media type the Spectra frontend is pulled from.
 #[derive(Clone)]
 pub struct SpectraConfig {
-    /// Catalog name.
-    pub name: String,
+    /// Catalog key the frontend is stored under.
+    pub key: ArtifactKey,
     /// Image reference to pull from.
     pub source: String,
     /// Media type of the squashfs layer.
@@ -20,9 +21,9 @@ pub struct SpectraConfig {
 impl Default for SpectraConfig {
     fn default() -> Self {
         Self {
-            name: NAME.to_owned(),
+            key: SPECTRA_KEY.clone(),
             source: SOURCE.to_owned(),
-            media_type: MediaType::from(MEDIA_TYPE),
+            media_type: MEDIA_TYPE.parse().expect("well-known media type"),
         }
     }
 }

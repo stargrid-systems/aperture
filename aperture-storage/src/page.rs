@@ -291,7 +291,7 @@ impl Paginator {
         let last = rows.last();
 
         let (next_cursor, prev_cursor) = match self.step {
-            // Forward: more ahead iff we fetched an extra; a previous page
+            // Forward: more ahead iff we fetched an extra. A previous page
             // exists iff we arrived here from a cursor.
             Step::After => (
                 if has_extra {
@@ -305,7 +305,7 @@ impl Paginator {
                     None
                 },
             ),
-            // Backward: we came from ahead, so a next page always exists; more
+            // Backward: we came from ahead, so a next page always exists. More
             // behind iff we fetched an extra.
             Step::Before => (
                 cursor_at(last, Step::After),
@@ -326,25 +326,11 @@ impl Paginator {
 }
 
 fn to_hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
-        out.push(char::from_digit((byte & 0x0F) as u32, 16).expect("nibble"));
-    }
-    out
+    hex::encode(bytes)
 }
 
 fn from_hex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(text.len() / 2);
-    for pair in text.as_bytes().as_chunks::<2>().0 {
-        let hi = (pair[0] as char).to_digit(16)?;
-        let lo = (pair[1] as char).to_digit(16)?;
-        out.push((hi * 16 + lo) as u8);
-    }
-    Some(out)
+    hex::decode(text).ok()
 }
 
 #[cfg(test)]
@@ -411,7 +397,7 @@ mod tests {
             ..Default::default()
         };
         let paginator = Paginator::new(&query, Order::Asc).unwrap();
-        // Rows fetched in flipped (desc) order; finish reverses to base order.
+        // Rows fetched in flipped (desc) order. Finish reverses to base order.
         let page = paginator.finish(vec![3i64, 2, 1], |n| (CursorValue::Int(*n), *n));
         assert_eq!(page.items, vec![2, 3]);
         assert!(page.next_cursor.is_some());

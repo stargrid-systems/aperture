@@ -1,3 +1,4 @@
+use aperture_storage::{Digest, MediaType};
 use aperture_tasks::ProgressHandle;
 use oci_client::manifest::{OciDescriptor, OciImageManifest};
 use oci_client::secrets::RegistryAuth;
@@ -5,9 +6,7 @@ use oci_client::{Client, Reference};
 use tokio::io::AsyncWrite;
 
 use super::{FetchMeta, Resolved};
-use crate::digest::Digest;
 use crate::error::{ArtifactError, Result};
-use crate::media_type::MediaType;
 
 /// Fetches OCI image layers from a registry.
 pub struct OciFetcher {
@@ -26,9 +25,10 @@ impl OciFetcher {
     /// registry, without transferring it. This is a manifest lookup only.
     pub async fn resolve(&self, reference: &Reference, media_type: &MediaType) -> Result<Resolved> {
         let layer = self.resolve_layer(reference, media_type).await?;
+        let digest: Digest = layer.digest.parse()?;
         Ok(Resolved {
-            digest: layer.digest.parse()?,
-            media_type: MediaType::from(layer.media_type.as_str()),
+            digest,
+            media_type: media_type.clone(),
             size: layer.size.max(0) as u64,
             version: reference.tag().map(str::to_owned),
         })
@@ -37,6 +37,10 @@ impl OciFetcher {
     /// Streams the single layer matching `media_type` from `reference` into
     /// `sink`, reporting transferred bytes into `progress`. Returns the digest
     /// the registry advertises so the caller can verify the stored bytes.
+    ///
+    /// `media_type` is the validated media type of the layer to pull. The
+    /// returned [`FetchMeta`] echoes it back so the caller can record it
+    /// without re-parsing.
     pub async fn fetch(
         &self,
         reference: &Reference,
@@ -46,7 +50,6 @@ impl OciFetcher {
     ) -> Result<FetchMeta> {
         let layer = self.resolve_layer(reference, media_type).await?;
         let expected: Digest = layer.digest.parse()?;
-        let media_type = MediaType::from(layer.media_type.as_str());
         progress.set_total(layer.size.max(0) as u64);
 
         self.client
@@ -56,7 +59,7 @@ impl OciFetcher {
 
         Ok(FetchMeta {
             expected_digest: expected,
-            media_type,
+            media_type: media_type.clone(),
         })
     }
 

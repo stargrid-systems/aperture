@@ -1,19 +1,17 @@
 //! The download task: fetching an artifact, modelled as a [`TaskDefinition`].
 
-use std::sync::Arc;
-
+use aperture_storage::{ArtifactKey, Digest, MediaType};
 use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::artifacts::{Artifacts, FetchRequest, FetchSource};
-use crate::media_type::MediaType;
 
 /// Input for a download task: what to fetch and where from.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DownloadInput {
     /// Logical key to record the artifact under.
-    pub key: String,
+    pub key: ArtifactKey,
     /// Where and how to fetch it from.
     pub source: DownloadSource,
 }
@@ -27,7 +25,7 @@ pub enum DownloadSource {
         /// The image reference, for example `ghcr.io/org/image:tag`.
         reference: String,
         /// The media type of the layer to pull.
-        media_type: String,
+        media_type: MediaType,
     },
 }
 
@@ -39,7 +37,7 @@ impl From<DownloadSource> for FetchSource {
                 media_type,
             } => FetchSource::Oci {
                 reference,
-                media_type: MediaType::from(media_type),
+                media_type,
             },
         }
     }
@@ -49,7 +47,7 @@ impl From<DownloadSource> for FetchSource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DownloadOutput {
     /// Content digest of the stored blob.
-    pub digest: String,
+    pub digest: Digest,
     /// Stored blob size in bytes.
     pub size_bytes: u64,
     /// Human-readable version, if known.
@@ -59,12 +57,12 @@ pub struct DownloadOutput {
 /// The download task kind. Fetches an artifact into the blob store and records
 /// the version, reporting transferred bytes as progress.
 pub struct DownloadDefinition {
-    artifacts: Arc<Artifacts>,
+    artifacts: Artifacts,
 }
 
 impl DownloadDefinition {
     /// Creates the definition over `artifacts`.
-    pub fn new(artifacts: Arc<Artifacts>) -> Self {
+    pub fn new(artifacts: Artifacts) -> Self {
         Self { artifacts }
     }
 }

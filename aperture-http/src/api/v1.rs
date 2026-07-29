@@ -12,11 +12,11 @@ use crate::dto::VersionResponse;
 
 mod artifacts;
 mod logs;
-pub mod operation_ids;
+pub(crate) mod operation_ids;
 mod task_schedules;
 mod tasks;
 
-pub fn router() -> OpenApiRouter<AppState> {
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_gateway_version))
         .nest("/artifacts", artifacts_routes())

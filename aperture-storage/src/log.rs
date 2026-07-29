@@ -29,7 +29,7 @@ mod col {
     pub const TIMESTAMP: &str = "timestamp";
 }
 
-/// Columns selected for an [`Event`], in [`row_to_event`] order.
+/// Columns selected for an [`Event`], in [`Event::try_from`] order.
 const EVENT_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::SPAN_ID,
@@ -43,7 +43,7 @@ const EVENT_COLUMNS: Columns = Columns::new(&[
     col::FIELDS,
 ]);
 
-/// Columns selected for a [`Span`], in [`row_to_span`] order.
+/// Columns selected for a [`Span`], in [`Span::try_from`] order.
 const SPAN_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::PARENT_ID,
@@ -119,6 +119,18 @@ impl Level {
             3 => Ok(Self::Warn),
             4 => Ok(Self::Error),
             other => Err(StorageError::UnknownLogLevel(other)),
+        }
+    }
+}
+
+impl From<&tracing::Level> for Level {
+    fn from(level: &tracing::Level) -> Self {
+        match *level {
+            tracing::Level::TRACE => Self::Trace,
+            tracing::Level::DEBUG => Self::Debug,
+            tracing::Level::INFO => Self::Info,
+            tracing::Level::WARN => Self::Warn,
+            tracing::Level::ERROR => Self::Error,
         }
     }
 }
@@ -325,7 +337,7 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_event(&row)?);
+            items.push(Event::try_from(&row)?);
         }
         Ok(paginator.finish(items, |event| {
             (
@@ -418,7 +430,7 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_span(&row)?);
+            items.push(Span::try_from(&row)?);
         }
         Ok(paginator.finish(items, |span| {
             (
@@ -441,7 +453,7 @@ impl LogRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_span(&row)?)),
+            Some(row) => Ok(Some(Span::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -460,7 +472,7 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_event(&row)?);
+            items.push(Event::try_from(&row)?);
         }
         Ok(items)
     }
@@ -655,32 +667,40 @@ impl<'conn> LogBatch<'conn> {
     }
 }
 
-fn row_to_event(row: &turso::Row) -> Result<Event> {
-    Ok(Event {
-        id: EVENT_COLUMNS.extract(row, col::ID)?,
-        span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
-        level: EVENT_COLUMNS.extract(row, col::LEVEL)?,
-        target: EVENT_COLUMNS.extract(row, col::TARGET)?,
-        message: EVENT_COLUMNS.extract(row, col::MESSAGE)?,
-        timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP)?,
-        file: EVENT_COLUMNS.extract(row, col::FILE)?,
-        line: EVENT_COLUMNS.extract(row, col::LINE)?,
-        boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID)?,
-        fields: EVENT_COLUMNS.extract(row, col::FIELDS)?,
-    })
+impl TryFrom<&turso::Row> for Event {
+    type Error = StorageError;
+
+    fn try_from(row: &turso::Row) -> Result<Self> {
+        Ok(Event {
+            id: EVENT_COLUMNS.extract(row, col::ID)?,
+            span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
+            level: EVENT_COLUMNS.extract(row, col::LEVEL)?,
+            target: EVENT_COLUMNS.extract(row, col::TARGET)?,
+            message: EVENT_COLUMNS.extract(row, col::MESSAGE)?,
+            timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP)?,
+            file: EVENT_COLUMNS.extract(row, col::FILE)?,
+            line: EVENT_COLUMNS.extract(row, col::LINE)?,
+            boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID)?,
+            fields: EVENT_COLUMNS.extract(row, col::FIELDS)?,
+        })
+    }
 }
 
-fn row_to_span(row: &turso::Row) -> Result<Span> {
-    Ok(Span {
-        id: SPAN_COLUMNS.extract(row, col::ID)?,
-        parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID)?,
-        name: SPAN_COLUMNS.extract(row, col::NAME)?,
-        level: SPAN_COLUMNS.extract(row, col::LEVEL)?,
-        target: SPAN_COLUMNS.extract(row, col::TARGET)?,
-        file: SPAN_COLUMNS.extract(row, col::FILE)?,
-        line: SPAN_COLUMNS.extract(row, col::LINE)?,
-        started_at: SPAN_COLUMNS.extract(row, col::STARTED_AT)?,
-        ended_at: SPAN_COLUMNS.extract(row, col::ENDED_AT)?,
-        fields: SPAN_COLUMNS.extract(row, col::FIELDS)?,
-    })
+impl TryFrom<&turso::Row> for Span {
+    type Error = StorageError;
+
+    fn try_from(row: &turso::Row) -> Result<Self> {
+        Ok(Span {
+            id: SPAN_COLUMNS.extract(row, col::ID)?,
+            parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID)?,
+            name: SPAN_COLUMNS.extract(row, col::NAME)?,
+            level: SPAN_COLUMNS.extract(row, col::LEVEL)?,
+            target: SPAN_COLUMNS.extract(row, col::TARGET)?,
+            file: SPAN_COLUMNS.extract(row, col::FILE)?,
+            line: SPAN_COLUMNS.extract(row, col::LINE)?,
+            started_at: SPAN_COLUMNS.extract(row, col::STARTED_AT)?,
+            ended_at: SPAN_COLUMNS.extract(row, col::ENDED_AT)?,
+            fields: SPAN_COLUMNS.extract(row, col::FIELDS)?,
+        })
+    }
 }

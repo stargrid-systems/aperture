@@ -8,11 +8,11 @@ use super::operation_ids;
 use crate::AppState;
 use crate::dto::{
     BootResponse, LogEventResponse, LogListParams, LogSpanDetailResponse, LogSpanListParams,
-    LogSpanResponse, LogTargetListParams, Page, boots_response, event_page, span_page,
+    LogSpanResponse, LogTargetListParams, Page,
 };
 use crate::error::ApiError;
 
-pub fn router() -> OpenApiRouter<AppState> {
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_logs))
         .routes(routes!(list_log_targets))
@@ -47,7 +47,7 @@ async fn list_logs(
     };
     let logs = state.storage().logs()?;
     let page = logs.list_events(&filter, &query).await?;
-    Ok(Json(event_page(page)))
+    Ok(Json(LogEventResponse::page(page)))
 }
 
 /// Lists distinct log targets for autocomplete.
@@ -79,7 +79,7 @@ async fn list_log_boots(
 ) -> Result<Json<Vec<BootResponse>>, ApiError> {
     let logs = state.storage().logs()?;
     let boots = logs.list_boots().await?;
-    Ok(Json(boots_response(boots, state.boot_id())))
+    Ok(Json(BootResponse::from_boots(boots, state.boot_id())))
 }
 
 /// Lists tracing spans with optional filtering.
@@ -112,7 +112,7 @@ async fn list_spans(
     };
     let logs = state.storage().logs()?;
     let page = logs.list_spans(&filter, &query).await?;
-    Ok(Json(span_page(page)))
+    Ok(Json(LogSpanResponse::page(page)))
 }
 
 /// Returns a single span with its events.

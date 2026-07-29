@@ -9,9 +9,12 @@
 use jiff::Timestamp;
 use turso::{Connection, Row, params_from_iter};
 
+use crate::digest::Digest;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
+use crate::key::ArtifactKey;
 use crate::macros::sql;
+use crate::media_type::MediaType;
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, ToSql, get};
@@ -28,7 +31,7 @@ mod col {
     pub const VERSION: &str = "version";
 }
 
-/// Columns selected for an [`Artifact`], in [`row_to_artifact`] order.
+/// Columns selected for an [`Artifact`], in [`Artifact::try_from`] order.
 const ARTIFACT_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KEY,
@@ -46,14 +49,14 @@ const ARTIFACT_COLUMNS: Columns = Columns::new(&[
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
     pub id: DbId,
-    /// Logical key, for example `spectra` or `tool/avrdude`.
-    pub key: String,
+    /// Logical key, for example `spectra` or `tls_server-cert`.
+    pub key: ArtifactKey,
     /// Where it came from (an image reference or a URL).
     pub source: String,
     /// Content digest of the stored blob.
-    pub digest: String,
+    pub digest: Digest,
     /// OCI media type, if applicable.
-    pub media_type: Option<String>,
+    pub media_type: Option<MediaType>,
     /// Human-readable version, if known.
     pub version: Option<String>,
     /// Size of the stored blob in bytes.
@@ -66,7 +69,7 @@ pub struct Artifact {
 
 /// A distinct key with its newest version and how many versions are stored.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ArtifactKey {
+pub struct ArtifactKeyEntry {
     /// The newest stored version for this key.
     pub latest: Artifact,
     /// How many versions of this key are stored.
@@ -92,8 +95,10 @@ impl ArtifactRepository {
         Self { connection }
     }
 
-    /// Records a stored version. If `(key, digest)` already exists its metadata
-    /// is refreshed. The `id` field of `artifact` is ignored.
+    /// Records a stored version.
+    ///
+    /// If `(key, digest)` already exists its metadata is refreshed. The `id`
+    /// field of `artifact` is ignored.
     #[tracing::instrument(level = "info", skip(self, artifact))]
     pub async fn record_version(&self, artifact: &Artifact) -> Result<()> {
         let params = params_from_iter([
@@ -129,7 +134,7 @@ impl ArtifactRepository {
 
     /// Returns the newest stored version of `key`, if any.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn latest(&self, key: &str) -> Result<Option<Artifact>> {
+    pub async fn latest(&self, key: &ArtifactKey) -> Result<Option<Artifact>> {
         let sql = format!(
             sql!(
                 SELECT {cols} FROM artifacts WHERE key = ?1
@@ -143,14 +148,18 @@ impl ArtifactRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_artifact(&row)?)),
+            Some(row) => Ok(Some(Artifact::try_from(&row)?)),
             None => Ok(None),
         }
     }
 
     /// Returns the `(key, digest)` version, if stored.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get_version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
+    pub async fn get_version(
+        &self,
+        key: &ArtifactKey,
+        digest: &Digest,
+    ) -> Result<Option<Artifact>> {
         let sql = format!(
             sql!(SELECT {cols} FROM artifacts WHERE key = ?1 AND digest = ?2),
             cols = ARTIFACT_COLUMNS,
@@ -161,14 +170,14 @@ impl ArtifactRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_artifact(&row)?)),
+            Some(row) => Ok(Some(Artifact::try_from(&row)?)),
             None => Ok(None),
         }
     }
 
     /// Returns `key` with its newest version and version count, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get_key(&self, key: &str) -> Result<Option<ArtifactKey>> {
+    pub async fn get_key(&self, key: &ArtifactKey) -> Result<Option<ArtifactKeyEntry>> {
         let sql = format!(
             sql!(
                 SELECT {cols},
@@ -185,7 +194,7 @@ impl ArtifactRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_artifact_key(&row)?)),
+            Some(row) => Ok(Some(ArtifactKeyEntry::from_row(&row)?)),
             None => Ok(None),
         }
     }
@@ -194,7 +203,11 @@ impl ArtifactRepository {
     /// Ordered by key, ascending by default. `q` matches a substring of the
     /// key.
     #[tracing::instrument(level = "info", skip(self, query))]
-    pub async fn list_keys(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<ArtifactKey>> {
+    pub async fn list_keys(
+        &self,
+        q: Option<&str>,
+        query: &ListQuery,
+    ) -> Result<Page<ArtifactKeyEntry>> {
         let paginator = Paginator::new(query, Order::Asc)?;
         let keyset = Keyset::unique("a.key", paginator.query_order());
 
@@ -226,11 +239,11 @@ impl ArtifactRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_artifact_key(&row)?);
+            items.push(ArtifactKeyEntry::from_row(&row)?);
         }
         Ok(paginator.finish(items, |key| {
             (
-                CursorValue::Text(key.latest.key.clone()),
+                CursorValue::Text(key.latest.key.to_string()),
                 key.latest.id.get(),
             )
         }))
@@ -241,9 +254,9 @@ impl ArtifactRepository {
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_versions(
         &self,
-        key: &str,
+        key: &ArtifactKey,
         sort: VersionSort,
-        media_type: Option<&str>,
+        media_type: Option<&MediaType>,
         version: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Artifact>> {
@@ -255,8 +268,8 @@ impl ArtifactRepository {
         let keyset = Keyset::with_id(column, paginator.query_order());
 
         let mut filters = Filters::new();
-        filters.eq_text(col::KEY, key);
-        filters.eq_text_opt(col::MEDIA_TYPE, media_type);
+        filters.eq_text(col::KEY, key.as_str());
+        filters.eq_text_opt(col::MEDIA_TYPE, media_type.map(|mt| mt.as_str()));
         filters.eq_text_opt(col::VERSION, version);
         filters.keyset(&keyset, &paginator);
 
@@ -275,7 +288,7 @@ impl ArtifactRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_artifact(&row)?);
+            items.push(Artifact::try_from(&row)?);
         }
         Ok(paginator.finish(items, |artifact| {
             let value = match sort {
@@ -300,14 +313,14 @@ impl ArtifactRepository {
             .map_err(StorageError::from_turso)?;
         let mut artifacts = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            artifacts.push(row_to_artifact(&row)?);
+            artifacts.push(Artifact::try_from(&row)?);
         }
         Ok(artifacts)
     }
 
     /// Removes the `(key, digest)` version. Does nothing if it is absent.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn delete_version(&self, key: &str, digest: &str) -> Result<()> {
+    pub async fn delete_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<()> {
         self.connection
             .execute(
                 sql!(DELETE FROM artifacts WHERE key = ?1 AND digest = ?2),
@@ -319,23 +332,31 @@ impl ArtifactRepository {
     }
 }
 
-fn row_to_artifact(row: &Row) -> Result<Artifact> {
-    Ok(Artifact {
-        id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
-        key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
-        source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
-        digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST)?,
-        media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE)?,
-        version: ARTIFACT_COLUMNS.extract(row, col::VERSION)?,
-        size_bytes: ARTIFACT_COLUMNS.extract(row, col::SIZE_BYTES)?,
-        downloaded_at: ARTIFACT_COLUMNS.extract(row, col::DOWNLOADED_AT)?,
-        verified_at: ARTIFACT_COLUMNS.extract(row, col::VERIFIED_AT)?,
-    })
+impl TryFrom<&Row> for Artifact {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(Artifact {
+            id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
+            key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
+            source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
+            digest: ARTIFACT_COLUMNS.extract(row, col::DIGEST)?,
+            media_type: ARTIFACT_COLUMNS.extract(row, col::MEDIA_TYPE)?,
+            version: ARTIFACT_COLUMNS.extract(row, col::VERSION)?,
+            size_bytes: ARTIFACT_COLUMNS.extract(row, col::SIZE_BYTES)?,
+            downloaded_at: ARTIFACT_COLUMNS.extract(row, col::DOWNLOADED_AT)?,
+            verified_at: ARTIFACT_COLUMNS.extract(row, col::VERIFIED_AT)?,
+        })
+    }
 }
 
-fn row_to_artifact_key(row: &Row) -> Result<ArtifactKey> {
-    Ok(ArtifactKey {
-        latest: row_to_artifact(row)?,
-        version_count: get(row, ARTIFACT_COLUMNS.len())?,
-    })
+impl ArtifactKeyEntry {
+    /// Builds an [`ArtifactKeyEntry`] from a row in `ARTIFACT_COLUMNS` order
+    /// followed by the version count column.
+    fn from_row(row: &Row) -> Result<Self> {
+        Ok(ArtifactKeyEntry {
+            latest: Artifact::try_from(row)?,
+            version_count: get(row, ARTIFACT_COLUMNS.len())?,
+        })
+    }
 }

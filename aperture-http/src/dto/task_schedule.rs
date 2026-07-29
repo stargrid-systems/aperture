@@ -36,6 +36,13 @@ impl From<TaskSchedule> for TaskScheduleResponse {
     }
 }
 
+impl TaskScheduleResponse {
+    /// Maps a storage page of schedules into the response envelope.
+    pub fn page(page: StoragePage<TaskSchedule>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
+    }
+}
+
 /// Body for `POST /api/v1/task-schedules`.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateTaskScheduleRequest {
@@ -78,8 +85,4 @@ impl TaskScheduleListParams {
             order: self.order.map(Into::into),
         }
     }
-}
-
-pub fn task_schedule_page(page: StoragePage<TaskSchedule>) -> Page<TaskScheduleResponse> {
-    Page::from_storage(page, TaskScheduleResponse::from)
 }

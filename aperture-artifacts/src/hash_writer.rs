@@ -3,10 +3,9 @@
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
+use aperture_storage::{Digest, DigestAlgorithm};
 use sha2::{Digest as _, Sha256};
 use tokio::io::{self, AsyncWrite, AsyncWriteExt as _};
-
-use crate::digest::{Digest, DigestAlgorithm};
 
 /// An [`AsyncWrite`] that hashes bytes as they pass through.
 pub(crate) struct HashWriter<W> {

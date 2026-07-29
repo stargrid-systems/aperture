@@ -10,19 +10,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use aperture_runtime::{Stop, Worker};
 use aperture_storage::{EventRecord, Level, LogRepository, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId, Record as TracingRecord};
-use tracing::{Event, Level as TracingLevel, Subscriber};
+use tracing::{Event, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
 
 use self::collector::FieldCollector;
-use crate::runtime::{Stop, Worker};
 
 mod collector;
 
@@ -110,10 +110,10 @@ impl DeferredLogWorker {
 }
 
 /// Drains the layer's channel and batch-inserts records into the database.
-/// Produced by [`DeferredLogWorker::connect`]; drive it via a [`Supervisor`]
+/// Produced by [`DeferredLogWorker::connect`]. Drive it via a [`Supervisor`]
 /// so it shuts down alongside the rest of the gateway.
 ///
-/// [`Supervisor`]: crate::runtime::Supervisor
+/// [`Supervisor`]: aperture_runtime::Supervisor
 pub struct LogWorker {
     rx: mpsc::Receiver<Record>,
     repo: LogRepository,
@@ -122,7 +122,7 @@ pub struct LogWorker {
 }
 
 impl Worker for LogWorker {
-    async fn run(mut self, mut stop: Stop) {
+    async fn run(mut self, stop: Stop) {
         let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
         let mut interval = interval(FLUSH_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -130,7 +130,7 @@ impl Worker for LogWorker {
         loop {
             tokio::select! {
                 biased;
-                () = &mut stop => {
+                () = stop.cancelled() => {
                     while let Ok(record) = self.rx.try_recv() {
                         batch.push(record);
                     }
@@ -212,7 +212,7 @@ where
             tracing_id,
             parent_tracing_id,
             name: meta.name().to_owned(),
-            level: tracing_to_db_level(meta.level()),
+            level: Level::from(meta.level()),
             target: meta.target().to_owned(),
             file: meta.file().map(str::to_owned),
             line: meta.line(),
@@ -249,7 +249,7 @@ where
 
         self.try_send(Record::Event(EventMsg {
             span_tracing_id,
-            level: tracing_to_db_level(meta.level()),
+            level: Level::from(meta.level()),
             target,
             message: visitor.take_message(),
             timestamp: Timestamp::now(),
@@ -336,11 +336,16 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
             return;
         }
     };
-    for record in batch.drain(..) {
-        match record {
-            Record::SpanStart(s) => {
-                let _ = tx
-                    .insert_span(SpanRecord {
+    // Any insert error poisons the transaction. Fail fast so we do not waste
+    // time on doomed follow-up inserts. The dropped count is loaded once here
+    // and returned so the subtraction after commit uses the exact value we
+    // recorded. Reloading after the await would race with `try_send` failures
+    // and subtract drops that were never persisted.
+    let insert_outcome: Result<u64, aperture_storage::StorageError> = async {
+        for record in batch.drain(..) {
+            match record {
+                Record::SpanStart(s) => {
+                    tx.insert_span(SpanRecord {
                         tracing_id: s.tracing_id,
                         parent_tracing_id: s.parent_tracing_id,
                         boot_id,
@@ -352,19 +357,17 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         started_at: s.started_at,
                         fields: &s.fields,
                     })
-                    .await;
-            }
-            Record::SpanFields(f) => {
-                let _ = tx
-                    .update_span_fields(f.tracing_id, boot_id, &f.fields)
-                    .await;
-            }
-            Record::SpanEnd(s) => {
-                let _ = tx.close_span(s.tracing_id, boot_id, s.ended_at).await;
-            }
-            Record::Event(e) => {
-                let _ = tx
-                    .insert_event(EventRecord {
+                    .await?;
+                }
+                Record::SpanFields(f) => {
+                    tx.update_span_fields(f.tracing_id, boot_id, &f.fields)
+                        .await?;
+                }
+                Record::SpanEnd(s) => {
+                    tx.close_span(s.tracing_id, boot_id, s.ended_at).await?;
+                }
+                Record::Event(e) => {
+                    tx.insert_event(EventRecord {
                         span_tracing_id: e.span_tracing_id,
                         level: e.level,
                         target: &e.target,
@@ -375,14 +378,31 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         boot_id,
                         fields: &e.fields,
                     })
-                    .await;
+                    .await?;
+                }
             }
         }
+        let count = dropped.load(Ordering::Relaxed);
+        if count > 0 {
+            tx.record_dropped(count, Timestamp::now(), boot_id).await?;
+        }
+        Ok(count)
     }
-    let count = dropped.load(Ordering::Relaxed);
-    if count > 0 {
-        let _ = tx.record_dropped(count, Timestamp::now(), boot_id).await;
-    }
+    .await;
+
+    let count = match insert_outcome {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::warn!(
+                error = &err as &dyn StdError,
+                "log batch insert failed, rolling back"
+            );
+            // The records we tried to flush are lost. The caller already drained
+            // them out of `batch`, so the only recovery is to drop the tx.
+            return;
+        }
+    };
+
     match tx.commit().await {
         Ok(()) => {
             if count > 0 {
@@ -404,17 +424,6 @@ async fn close_remaining_spans(repo: &LogRepository) {
             error = &err as &dyn StdError,
             "failed to close open spans on shutdown"
         );
-    }
-}
-
-/// Maps a `tracing::Level` to the storage `Level`.
-fn tracing_to_db_level(level: &TracingLevel) -> Level {
-    match *level {
-        TracingLevel::TRACE => Level::Trace,
-        TracingLevel::DEBUG => Level::Debug,
-        TracingLevel::INFO => Level::Info,
-        TracingLevel::WARN => Level::Warn,
-        TracingLevel::ERROR => Level::Error,
     }
 }
 
