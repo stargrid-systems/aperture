@@ -2,7 +2,7 @@
 //!
 //! Reloads when `tls_server-cert` or `tls_server-key` is written or removed.
 //! Writes within a short debounce window are coalesced. A failed reload is
-//! retried a few times so transient races self-heal; the previous config
+//! retried a few times so transient races self-heal. The previous config
 //! keeps serving until a reload succeeds.
 
 use std::error::Error as StdError;

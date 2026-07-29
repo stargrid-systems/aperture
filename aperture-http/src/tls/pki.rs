@@ -135,7 +135,7 @@ fn set_validity(params: &mut CertificateParams, days: u64) {
     params.not_after = now + time::Duration::days(days as i64);
 }
 
-/// Computes SANs for a leaf cert. Localhost is always included; a non-loopback
+/// Computes SANs for a leaf cert. Localhost is always included. A non-loopback
 /// bind IP is appended if set.
 fn compute_sans(bind_addr: SocketAddr) -> Vec<SanType> {
     let mut sans = vec![
@@ -235,7 +235,7 @@ pub async fn ensure_certificates(
         let pki = spawn_blocking(move || generate_pki(bind_addr)).await??;
         store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
         store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
-        // CA pair rotated; regenerate leaf against the new CA.
+        // CA pair rotated. Regenerate leaf against the new CA.
         store_key_artifact(artifacts, &SERVER_KEY, &pki.server_key).await?;
         store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
         return Ok(());
