@@ -17,9 +17,6 @@ pub enum ArtifactError {
     /// A filesystem error in the blob store.
     #[error("io error: {0}")]
     Io(#[from] io::Error),
-    /// A digest string was not valid.
-    #[error("invalid digest: {0}")]
-    InvalidDigest(String),
     /// The downloaded content did not match the advertised digest.
     #[error("digest mismatch: expected {expected}, got {actual}")]
     DigestMismatch {
@@ -28,6 +25,12 @@ pub enum ArtifactError {
         /// The digest computed from the downloaded bytes.
         actual: String,
     },
+}
+
+impl From<aperture_storage::InvalidDigest> for ArtifactError {
+    fn from(err: aperture_storage::InvalidDigest) -> Self {
+        StorageError::from(err).into()
+    }
 }
 
 /// Result alias for the artifact manager.

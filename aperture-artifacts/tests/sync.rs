@@ -23,7 +23,7 @@ async fn sync_removes_versions_without_blobs() {
         id: DbId::from(0),
         key: ArtifactKey::new("spectra").unwrap(),
         source: "src".to_owned(),
-        digest: "sha256:deadbeef".to_owned(),
+        digest: "sha256:deadbeef".parse().unwrap(),
         media_type: None,
         version: None,
         size_bytes: 10,

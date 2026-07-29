@@ -13,7 +13,7 @@ use crate::sql::{FromSql, ToSql};
 
 /// A strictly-positive span of time, stored as a whole number of microseconds.
 ///
-/// On the wire an interval is an ISO 8601 duration such as `PT5M`; jiff also
+/// On the wire an interval is an ISO 8601 duration such as `PT5M`. Jiff also
 /// accepts its friendlier form (`5m`) on input.
 #[derive(Debug, Clone, PartialEq, Eq, utoipa::ToSchema)]
 #[schema(value_type = String, format = Duration, example = "PT5M")]

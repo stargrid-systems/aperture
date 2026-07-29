@@ -12,14 +12,14 @@ use crate::AppState;
 use crate::dto::{CreateTaskRequest, Page, TaskDefinitionResponse, TaskListParams, TaskResponse};
 use crate::error::ApiError;
 
-pub fn router() -> OpenApiRouter<AppState> {
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_tasks, create_task))
         .routes(routes!(get_task))
         .routes(routes!(cancel_task))
 }
 
-pub fn definitions_router() -> OpenApiRouter<AppState> {
+pub(crate) fn definitions_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(list_definitions))
 }
 

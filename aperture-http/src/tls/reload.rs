@@ -1,7 +1,7 @@
 //! Hot-reload of TLS certificates via the artifact change feed.
 //!
 //! [`TlsReload`] subscribes to artifact writes and reloads the server
-//! certificate when `tls/server-cert` or `tls/server-key` changes. Multiple
+//! certificate when `tls_server-cert` or `tls_server-key` changes. Multiple
 //! writes within a short debounce window are coalesced into a single reload.
 
 use std::error::Error as StdError;

@@ -6,16 +6,12 @@
 //! channel drops events (the next subscriber-visible event still arrives).
 //!
 //! Use the feed to react to artifact changes without coupling writers to
-//! consumers. The TLS subsystem, for example, reloads certificates when
-//! `tls/server-cert` or `tls/server-key` changes, replacing the previous
-//! `tls/` prefix sniff in the HTTP upload handler.
+//! consumers.
 //!
 //! [`Artifacts::subscribe`]: crate::Artifacts::subscribe
 //! [`Receiver`]: tokio::sync::broadcast::Receiver
 
-use aperture_storage::ArtifactKey;
-
-use crate::digest::Digest;
+use aperture_storage::{ArtifactKey, Digest};
 
 /// What happened to an artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]

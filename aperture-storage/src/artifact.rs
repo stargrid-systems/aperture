@@ -9,10 +9,12 @@
 use jiff::Timestamp;
 use turso::{Connection, Row, params_from_iter};
 
+use crate::digest::Digest;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::key::ArtifactKey;
 use crate::macros::sql;
+use crate::media_type::MediaType;
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, ToSql, get};
@@ -47,14 +49,14 @@ const ARTIFACT_COLUMNS: Columns = Columns::new(&[
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
     pub id: DbId,
-    /// Logical key, for example `spectra` or `tool/avrdude`.
+    /// Logical key, for example `spectra` or `tls_server-cert`.
     pub key: ArtifactKey,
     /// Where it came from (an image reference or a URL).
     pub source: String,
     /// Content digest of the stored blob.
-    pub digest: String,
+    pub digest: Digest,
     /// OCI media type, if applicable.
-    pub media_type: Option<String>,
+    pub media_type: Option<MediaType>,
     /// Human-readable version, if known.
     pub version: Option<String>,
     /// Size of the stored blob in bytes.
@@ -153,7 +155,11 @@ impl ArtifactRepository {
 
     /// Returns the `(key, digest)` version, if stored.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get_version(&self, key: &ArtifactKey, digest: &str) -> Result<Option<Artifact>> {
+    pub async fn get_version(
+        &self,
+        key: &ArtifactKey,
+        digest: &Digest,
+    ) -> Result<Option<Artifact>> {
         let sql = format!(
             sql!(SELECT {cols} FROM artifacts WHERE key = ?1 AND digest = ?2),
             cols = ARTIFACT_COLUMNS,
@@ -250,7 +256,7 @@ impl ArtifactRepository {
         &self,
         key: &ArtifactKey,
         sort: VersionSort,
-        media_type: Option<&str>,
+        media_type: Option<&MediaType>,
         version: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Artifact>> {
@@ -263,7 +269,7 @@ impl ArtifactRepository {
 
         let mut filters = Filters::new();
         filters.eq_text(col::KEY, key.as_str());
-        filters.eq_text_opt(col::MEDIA_TYPE, media_type);
+        filters.eq_text_opt(col::MEDIA_TYPE, media_type.map(|mt| mt.as_str()));
         filters.eq_text_opt(col::VERSION, version);
         filters.keyset(&keyset, &paginator);
 
@@ -314,7 +320,7 @@ impl ArtifactRepository {
 
     /// Removes the `(key, digest)` version. Does nothing if it is absent.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn delete_version(&self, key: &ArtifactKey, digest: &str) -> Result<()> {
+    pub async fn delete_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<()> {
         self.connection
             .execute(
                 sql!(DELETE FROM artifacts WHERE key = ?1 AND digest = ?2),

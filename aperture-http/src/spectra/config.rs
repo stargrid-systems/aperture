@@ -1,6 +1,6 @@
 //! Where the Spectra frontend comes from.
 
-use aperture_artifacts::{ArtifactKey, MediaType};
+use aperture_storage::{ArtifactKey, MediaType};
 
 const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.3.1";
 const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
@@ -23,7 +23,7 @@ impl Default for SpectraConfig {
         Self {
             key: SPECTRA_KEY.clone(),
             source: SOURCE.to_owned(),
-            media_type: MediaType::parse(MEDIA_TYPE).expect("well-known media type"),
+            media_type: MEDIA_TYPE.parse().expect("well-known media type"),
         }
     }
 }

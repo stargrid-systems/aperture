@@ -9,21 +9,21 @@
 //!
 //! Four artifacts live under the data directory, all in binary DER form:
 //!
-//! | Key              | Media type             | Sensitivity |
-//! | ---------------- | ---------------------- | ----------- |
-//! | `tls/ca-cert`    | `application/pkix-cert`| public      |
-//! | `tls/ca-key`     | `application/pkcs8`    | **secret**  |
-//! | `tls/server-cert`| `application/pkix-cert`| public      |
-//! | `tls/server-key` | `application/pkcs8`    | **secret**  |
+//! | Key               | Media type             | Sensitivity |
+//! | ----------------- | ---------------------- | ----------- |
+//! | `tls_ca-cert`     | `application/pkix-cert`| public      |
+//! | `tls_ca-key`      | `application/pkcs8`    | **secret**  |
+//! | `tls_server-cert` | `application/pkix-cert`| public      |
+//! | `tls_server-key`  | `application/pkcs8`    | **secret**  |
 //!
 //! The CA private key is the single most security-sensitive file the gateway
 //! writes. Anyone who can read it can mint certs the gateway will trust.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use aperture_artifacts::Artifacts;
-use aperture_storage::ArtifactKey;
+use aperture_storage::{ArtifactKey, MediaType};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, SanType,
@@ -31,6 +31,13 @@ use rcgen::{
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::fs;
+
+/// `application/pkix-cert`: DER-encoded X.509 certificate.
+static PKIX_CERT: LazyLock<MediaType> =
+    LazyLock::new(|| "application/pkix-cert".parse().expect("valid media type"));
+/// `application/pkcs8`: DER-encoded PKCS#8 private key.
+static PKCS8: LazyLock<MediaType> =
+    LazyLock::new(|| "application/pkcs8".parse().expect("valid media type"));
 use tokio::io::AsyncReadExt;
 use tokio::task::spawn_blocking;
 use x509_parser::extensions::GeneralName;
@@ -431,9 +438,7 @@ async fn store_cert_artifact(
     key: &ArtifactKey,
     der: &CertificateDer<'_>,
 ) -> Result<(), TlsError> {
-    artifacts
-        .put(key, Some("application/pkix-cert"), der.as_ref())
-        .await?;
+    artifacts.put(key, Some(&PKIX_CERT), der.as_ref()).await?;
     Ok(())
 }
 
@@ -443,7 +448,7 @@ async fn store_key_artifact(
     der: &PrivatePkcs8KeyDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
-        .put(key, Some("application/pkcs8"), der.secret_pkcs8_der())
+        .put(key, Some(&PKCS8), der.secret_pkcs8_der())
         .await?;
     Ok(())
 }
@@ -465,7 +470,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, fs, process};
 
-    use aperture_storage::Storage;
+    use aperture_storage::{Digest, Storage};
 
     use super::*;
     use crate::tls::{TlsReload, load_shared_config};
@@ -548,7 +553,7 @@ mod tests {
     }
 
     /// Returns the current digest of `key`, panicking if absent.
-    async fn digest_of(artifacts: &Artifacts, key: &ArtifactKey) -> String {
+    async fn digest_of(artifacts: &Artifacts, key: &ArtifactKey) -> Digest {
         artifacts
             .artifact(key)
             .await
@@ -663,7 +668,7 @@ mod tests {
 
         // Overwrite the key with garbage.
         artifacts
-            .put(&SERVER_KEY, Some("application/pkcs8"), &b"corrupt"[..])
+            .put(&SERVER_KEY, Some(&PKCS8), &b"corrupt"[..])
             .await
             .unwrap();
 

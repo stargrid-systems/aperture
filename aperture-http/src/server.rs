@@ -1,7 +1,8 @@
 //! Unified HTTP server: owns all listeners and the TLS reload watcher.
 
+use std::error::Error as StdError;
 use std::fmt::Debug;
-use std::future::Future;
+use std::future::IntoFuture as _;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -135,12 +136,11 @@ impl HttpServer {
     }
 
     /// Runs all configured listeners and reload watchers until `stop`
-    /// resolves, then drains in-flight connections.
+    /// is cancelled, then drains in-flight connections.
     ///
     /// If any listener exits before `stop`, the remaining listeners are
     /// drained immediately.
-    pub async fn run(self, stop: impl Future<Output = ()> + Send + 'static) {
-        let token = CancellationToken::new();
+    pub async fn run(self, stop: CancellationToken) {
         let mut workers = WorkerSet::new();
 
         if let Some(TlsEntry {
@@ -149,16 +149,16 @@ impl HttpServer {
             app,
         }) = self.tls
         {
-            let listener_token = token.clone();
+            let listener_token = stop.clone();
             workers.spawn("https", async move {
                 serve_until_cancelled(listener, app, listener_token).await;
             });
-            let reload_token = token.clone();
+            let reload_token = stop.clone();
             workers.spawn("tls-reload", reload.run(reload_token));
         }
 
         for HttpEntry { listener, app } in self.http {
-            let listener_token = token.clone();
+            let listener_token = stop.clone();
             workers.spawn("http", async move {
                 serve_until_cancelled(listener, app, listener_token).await;
             });
@@ -168,14 +168,12 @@ impl HttpServer {
             return;
         }
 
-        tokio::pin!(stop);
         // Wait for either the stop signal or any worker to exit on its own.
         // Either branch cancels the token, which the listeners and reload
         // watcher observe as their graceful-shutdown trigger.
         tokio::select! {
             biased;
-            _ = &mut stop => {
-                token.cancel();
+            () = stop.cancelled() => {
                 workers.drain(DRAIN_TIMEOUT).await;
             }
             name = workers.wait_for_any_exit() => {
@@ -185,7 +183,7 @@ impl HttpServer {
                         "http worker exited early, draining remaining workers"
                     );
                 }
-                token.cancel();
+                stop.cancel();
                 workers.drain(DRAIN_TIMEOUT).await;
             }
         }
@@ -199,9 +197,6 @@ where
     L::Io: Send,
     L::Addr: Debug + Send,
 {
-    use std::error::Error as StdError;
-    use std::future::IntoFuture as _;
-
     let serve =
         axum::serve(listener, app).with_graceful_shutdown(async move { token.cancelled().await });
     if let Err(err) = serve.into_future().await {
@@ -219,7 +214,7 @@ impl Default for HttpServer {
 }
 
 /// Adapter that lets [`HttpServer`] be driven by a `aperture-runtime`
-/// supervisor. The supervisor hands us a `stop` future; we forward it to
+/// supervisor. The supervisor hands us a stop token; we forward it to
 /// `HttpServer::run`.
 impl Worker for HttpServer {
     async fn run(self, stop: Stop) {
@@ -233,7 +228,6 @@ mod tests {
 
     use axum::routing::get;
     use tokio::net::TcpListener;
-    use tokio::sync::oneshot;
     use tokio::time::timeout;
 
     use super::*;
@@ -241,12 +235,13 @@ mod tests {
     #[tokio::test]
     async fn empty_server_returns_immediately() {
         let server = HttpServer::new();
-        let (_tx, rx) = oneshot::channel::<()>();
+        let token = CancellationToken::new();
+        // Drop the only clone so the watcher arm in `run` would fire, but the
+        // server has no listeners to wait on anyway.
+        drop(token);
         timeout(
             Duration::from_millis(100),
-            server.run(async move {
-                let _ = rx.await;
-            }),
+            server.run(CancellationToken::new()),
         )
         .await
         .expect("server with no listeners should return immediately");
@@ -278,17 +273,14 @@ mod tests {
         let server = HttpServer::new()
             .serve_http(listener, Router::new().route("/", get(|| async { "ok" })));
 
-        let (tx, rx) = oneshot::channel();
+        let token = CancellationToken::new();
+        let cancel = token.clone();
         let handle = tokio::spawn(async move {
-            server
-                .run(async move {
-                    let _ = rx.await;
-                })
-                .await;
+            server.run(token).await;
         });
 
         wait_until_listening(bound).await;
-        let _ = tx.send(());
+        cancel.cancel();
 
         timeout(Duration::from_secs(5), handle)
             .await
@@ -307,18 +299,15 @@ mod tests {
             .serve_http(l1, Router::new().route("/", get(|| async { "1" })))
             .serve_http(l2, Router::new().route("/", get(|| async { "2" })));
 
-        let (tx, rx) = oneshot::channel();
+        let token = CancellationToken::new();
+        let cancel = token.clone();
         let handle = tokio::spawn(async move {
-            server
-                .run(async move {
-                    let _ = rx.await;
-                })
-                .await;
+            server.run(token).await;
         });
 
         wait_until_listening(b1).await;
         wait_until_listening(b2).await;
-        let _ = tx.send(());
+        cancel.cancel();
 
         timeout(Duration::from_secs(5), handle)
             .await

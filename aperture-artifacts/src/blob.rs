@@ -1,16 +1,18 @@
 //! Content-addressed blob store.
 
 use std::collections::HashSet;
+use std::error::Error as StdError;
+use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use aperture_storage::{Digest, DigestAlgorithm};
 use tokio::fs;
 use tokio::io::{self, AsyncRead};
 
-use crate::digest::{Digest, DigestAlgorithm};
 use crate::error::Result;
 use crate::hash_writer::HashWriter;
 
@@ -49,8 +51,22 @@ impl BlobStore {
     }
 
     /// Returns whether the blob with `digest` is already stored.
+    ///
+    /// IO errors other than "file not found" are logged and treated as
+    /// "not present". A misconfigured store should not crash the gateway, but
+    /// operators will see the warning.
     pub async fn contains(&self, digest: &Digest) -> bool {
-        fs::try_exists(self.path(digest)).await.unwrap_or(false)
+        match fs::try_exists(self.path(digest)).await {
+            Ok(exists) => exists,
+            Err(err) if err.kind() == ErrorKind::NotFound => false,
+            Err(err) => {
+                tracing::warn!(
+                    error = &err as &dyn StdError,
+                    "blob existence check failed, treating as missing"
+                );
+                false
+            }
+        }
     }
 
     /// Lists the digests of all stored blobs.
@@ -60,7 +76,7 @@ impl BlobStore {
     pub async fn list(&self) -> Result<Vec<Digest>> {
         let mut algorithms = match fs::read_dir(self.blobs_dir()).await {
             Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(err) => return Err(err.into()),
         };
         let mut digests = Vec::new();
@@ -72,7 +88,7 @@ impl BlobStore {
             };
             let mut hashes = match fs::read_dir(algorithm.path()).await {
                 Ok(entries) => entries,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
                 Err(err) => return Err(err.into()),
             };
             while let Some(hash) = hashes.next_entry().await? {
@@ -99,7 +115,7 @@ impl BlobStore {
     pub async fn clear_temp(&self) -> Result<()> {
         let mut entries = match fs::read_dir(self.tmp_dir()).await {
             Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
             Err(err) => return Err(err.into()),
         };
         while let Some(entry) = entries.next_entry().await? {
@@ -196,7 +212,7 @@ impl BlobStore {
 /// Derefs to the underlying [`fs::File`] for writing. While alive, its path is
 /// registered as active so [`BlobStore::clear_temp`] will not remove it.
 /// Dropping the handle unregisters the path, marking the file as removable. The
-/// file itself is not deleted on drop, since that would block; a later
+/// file itself is not deleted on drop, since that would block. A later
 /// [`BlobStore::clear_temp`] reclaims it if it was never placed.
 pub struct TempFile {
     path: PathBuf,
@@ -236,7 +252,7 @@ impl Drop for TempFile {
 async fn remove_if_exists(path: &Path) -> Result<()> {
     match fs::remove_file(path).await {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err.into()),
     }
 }

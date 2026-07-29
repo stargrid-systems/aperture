@@ -16,6 +16,7 @@ license = "AGPL-3.0-or-later"
 publish = false
 repository = "https://github.com/stargrid-systems/aperture"
 rust-version = "1.93"
+version = "0.1.0"
 
 [workspace.dependencies]
 aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
@@ -31,6 +32,7 @@ backhand = { version = "0.25", default-features = false }
 bytes = { version = "1", default-features = false }
 clap = { version = "4", default-features = false }
 futures-util = { version = "0.3", default-features = false }
+hex = { version = "0.4", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 httpdate = { version = "1", default-features = false }
 jiff = { version = "0.2", default-features = false }

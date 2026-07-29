@@ -1,6 +1,7 @@
 //! DTOs for the artifact catalog endpoints.
 
 use aperture_artifacts::{Artifact, ArtifactKeyEntry, ListQuery, Page as StoragePage, VersionSort};
+use aperture_storage::{Digest, MediaType};
 use jiff::Timestamp;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -18,7 +19,7 @@ pub struct ArtifactSummaryResponse {
     /// Where the newest version came from.
     pub source: String,
     /// Content digest of the newest version.
-    pub digest: String,
+    pub digest: Digest,
     /// Human-readable version of the newest version, if known.
     pub version: Option<String>,
     /// Stored blob size of the newest version, in bytes.
@@ -55,13 +56,13 @@ pub struct ArtifactVersionResponse {
     /// Logical artifact key.
     pub key: String,
     /// Content digest of the stored blob.
-    pub digest: String,
+    pub digest: Digest,
     /// Where this version came from.
     pub source: String,
     /// Human-readable version, if known.
     pub version: Option<String>,
     /// OCI media type, if applicable.
-    pub media_type: Option<String>,
+    pub media_type: Option<MediaType>,
     /// Stored blob size in bytes.
     pub size_bytes: u64,
     /// When this version was downloaded.
@@ -152,7 +153,7 @@ pub struct VersionListParams {
     /// Field to sort by. Defaults to downloaded time.
     pub sort: Option<VersionSortParam>,
     /// Only versions with this exact media type.
-    pub media_type: Option<String>,
+    pub media_type: Option<MediaType>,
     /// Only versions with this exact version string.
     pub version: Option<String>,
 }

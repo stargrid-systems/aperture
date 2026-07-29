@@ -1,6 +1,8 @@
 use std::{env, fs};
 
-use aperture_storage::{Artifact, ArtifactKey, DbId, ListQuery, Storage, VersionSort};
+use aperture_storage::{
+    Artifact, ArtifactKey, DbId, Digest, ListQuery, MediaType, Storage, VersionSort,
+};
 use jiff::Timestamp;
 
 fn at(micros: i64) -> Timestamp {
@@ -11,13 +13,21 @@ fn key(s: &'static str) -> ArtifactKey {
     ArtifactKey::new(s).unwrap()
 }
 
-fn version(key_str: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
+fn digest(s: &str) -> Digest {
+    s.parse().unwrap()
+}
+
+fn mt(s: &str) -> MediaType {
+    s.parse().unwrap()
+}
+
+fn version(key_str: &'static str, digest_str: &str, downloaded_at: i64) -> Artifact {
     Artifact {
         id: DbId::from(0),
         key: key(key_str),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
-        digest: digest.to_owned(),
-        media_type: Some("application/vnd.spectra.tar+gzip".to_owned()),
+        digest: digest(digest_str),
+        media_type: Some(mt("application/vnd.spectra.tar+gzip")),
         version: Some("0.2.0".to_owned()),
         size_bytes: 1234,
         downloaded_at: at(downloaded_at),
@@ -32,25 +42,25 @@ async fn record_latest_and_get_version() {
 
     assert!(repo.latest(&key("spectra")).await.unwrap().is_none());
 
-    repo.record_version(&version("spectra", "sha256:aaa", 1_000))
+    repo.record_version(&version("spectra", "sha256:aaaa", 1_000))
         .await
         .unwrap();
-    repo.record_version(&version("spectra", "sha256:bbb", 2_000))
+    repo.record_version(&version("spectra", "sha256:bbbb", 2_000))
         .await
         .unwrap();
 
     let latest = repo.latest(&key("spectra")).await.unwrap().unwrap();
-    assert_eq!(latest.digest, "sha256:bbb");
+    assert_eq!(latest.digest, digest("sha256:bbbb"));
 
     let specific = repo
-        .get_version(&key("spectra"), "sha256:aaa")
+        .get_version(&key("spectra"), &digest("sha256:aaaa"))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(specific.digest, "sha256:aaa");
+    assert_eq!(specific.digest, digest("sha256:aaaa"));
 
     assert!(
-        repo.get_version(&key("spectra"), "missing")
+        repo.get_version(&key("spectra"), &digest("sha256:dead"))
             .await
             .unwrap()
             .is_none()
@@ -62,10 +72,10 @@ async fn record_version_is_idempotent_per_digest() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.artifacts().unwrap();
 
-    repo.record_version(&version("spectra", "sha256:aaa", 1_000))
+    repo.record_version(&version("spectra", "sha256:aaaa", 1_000))
         .await
         .unwrap();
-    let mut again = version("spectra", "sha256:aaa", 5_000);
+    let mut again = version("spectra", "sha256:aaaa", 5_000);
     again.version = Some("0.3.0".to_owned());
     repo.record_version(&again).await.unwrap();
 
@@ -89,13 +99,13 @@ async fn list_keys_returns_latest_and_count() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.artifacts().unwrap();
 
-    repo.record_version(&version("spectra", "sha256:aaa", 1_000))
+    repo.record_version(&version("spectra", "sha256:aaaa", 1_000))
         .await
         .unwrap();
-    repo.record_version(&version("spectra", "sha256:bbb", 2_000))
+    repo.record_version(&version("spectra", "sha256:bbbb", 2_000))
         .await
         .unwrap();
-    repo.record_version(&version("firmware", "sha256:ccc", 1_500))
+    repo.record_version(&version("firmware", "sha256:cccc", 1_500))
         .await
         .unwrap();
 
@@ -106,7 +116,7 @@ async fn list_keys_returns_latest_and_count() {
     assert_eq!(keys.items[0].version_count, 1);
     assert_eq!(keys.items[1].latest.key, key("spectra"));
     assert_eq!(keys.items[1].version_count, 2);
-    assert_eq!(keys.items[1].latest.digest, "sha256:bbb");
+    assert_eq!(keys.items[1].latest.digest, digest("sha256:bbbb"));
 }
 
 #[tokio::test]
@@ -115,7 +125,7 @@ async fn list_keys_paginates_with_cursor() {
     let repo = storage.artifacts().unwrap();
 
     for key in ["a", "b", "c"] {
-        repo.record_version(&version(key, &format!("sha256:{key}"), 1_000))
+        repo.record_version(&version(key, &format!("sha256:{key}{key}"), 1_000))
             .await
             .unwrap();
     }
@@ -189,10 +199,10 @@ async fn list_keys_q_treats_wildcards_literally() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.artifacts().unwrap();
 
-    repo.record_version(&version("a_b", "sha256:1", 1_000))
+    repo.record_version(&version("a_b", "sha256:11", 1_000))
         .await
         .unwrap();
-    repo.record_version(&version("axb", "sha256:2", 1_000))
+    repo.record_version(&version("axb", "sha256:22", 1_000))
         .await
         .unwrap();
 
@@ -216,9 +226,9 @@ async fn list_versions_sorts_and_paginates() {
     let repo = storage.artifacts().unwrap();
 
     for (digest, ts) in [
-        ("sha256:a", 1_000),
-        ("sha256:b", 3_000),
-        ("sha256:c", 2_000),
+        ("sha256:aa", 1_000),
+        ("sha256:bb", 3_000),
+        ("sha256:cc", 2_000),
     ] {
         repo.record_version(&version("spectra", digest, ts))
             .await
@@ -243,9 +253,9 @@ async fn list_versions_sorts_and_paginates() {
         first
             .items
             .iter()
-            .map(|v| v.digest.as_str())
+            .map(|v| v.digest.to_string())
             .collect::<Vec<_>>(),
-        ["sha256:b", "sha256:c"]
+        ["sha256:bb", "sha256:cc"]
     );
     let cursor = first.next_cursor.expect("more pages");
 
@@ -267,9 +277,9 @@ async fn list_versions_sorts_and_paginates() {
         second
             .items
             .iter()
-            .map(|v| v.digest.as_str())
+            .map(|v| v.digest.to_string())
             .collect::<Vec<_>>(),
-        ["sha256:a"]
+        ["sha256:aa"]
     );
 }
 
@@ -278,14 +288,14 @@ async fn delete_version_removes_only_that_version() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.artifacts().unwrap();
 
-    repo.record_version(&version("spectra", "sha256:aaa", 1_000))
+    repo.record_version(&version("spectra", "sha256:aaaa", 1_000))
         .await
         .unwrap();
-    repo.record_version(&version("spectra", "sha256:bbb", 2_000))
+    repo.record_version(&version("spectra", "sha256:bbbb", 2_000))
         .await
         .unwrap();
 
-    repo.delete_version(&key("spectra"), "sha256:aaa")
+    repo.delete_version(&key("spectra"), &digest("sha256:aaaa"))
         .await
         .unwrap();
 
@@ -300,7 +310,7 @@ async fn delete_version_removes_only_that_version() {
         .await
         .unwrap();
     assert_eq!(versions.items.len(), 1);
-    assert_eq!(versions.items[0].digest, "sha256:bbb");
+    assert_eq!(versions.items[0].digest, digest("sha256:bbbb"));
 }
 
 #[tokio::test]
@@ -319,7 +329,7 @@ async fn persists_and_migrations_are_idempotent() {
         storage
             .artifacts()
             .unwrap()
-            .record_version(&version("spectra", "sha256:aaa", 1_000))
+            .record_version(&version("spectra", "sha256:aaaa", 1_000))
             .await
             .unwrap();
     }

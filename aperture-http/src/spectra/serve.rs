@@ -9,6 +9,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::header::{
     ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, RETRY_AFTER, VARY,
+    X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -23,6 +24,12 @@ use super::image::SpectraImage;
 use crate::AppState;
 
 const PLACEHOLDER: &str = include_str!("installing.html");
+
+const CACHE_NO_CACHE: HeaderValue = HeaderValue::from_static("no-cache");
+const CACHE_NO_STORE: HeaderValue = HeaderValue::from_static("no-store");
+const VARY_ACCEPT_ENCODING: HeaderValue = HeaderValue::from_static("accept-encoding");
+const NOSNIFF: HeaderValue = HeaderValue::from_static("nosniff");
+const OCTET_STREAM: HeaderValue = HeaderValue::from_static("application/octet-stream");
 
 /// Serves the current frontend, or a self-refreshing placeholder while it is
 /// still being installed.
@@ -42,31 +49,32 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
         return (
             StatusCode::NOT_MODIFIED,
             [
-                (ETAG, image.etag.as_header().clone()),
-                (CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+                (ETAG, image.etag.clone().into()),
+                (CACHE_CONTROL, CACHE_NO_CACHE.clone()),
                 // The 200 response varies by Accept-Encoding, so the 304 must
                 // advertise the same Vary per RFC 9110 section 15.4.5. The
                 // ETag alone does not distinguish encodings.
-                (VARY, HeaderValue::from_static("accept-encoding")),
+                (VARY, VARY_ACCEPT_ENCODING.clone()),
             ],
         )
             .into_response();
     }
 
-    let accepted = accepted_encodings(request.headers());
+    let accepted = AcceptedEncodings::from_headers(request.headers());
     let Some(resolved) = image.resolve(request.uri().path(), accepted.br, accepted.gzip) else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
     let stream = SquashfsFileStream::new(Arc::clone(&image.fs), resolved.file);
     let content_type = HeaderValue::from_str(resolved.content_type.as_ref())
-        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+        .unwrap_or_else(|_| OCTET_STREAM.clone());
     let mut response = Response::new(Body::from_stream(stream));
     let headers = response.headers_mut();
     headers.insert(CONTENT_TYPE, content_type);
-    headers.insert(ETAG, image.etag.as_header().clone());
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
+    headers.insert(ETAG, image.etag.clone().into());
+    headers.insert(CACHE_CONTROL, CACHE_NO_CACHE.clone());
+    headers.insert(VARY, VARY_ACCEPT_ENCODING.clone());
+    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF.clone());
     if let Some(encoding) = resolved.encoding {
         headers.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
     }
@@ -167,34 +175,9 @@ fn placeholder() -> Response {
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     headers.insert(RETRY_AFTER, HeaderValue::from_static("2"));
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(CACHE_CONTROL, CACHE_NO_STORE.clone());
+    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF.clone());
     response
-}
-
-fn accepted_encodings(headers: &HeaderMap) -> AcceptedEncodings {
-    let value = headers
-        .get(ACCEPT_ENCODING)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let mut out = AcceptedEncodings::default();
-    for entry in value.split(',') {
-        let mut parts = entry.splitn(2, ';');
-        let name = parts.next().unwrap_or("").trim();
-        let q = parts
-            .next()
-            .and_then(|p| p.trim().strip_prefix("q="))
-            .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(1.0);
-        if q > 0.0 {
-            if name.eq_ignore_ascii_case("br") {
-                out.br = true;
-            }
-            if name.eq_ignore_ascii_case("gzip") {
-                out.gzip = true;
-            }
-        }
-    }
-    out
 }
 
 /// The `Accept-Encoding` preferences we care about, parsed from a request.
@@ -202,6 +185,36 @@ fn accepted_encodings(headers: &HeaderMap) -> AcceptedEncodings {
 struct AcceptedEncodings {
     br: bool,
     gzip: bool,
+}
+
+impl AcceptedEncodings {
+    /// Parses `Accept-Encoding` from `headers`. A missing or unparseable
+    /// header yields no accepted encodings.
+    fn from_headers(headers: &HeaderMap) -> Self {
+        let value = headers
+            .get(ACCEPT_ENCODING)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let mut out = Self::default();
+        for entry in value.split(',') {
+            let mut parts = entry.splitn(2, ';');
+            let name = parts.next().unwrap_or("").trim();
+            let q = parts
+                .next()
+                .and_then(|p| p.trim().strip_prefix("q="))
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(1.0);
+            if q > 0.0 {
+                if name.eq_ignore_ascii_case("br") {
+                    out.br = true;
+                }
+                if name.eq_ignore_ascii_case("gzip") {
+                    out.gzip = true;
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -217,7 +230,7 @@ mod tests {
     const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/site.sqfs");
 
     fn image() -> Arc<SpectraImage> {
-        Arc::new(SpectraImage::open(Path::new(FIXTURE), "sha256:test").unwrap())
+        Arc::new(SpectraImage::open(Path::new(FIXTURE), &"sha256:abcd".parse().unwrap()).unwrap())
     }
 
     fn request(uri: &str, headers: &[(HeaderName, &str)]) -> Request {
@@ -239,7 +252,7 @@ mod tests {
     async fn serves_index_with_digest_etag() {
         let response = serve(image(), request("/", &[]));
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().get(ETAG).unwrap(), "\"sha256:test\"");
+        assert_eq!(response.headers().get(ETAG).unwrap(), "\"sha256:abcd\"");
         assert!(
             response
                 .headers()
@@ -258,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn revalidates_with_matching_etag() {
-        let response = serve(image(), request("/", &[(IF_NONE_MATCH, "\"sha256:test\"")]));
+        let response = serve(image(), request("/", &[(IF_NONE_MATCH, "\"sha256:abcd\"")]));
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     }
 

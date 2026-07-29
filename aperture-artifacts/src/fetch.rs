@@ -4,9 +4,9 @@
 //! blob store or the catalog, so it cannot store an artifact without the
 //! [`Artifacts`](crate::Artifacts) layer placing and recording it.
 
+use aperture_storage::{Digest, MediaType};
+
 pub use self::oci::OciFetcher;
-use crate::digest::Digest;
-use crate::media_type::MediaType;
 
 mod oci;
 

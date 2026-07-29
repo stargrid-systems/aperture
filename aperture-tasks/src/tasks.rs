@@ -391,9 +391,32 @@ impl TasksInner {
     }
 
     /// Removes `id` from the live registry and signals its completion.
+    ///
+    /// Also reaps any completed entries from the JoinSet. Tokio's JoinSet
+    /// retains finished entries until they are joined, so without this the
+    /// set would grow without bound over the process lifetime.
     fn settle(&self, id: DbId) {
         if let Some(task) = self.running.lock().expect("running poisoned").remove(&id) {
             let _ = task.shared.phase.send(Phase::Settled);
+        }
+        // Reap completed JoinSet entries. Tokio's JoinSet retains finished
+        // entries until they are joined, so without this the set would grow
+        // without bound. The entry for `id` itself is not reaped here because
+        // `settle` runs from within that task's body; it is collected on a
+        // later call.
+        loop {
+            match self
+                .joinset
+                .lock()
+                .expect("joinset poisoned")
+                .try_join_next()
+            {
+                Some(Ok(())) => {}
+                Some(Err(err)) => {
+                    tracing::error!(error = &err as &dyn Error, "task panicked");
+                }
+                None => break,
+            }
         }
     }
 }

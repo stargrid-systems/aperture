@@ -1,5 +1,5 @@
-//! [`WorkerSet`]: spawn a batch of named tasks, await any exit, drain with
-//! timeout.
+//! [`WorkerSet`] spawns a batch of named tasks, awaits any exit, and drains
+//! them with a timeout.
 
 use std::error::Error as StdError;
 use std::future::Future;
@@ -23,7 +23,7 @@ use tokio::time::timeout;
 /// - drain every worker with a hard timeout on shutdown.
 ///
 /// `WorkerSet` does not own a cancellation token. The supervisor is
-/// responsible for distributing stop signals; the set just tracks join
+/// responsible for distributing stop signals. The set just tracks join
 /// handles and reports on their state.
 pub struct WorkerSet {
     handles: FuturesUnordered<NamedHandle>,
@@ -95,17 +95,17 @@ impl WorkerSet {
         Some(name)
     }
 
-    /// Awaits every still-running task with a hard `deadline`.
+    /// Awaits every still-running task with a hard `time_limit`.
     ///
-    /// Tasks that finish before the deadline are awaited normally. Tasks that
-    /// do not finish are detached (the `WorkerSet` is dropped mid-iteration)
-    /// and left for the runtime to clean up at process exit. Panics are
-    /// logged at `error` level.
-    pub async fn drain(self, deadline: Duration) {
-        match timeout(deadline, self.drain_all()).await {
+    /// Tasks that finish before the time limit is reached are awaited
+    /// normally. Tasks that do not finish are detached (the `WorkerSet` is
+    /// dropped mid-iteration) and left for the runtime to clean up at process
+    /// exit. Panics are logged at `error` level.
+    pub async fn drain(self, time_limit: Duration) {
+        match timeout(time_limit, self.drain_all()).await {
             Ok(()) => tracing::info!("worker set drain complete"),
             Err(_) => tracing::warn!(
-                "worker set drain timed out after {deadline:?}, detaching remaining tasks"
+                "worker set drain timed out after {time_limit:?}, detaching remaining tasks"
             ),
         }
     }

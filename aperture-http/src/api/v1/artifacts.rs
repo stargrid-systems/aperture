@@ -1,26 +1,18 @@
 //! Artifact catalog HTTP endpoints.
-//!
-//! # Trust boundary
-//!
-//! `PUT /api/v1/artifacts/{key}` accepts any well-formed `ArtifactKey`,
-//! including the well-known `tls/*` keys the gateway uses for its own PKI.
-//! Until authentication lands there is no namespace reservation: any caller
-//! with network access can replace the CA private key and have the gateway
-//! mint certs signed by it. Treat this endpoint as privileged. See the
-//! `aperture_http::tls` module doc for the full threat model.
 
 use std::io;
 
-use aperture_artifacts::{ArtifactError, ArtifactKey};
+use aperture_artifacts::ArtifactError;
+use aperture_storage::{ArtifactKey, Digest, MediaType};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_util::TryStreamExt as _;
-use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use tokio::fs::File;
 use tokio_util::io::{ReaderStream, StreamReader};
+use tower_http::limit::RequestBodyLimitLayer;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -45,25 +37,7 @@ use crate::error::ApiError;
 /// `Content-Length: artifact.size_bytes` on the response.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
-/// ASCII set that percent-encodes everything unsafe inside a single URL path
-/// segment. `/` is the most important one here, because artifact keys may
-/// contain it (e.g. `tls/server-cert`) and an unencoded slash would shift the
-/// route match.
-const PATH_SEGMENT: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'"')
-    .add(b'#')
-    .add(b'%')
-    .add(b'<')
-    .add(b'>')
-    .add(b'?')
-    .add(b'`')
-    .add(b'{')
-    .add(b'}')
-    .add(b'/');
-
-pub fn router() -> OpenApiRouter<AppState> {
-    use tower_http::limit::RequestBodyLimitLayer;
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
         .routes(routes!(get_artifact))
@@ -138,7 +112,7 @@ async fn list_versions(
         .list_versions(
             &key,
             params.sort(),
-            params.media_type.as_deref(),
+            params.media_type.as_ref(),
             params.version.as_deref(),
             &params.to_query(),
         )
@@ -153,7 +127,7 @@ async fn list_versions(
     operation_id = operation_ids::GET_ARTIFACT_VERSION,
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
-        ("digest" = String, Path, description = "Content digest"),
+        ("digest" = Digest, Path, description = "Content digest"),
     ),
     responses(
         (status = 200, description = "Version", body = ArtifactVersionResponse),
@@ -162,7 +136,7 @@ async fn list_versions(
 )]
 async fn get_version(
     State(state): State<AppState>,
-    Path((key, digest)): Path<(ArtifactKey, String)>,
+    Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<Json<ArtifactVersionResponse>, ApiError> {
     let version = state.spectra().artifacts().version(&key, &digest).await?;
     version
@@ -177,7 +151,7 @@ async fn get_version(
     operation_id = operation_ids::DELETE_ARTIFACT_VERSION,
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
-        ("digest" = String, Path, description = "Content digest"),
+        ("digest" = Digest, Path, description = "Content digest"),
     ),
     responses(
         (status = 204, description = "Version evicted"),
@@ -186,7 +160,7 @@ async fn get_version(
 )]
 async fn delete_version(
     State(state): State<AppState>,
-    Path((key, digest)): Path<(ArtifactKey, String)>,
+    Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<StatusCode, ApiError> {
     let evicted = state
         .spectra()
@@ -238,12 +212,13 @@ async fn upload_artifact(
     ),
     ApiError,
 > {
-    // Artifacts::put validates the media type via MediaType::parse, so we just
-    // forward the raw Content-Type header. An invalid value (e.g.
-    // `text/html; charset=utf-8`) is silently dropped and stored as None.
+    // Parse Content-Type as a MediaType at the boundary. An unparseable
+    // value is treated as absent, so the store records no media type rather
+    // than garbage.
     let media_type = headers
         .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok());
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<MediaType>().ok());
     let stream = request
         .into_body()
         .into_data_stream()
@@ -252,15 +227,11 @@ async fn upload_artifact(
     let artifact = state
         .spectra()
         .artifacts()
-        .put(&key, media_type, reader)
+        .put(&key, media_type.as_ref(), reader)
         .await?;
-    // Percent-encode the key so a multi-segment key like `tls/server-cert`
-    // survives routing when the client follows the Location header.
-    let encoded_key = utf8_percent_encode(key.as_str(), PATH_SEGMENT);
-    let location = format!(
-        "/api/v1/artifacts/{encoded_key}/versions/{}",
-        artifact.digest
-    );
+    // Artifact keys are URL-safe ([a-zA-Z0-9._-]) so they round-trip through
+    // a single path segment without percent-encoding.
+    let location = format!("/api/v1/artifacts/{key}/versions/{}", artifact.digest);
     Ok((
         StatusCode::CREATED,
         [(header::LOCATION, location)],
@@ -275,7 +246,7 @@ async fn upload_artifact(
     operation_id = operation_ids::DOWNLOAD_ARTIFACT_BLOB,
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
-        ("digest" = String, Path, description = "Content digest"),
+        ("digest" = Digest, Path, description = "Content digest"),
     ),
     responses(
         (status = 200, description = "Blob content",
@@ -291,7 +262,7 @@ async fn upload_artifact(
 )]
 async fn download_artifact_blob(
     State(state): State<AppState>,
-    Path((key, digest)): Path<(ArtifactKey, String)>,
+    Path((key, digest)): Path<(ArtifactKey, Digest)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let artifacts = state.spectra().artifacts();
@@ -307,7 +278,7 @@ async fn download_artifact_blob(
         return Ok((
             StatusCode::NOT_MODIFIED,
             [
-                (header::ETAG, etag.as_header().clone()),
+                (header::ETAG, etag.into()),
                 (
                     header::CACHE_CONTROL,
                     HeaderValue::from_static("public, max-age=31536000, immutable"),
@@ -329,18 +300,16 @@ async fn download_artifact_blob(
             ArtifactError::from(err).into()
         }
     })?;
-    // The stored media type was validated at put time, so we can replay it
-    // verbatim. The fallback keeps the safe default if the artifact has no
-    // media type recorded.
-    let content_type = artifact
-        .media_type
-        .clone()
-        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let content_type = artifact.media_type.clone().unwrap_or_else(|| {
+        "application/octet-stream"
+            .parse()
+            .expect("valid media type")
+    });
 
     Response::builder()
-        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_TYPE, content_type.to_string())
         .header(header::CONTENT_LENGTH, artifact.size_bytes)
-        .header(header::ETAG, etag.as_header().clone())
+        .header(header::ETAG, HeaderValue::from(etag))
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
         .header(header::LAST_MODIFIED, last_modified.as_header())
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")

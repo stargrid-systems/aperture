@@ -6,8 +6,8 @@
 //!
 //! # Threat model
 //!
-//! The well-known PKI keys (`tls/ca-cert`, `tls/ca-key`, `tls/server-cert`,
-//! `tls/server-key`) live in the same artifact store as everything else the
+//! The well-known PKI keys (`tls_ca-cert`, `tls_ca-key`, `tls_server-cert`,
+//! `tls_server-key`) live in the same artifact store as everything else the
 //! gateway manages. There is no per-key namespace reservation today. Any
 //! caller with write access to the artifact API can therefore overwrite the
 //! CA private key with their own and have the gateway mint certificates
@@ -15,7 +15,7 @@
 //!
 //! Concretely: treat the artifact API as equally trusted with the gateway's
 //! data directory. Do not expose it on an untrusted network until the
-//! authentication layer ships. Replacing `tls/ca-key` is sufficient to
+//! authentication layer ships. Replacing `tls_ca-key` is sufficient to
 //! compromise every derived cert.
 //!
 //! This module is private to the crate. The crate boundary exposes only
@@ -47,10 +47,10 @@ mod rotate;
 
 // Artifact keys for the gateway's self-signed PKI. `const` (not `LazyLock`)
 // because validation is a `const fn`, so these resolve at compile time.
-const CA_CERT: ArtifactKey = ArtifactKey::from_static("tls/ca-cert");
-const CA_KEY: ArtifactKey = ArtifactKey::from_static("tls/ca-key");
-const SERVER_CERT: ArtifactKey = ArtifactKey::from_static("tls/server-cert");
-const SERVER_KEY: ArtifactKey = ArtifactKey::from_static("tls/server-key");
+const CA_CERT: ArtifactKey = ArtifactKey::from_static("tls_ca-cert");
+const CA_KEY: ArtifactKey = ArtifactKey::from_static("tls_ca-key");
+const SERVER_CERT: ArtifactKey = ArtifactKey::from_static("tls_server-cert");
+const SERVER_KEY: ArtifactKey = ArtifactKey::from_static("tls_server-key");
 
 /// Shared, hot-swappable server configuration.
 pub type SharedConfig = Arc<ArcSwap<rustls::ServerConfig>>;

@@ -2,24 +2,43 @@
 //! whether a download is in flight.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition, DownloadInput, DownloadSource};
+use aperture_runtime::{Stop, Worker};
 use aperture_tasks::Tasks;
+use tokio::task::JoinHandle;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 use super::config::SpectraConfig;
 use super::image::{SpectraImage, open_image};
 
+/// Backoff after a failed prepare attempt. The spectra loader is best-effort:
+/// if the registry is unreachable we wait and let the next HTTP request retry.
+const PREPARE_BACKOFF: Duration = Duration::from_secs(30);
+
 /// Owns the Spectra frontend and fetches it on demand.
+///
+/// Cheap to clone: all state is shared through `Arc`.
 #[derive(Clone)]
 pub struct Spectra {
+    inner: Arc<SpectraInner>,
+}
+
+struct SpectraInner {
     artifacts: Artifacts,
     tasks: Tasks,
     config: SpectraConfig,
-    current: Arc<RwLock<Option<Arc<SpectraImage>>>>,
+    current: RwLock<Option<Arc<SpectraImage>>>,
     preparing: Arc<AtomicBool>,
+    /// Cancels the in-flight prepare task, if any. Cloned into the task so
+    /// `shutdown` can interrupt the backoff sleep.
+    cancel: CancellationToken,
+    /// The join handle of the in-flight prepare task, if any. Stored so
+    /// `shutdown` can abort it instead of leaving it detached.
+    task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Spectra {
@@ -27,25 +46,29 @@ impl Spectra {
     /// from `config`.
     pub fn new(artifacts: Artifacts, tasks: Tasks, config: SpectraConfig) -> Self {
         Self {
-            artifacts,
-            tasks,
-            config,
-            current: Arc::new(RwLock::new(None)),
-            preparing: Arc::new(AtomicBool::new(false)),
+            inner: Arc::new(SpectraInner {
+                artifacts,
+                tasks,
+                config,
+                current: RwLock::new(None),
+                preparing: Arc::new(AtomicBool::new(false)),
+                cancel: CancellationToken::new(),
+                task: Mutex::new(None),
+            }),
         }
     }
 
     /// The artifact manager behind this frontend.
     pub fn artifacts(&self) -> &Artifacts {
-        &self.artifacts
+        &self.inner.artifacts
     }
 
     /// Opens the frontend if its blob is already cached, without downloading.
     ///
     /// Returns whether a cached blob was found and opened.
     pub async fn activate_if_present(&self) -> anyhow::Result<bool> {
-        if let Some(located) = self.artifacts.locate(&self.config.key).await? {
-            let image = open_image(located.path, located.digest.to_string()).await?;
+        if let Some(located) = self.inner.artifacts.locate(&self.inner.config.key).await? {
+            let image = open_image(located.path, located.digest).await?;
             self.set(Arc::new(image));
             return Ok(true);
         }
@@ -53,11 +76,15 @@ impl Spectra {
     }
 
     pub(super) fn current(&self) -> Option<Arc<SpectraImage>> {
-        self.current.read().expect("spectra slot poisoned").clone()
+        self.inner
+            .current
+            .read()
+            .expect("spectra slot poisoned")
+            .clone()
     }
 
     fn set(&self, image: Arc<SpectraImage>) {
-        *self.current.write().expect("spectra slot poisoned") = Some(image);
+        *self.inner.current.write().expect("spectra slot poisoned") = Some(image);
     }
 
     /// Starts a background download and open, unless one is already running or
@@ -66,28 +93,44 @@ impl Spectra {
         if self.current().is_some() {
             return;
         }
-        if self.preparing.swap(true, Ordering::SeqCst) {
+        if self.inner.preparing.swap(true, Ordering::SeqCst) {
             return;
         }
         let this = self.clone();
-        tokio::spawn(async move {
-            if let Err(err) = this.prepare().await {
+        let cancel = self.inner.cancel.clone();
+        // The guard resets `preparing` on drop, including on panic. Without
+        // this, a panic in `prepare` would leave `preparing = true` forever
+        // and the frontend would never load again.
+        let preparing = Arc::clone(&self.inner.preparing);
+        let handle = tokio::spawn(async move {
+            let _guard = PreparingGuard(preparing);
+            let outcome = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                result = this.prepare() => result,
+            };
+            if let Err(err) = outcome {
                 tracing::error!(error = &*err, "failed to prepare spectra frontend");
-                time::sleep(Duration::from_secs(30)).await;
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => {},
+                    _ = time::sleep(PREPARE_BACKOFF) => {}
+                }
             }
-            this.preparing.store(false, Ordering::SeqCst);
         });
+        *self.inner.task.lock().expect("spectra task slot poisoned") = Some(handle);
     }
 
     async fn prepare(&self) -> anyhow::Result<()> {
         let input = DownloadInput {
-            key: self.config.key.clone(),
+            key: self.inner.config.key.clone(),
             source: DownloadSource::Oci {
-                reference: self.config.source.clone(),
-                media_type: self.config.media_type.as_str().to_owned(),
+                reference: self.inner.config.source.clone(),
+                media_type: self.inner.config.media_type.clone(),
             },
         };
-        self.tasks
+        self.inner
+            .tasks
             .spawn::<DownloadDefinition>(input)
             .await?
             .wait()
@@ -95,9 +138,60 @@ impl Spectra {
         if !self.activate_if_present().await? {
             anyhow::bail!(
                 "spectra artifact {:?} missing after download",
-                self.config.key
+                self.inner.config.key
             );
         }
         Ok(())
+    }
+
+    /// Aborts any in-flight prepare task and waits for it to finish. The
+    /// supervisor calls this on shutdown via [`SpectraWorker`].
+    async fn shutdown(&self) {
+        self.inner.cancel.cancel();
+        let handle = self
+            .inner
+            .task
+            .lock()
+            .expect("spectra task slot poisoned")
+            .take();
+        if let Some(handle) = handle {
+            handle.abort();
+            // Awaits the task so it cannot outlive shutdown. `abort` makes
+            // this resolve promptly with a cancelled `JoinError`, ignored
+            // here since cancellation was intentional.
+            let _ = handle.await;
+        }
+    }
+}
+
+/// Resets the `preparing` flag when dropped, even on panic.
+struct PreparingGuard(Arc<AtomicBool>);
+
+impl Drop for PreparingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Supervisor-facing worker that drives [`Spectra`] shutdown.
+///
+/// Construct with [`SpectraWorker::new`] using a clone of the [`Spectra`] that
+/// is also shared with HTTP handlers. The worker itself does not run the
+/// download. Downloads are triggered lazily by HTTP requests. The worker only
+/// makes sure any in-flight prepare task is cancelled and joined before the
+/// process exits.
+pub struct SpectraWorker(Spectra);
+
+impl SpectraWorker {
+    /// Wraps a clone of `spectra` for supervisor tracking.
+    pub fn new(spectra: Spectra) -> Self {
+        Self(spectra)
+    }
+}
+
+impl Worker for SpectraWorker {
+    async fn run(self, stop: Stop) {
+        stop.cancelled().await;
+        self.0.shutdown().await;
     }
 }

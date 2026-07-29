@@ -3,25 +3,25 @@
 //! Aperture is built out of long-running background tasks (the HTTP server,
 //! the task scheduler, the log worker). Each implements [`Worker`]. A
 //! [`Supervisor`] owns a set of workers, drives them with a shared stop
-//! signal, and drains them in registration order on shutdown.
+//! signal, and drains them on shutdown.
 //!
 //! Workers that themselves own multiple subtasks (for example, the HTTP
 //! server's listener + reload watcher) compose via [`WorkerSet`].
-
-mod supervisor;
-mod worker_set;
 
 use std::future::Future;
 
 pub use self::supervisor::{Stop, Supervisor};
 pub use self::worker_set::WorkerSet;
 
+mod supervisor;
+mod worker_set;
+
 /// A long-running background task that drains before returning.
 ///
-/// Implementations receive a `stop` future that resolves when the supervisor
-/// is asking for a graceful shutdown. The implementation decides how to react
-/// (typically by propagating the signal to its subtasks and then awaiting
-/// their drain).
+/// Implementations receive a `stop` token ([`Stop`]) that resolves when the
+/// supervisor is asking for a graceful shutdown. The implementation decides
+/// how to react (typically by propagating the signal to its subtasks and then
+/// awaiting their drain).
 pub trait Worker: Sized + Send + 'static {
     /// Runs until `stop` resolves, then drains and returns.
     fn run(self, stop: Stop) -> impl Future<Output = ()> + Send;
@@ -47,7 +47,7 @@ mod tests {
     impl Worker for Counter {
         async fn run(self, stop: Stop) {
             self.started.fetch_add(1, Ordering::SeqCst);
-            stop.await;
+            stop.cancelled().await;
             self.stopped.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(stopped.load(Ordering::SeqCst), 0);
 
         supervisor.trigger();
-        // `run_until_signal` drains every worker; we feed it a never-firing
+        // `run_until_signal` drains every worker. We feed it a never-firing
         // signal so the drain runs to completion.
         supervisor.run_until_signal(pending::<()>()).await;
 

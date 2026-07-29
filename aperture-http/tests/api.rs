@@ -23,7 +23,7 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
         id: DbId::from(0),
         key: ArtifactKey::new(key).unwrap(),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
-        digest: digest.to_owned(),
+        digest: digest.parse().unwrap(),
         media_type: None,
         version: Some("0.2.0".to_owned()),
         size_bytes: 1234,
@@ -45,13 +45,13 @@ async fn seeded_app() -> (Router, Artifacts, Storage) {
     let artifacts = Artifacts::new(storage.clone(), root);
 
     let repo = storage.artifacts().unwrap();
-    repo.record_version(&version("firmware", "sha256:fff", 1_000))
+    repo.record_version(&version("firmware", "sha256:ffff", 1_000))
         .await
         .unwrap();
-    repo.record_version(&version("spectra", "sha256:aaa", 2_000))
+    repo.record_version(&version("spectra", "sha256:aaaa", 2_000))
         .await
         .unwrap();
-    repo.record_version(&version("spectra", "sha256:bbb", 3_000))
+    repo.record_version(&version("spectra", "sha256:bbbb", 3_000))
         .await
         .unwrap();
 
@@ -143,7 +143,7 @@ async fn lists_artifacts_with_summary() {
     assert_eq!(items[0]["key"], "firmware");
     assert_eq!(items[1]["key"], "spectra");
     assert_eq!(items[1]["version_count"], 2);
-    assert_eq!(items[1]["digest"], "sha256:bbb");
+    assert_eq!(items[1]["digest"], "sha256:bbbb");
     assert!(json["next_cursor"].is_null());
 }
 
@@ -200,8 +200,8 @@ async fn lists_versions_newest_first() {
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["digest"], "sha256:bbb");
-    assert_eq!(items[1]["digest"], "sha256:aaa");
+    assert_eq!(items[0]["digest"], "sha256:bbbb");
+    assert_eq!(items[1]["digest"], "sha256:aaaa");
 }
 
 #[tokio::test]
@@ -213,7 +213,7 @@ async fn evicts_a_version() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/v1/artifacts/spectra/versions/sha256:aaa")
+                .uri("/api/v1/artifacts/spectra/versions/sha256:aaaa")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -221,7 +221,7 @@ async fn evicts_a_version() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-    let (status, _) = get_json(&app, "/api/v1/artifacts/spectra/versions/sha256:aaa").await;
+    let (status, _) = get_json(&app, "/api/v1/artifacts/spectra/versions/sha256:aaaa").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -254,7 +254,7 @@ async fn reads_recorded_tasks() {
         id,
         TaskStatus::Succeeded,
         at(2_000),
-        Some(&json!({"digest": "sha256:bbb"})),
+        Some(&json!({"digest": "sha256:bbbb"})),
         None,
     )
     .await
@@ -269,7 +269,7 @@ async fn reads_recorded_tasks() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(task["status"], "succeeded");
     assert_eq!(task["input"]["key"], "spectra");
-    assert_eq!(task["output"]["digest"], "sha256:bbb");
+    assert_eq!(task["output"]["digest"], "sha256:bbbb");
 }
 
 #[tokio::test]
@@ -399,7 +399,7 @@ async fn task_schedule_lifecycle() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched["kind"], "download");
 
-    // Patch only the interval; enabled stays true.
+    // Patch only the interval. Enabled stays true.
     let (status, updated) = patch_json(
         &app,
         &format!("/api/v1/task-schedules/{id}"),
@@ -410,7 +410,7 @@ async fn task_schedule_lifecycle() {
     assert_eq!(updated["interval"], "PT1H");
     assert_eq!(updated["enabled"], true);
 
-    // Patch only enabled; interval stays as set above.
+    // Patch only enabled. Interval stays as set above.
     let (status, updated) = patch_json(
         &app,
         &format!("/api/v1/task-schedules/{id}"),
@@ -532,10 +532,10 @@ async fn put_then_get_round_trips_blob_bytes() {
 }
 
 #[tokio::test]
-async fn put_url_encodes_location_for_multi_segment_key() {
-    // Regression test: a key like `tls/server-cert` contains a slash. The
-    // Location header must percent-encode it so following the link routes
-    // back to the resource instead of producing a 404.
+async fn put_rejects_slash_in_key() {
+    // Artifact keys must be URL-safe. A `%2F` in the URL decodes to `/`
+    // before routing, so the artifact key validator sees `tls/server-cert`
+    // and rejects it.
     let (app, _artifacts, _storage) = seeded_app().await;
 
     let response = app
@@ -550,22 +550,7 @@ async fn put_url_encodes_location_for_multi_segment_key() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let location = response
-        .headers()
-        .get(LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    assert!(
-        location.starts_with("/api/v1/artifacts/tls%2Fserver-cert/versions/"),
-        "Location must encode the slash, got {location}"
-    );
-
-    // Following the encoded Location must succeed.
-    let (status, _) = get_json(&app, &location).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

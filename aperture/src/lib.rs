@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{
     AppState, HttpServer, OpenApiSpec, RotateCertificateDefinition, Spectra, SpectraConfig,
-    init_crypto_provider, install_default_rotation_schedule,
+    SpectraWorker, init_crypto_provider, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
 use aperture_storage::Storage;
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
-use tokio::fs;
+use tokio::{fs, signal};
 use uuid::Uuid;
 
 use self::runtime::TasksWorker;
@@ -67,7 +67,13 @@ pub async fn serve(
         install_default_rotation_schedule(&storage).await?;
     }
 
-    let state = AppState::new(VERSION, boot_id, storage.clone(), spectra, tasks.clone());
+    let state = AppState::new(
+        VERSION,
+        boot_id,
+        storage.clone(),
+        spectra.clone(),
+        tasks.clone(),
+    );
     let app = aperture_http::app(state);
 
     let server = HttpServer::start(artifacts, https_addr, http_addr, app).await?;
@@ -76,6 +82,7 @@ pub async fn serve(
     supervisor.spawn("http", server);
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
     supervisor.spawn("log", log_worker);
+    supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
 
     supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())
@@ -83,16 +90,14 @@ pub async fn serve(
 
 /// Resolves when the process is asked to stop via Ctrl+C or SIGTERM.
 async fn shutdown_signal() {
-    use tokio::signal::ctrl_c;
-
     let interrupt = async {
-        ctrl_c().await.expect("failed to install Ctrl+C handler");
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
     };
     #[cfg(unix)]
     let terminate = async {
-        use tokio::signal::unix::{SignalKind, signal};
-
-        signal(SignalKind::terminate())
+        signal::unix::signal(signal::unix::SignalKind::terminate())
             .expect("failed to install SIGTERM handler")
             .recv()
             .await;
