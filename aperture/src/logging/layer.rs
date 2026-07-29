@@ -113,7 +113,7 @@ impl DeferredLogWorker {
 /// Produced by [`DeferredLogWorker::connect`]. Drive it via a [`Supervisor`]
 /// so it shuts down alongside the rest of the gateway.
 ///
-/// [`Supervisor`]: crate::runtime::Supervisor
+/// [`Supervisor`]: aperture_runtime::Supervisor
 pub struct LogWorker {
     rx: mpsc::Receiver<Record>,
     repo: LogRepository,
@@ -337,8 +337,11 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
         }
     };
     // Any insert error poisons the transaction. Fail fast so we do not waste
-    // time on doomed follow-up inserts.
-    let insert_outcome: Result<(), aperture_storage::StorageError> = async {
+    // time on doomed follow-up inserts. The dropped count is loaded once here
+    // and returned so the subtraction after commit uses the exact value we
+    // recorded. Reloading after the await would race with `try_send` failures
+    // and subtract drops that were never persisted.
+    let insert_outcome: Result<u64, aperture_storage::StorageError> = async {
         for record in batch.drain(..) {
             match record {
                 Record::SpanStart(s) => {
@@ -383,21 +386,23 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
         if count > 0 {
             tx.record_dropped(count, Timestamp::now(), boot_id).await?;
         }
-        Ok(())
+        Ok(count)
     }
     .await;
 
-    if let Err(err) = insert_outcome {
-        tracing::warn!(
-            error = &err as &dyn StdError,
-            "log batch insert failed, rolling back"
-        );
-        // The records we tried to flush are lost. The caller already drained
-        // them out of `batch`, so the only recovery is to drop the tx.
-        return;
-    }
+    let count = match insert_outcome {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::warn!(
+                error = &err as &dyn StdError,
+                "log batch insert failed, rolling back"
+            );
+            // The records we tried to flush are lost. The caller already drained
+            // them out of `batch`, so the only recovery is to drop the tx.
+            return;
+        }
+    };
 
-    let count = dropped.load(Ordering::Relaxed);
     match tx.commit().await {
         Ok(()) => {
             if count > 0 {
