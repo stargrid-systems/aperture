@@ -124,6 +124,7 @@ dependencies = [
  "clap",
  "hex",
  "jiff",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",

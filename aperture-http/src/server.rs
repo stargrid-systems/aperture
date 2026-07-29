@@ -16,12 +16,6 @@ use tokio_util::sync::CancellationToken;
 use crate::tls::{TlsEndpoint, TlsListener, TlsReload, ensure_certificates, redirect_router};
 
 /// Upper bound on graceful drain after `stop` resolves.
-///
-/// axum's `with_graceful_shutdown` waits forever for in-flight connections by
-/// default. Without an outer timeout, a single slow client can hang the
-/// shutdown indefinitely. The outer supervisor layers its own timeout on top,
-/// but here we want connections to close on their own scale before the hard
-/// kill.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A TLS listener paired with its application router and reload watcher.
@@ -39,12 +33,10 @@ struct HttpEntry {
 
 /// Runs the gateway's HTTP stack.
 ///
-/// Owns an optional HTTPS endpoint (listener + reload watcher), zero or more
-/// plain-HTTP listeners, and drains them together when `stop` resolves.
-///
-/// Construct with [`HttpServer::start`] for the standard gateway setup, or
-/// build piece by piece via [`HttpServer::new`] and [`HttpServer::serve_tls`]
-/// / [`HttpServer::serve_http`].
+/// Owns an optional HTTPS endpoint (listener + reload watcher) and zero or
+/// more plain-HTTP listeners. Build with [`HttpServer::start`] for the
+/// standard gateway setup, or via [`HttpServer::new`] +
+/// [`HttpServer::serve_tls`] / [`HttpServer::serve_http`].
 pub struct HttpServer {
     tls: Option<TlsEntry>,
     http: Vec<HttpEntry>,
@@ -59,15 +51,9 @@ impl HttpServer {
         }
     }
 
-    /// Sets up the gateway HTTP stack from the two optional listener addrs.
-    ///
-    /// - both set: HTTPS listener plus an HTTP listener that redirects to it
-    /// - https only: HTTPS listener serving the full API
-    /// - http only: plain HTTP listener serving the full API (recovery mode)
-    /// - neither: no listeners ([`HttpServer::run`] returns immediately)
-    ///
-    /// The TLS PKI is ensured and the reload watcher is attached only when
-    /// HTTPS is enabled.
+    /// Sets up the gateway HTTP stack from two optional listener addrs.
+    /// Both set: HTTPS + HTTP redirect. HTTPS only: full API over TLS.
+    /// HTTP only: full API (recovery mode). Neither: no listeners.
     pub async fn start(
         artifacts: Artifacts,
         https_addr: Option<SocketAddr>,
@@ -110,9 +96,6 @@ impl HttpServer {
     }
 
     /// Serves `app` over the TLS endpoint (listener + reload watcher).
-    ///
-    /// The endpoint bundles both halves so you cannot accidentally run a TLS
-    /// listener without its reload watcher.
     #[must_use]
     pub fn serve_tls(mut self, endpoint: TlsEndpoint, app: Router) -> Self {
         let (listener, reload) = endpoint.into_parts();
@@ -124,22 +107,15 @@ impl HttpServer {
         self
     }
 
-    /// Serves `app` over a plain HTTP listener.
-    ///
-    /// Multiple plain HTTP listeners can be attached by calling this method
-    /// more than once. The production gateway only attaches one, but the
-    /// builder stays additive so testing and recovery setups can run several.
+    /// Serves `app` over a plain HTTP listener. Can be called multiple times.
     #[must_use]
     pub fn serve_http(mut self, listener: TcpListener, app: Router) -> Self {
         self.http.push(HttpEntry { listener, app });
         self
     }
 
-    /// Runs all configured listeners and reload watchers until `stop`
-    /// is cancelled, then drains in-flight connections.
-    ///
-    /// If any listener exits before `stop`, the remaining listeners are
-    /// drained immediately.
+    /// Runs all listeners and reload watchers until `stop` is cancelled, then
+    /// drains in-flight connections.
     pub async fn run(self, stop: CancellationToken) {
         let mut workers = WorkerSet::new();
 
@@ -213,9 +189,7 @@ impl Default for HttpServer {
     }
 }
 
-/// Adapter that lets [`HttpServer`] be driven by a `aperture-runtime`
-/// supervisor. The supervisor hands us a stop token; we forward it to
-/// `HttpServer::run`.
+/// Adapter for the `aperture-runtime` supervisor.
 impl Worker for HttpServer {
     async fn run(self, stop: Stop) {
         HttpServer::run(self, stop).await;

@@ -1,12 +1,4 @@
-//! The certificate-rotation task: re-issue the leaf cert when it nears expiry.
-//!
-//! Driven by the periodic scheduler. The task body only writes the new cert;
-//! the live TLS listener picks up the change via the artifact change feed.
-//!
-//! Rotation preserves the existing cert's identity (subject DN + SANs). The
-//! initial SANs come from `ensure_certificates` on first run. To change the
-//! SANs after the fact, an operator replaces the leaf cert directly (a
-//! separate "re-issue" operation, not modelled by this task).
+//! Certificate rotation task: re-issues the leaf cert when it nears expiry.
 
 use std::time::Duration;
 
@@ -19,25 +11,15 @@ use utoipa::ToSchema;
 
 use super::pki;
 
-/// Default rotation interval: 24 hours.
 const ROTATION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Input for the rotate-certificate task.
-///
-/// Rotation is identity-preserving (it copies the subject DN and SANs from
-/// the existing leaf), so the task takes no parameters. The struct exists as
-/// a forward-compatibility placeholder and to satisfy the task framework's
-/// serialisable input contract.
+/// Rotation takes no parameters (identity-preserving).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct RotateCertificateInput {}
 
-/// Output of the rotate-certificate task.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RotateCertificateOutput {
     /// Whether the leaf was actually re-issued.
-    ///
-    /// `false` means the existing cert still had enough remaining validity and
-    /// no rotation was needed.
     pub rotated: bool,
 }
 
@@ -47,7 +29,6 @@ pub struct RotateCertificateDefinition {
 }
 
 impl RotateCertificateDefinition {
-    /// Creates the definition over `artifacts`.
     pub fn new(artifacts: Artifacts) -> Self {
         Self { artifacts }
     }
@@ -59,12 +40,8 @@ impl TaskDefinition for RotateCertificateDefinition {
     type Output = RotateCertificateOutput;
 
     fn capabilities(&self) -> Capabilities {
-        // The task body writes the new key and the new cert as two separate
-        // artifact versions. If the scheduler aborted it between those writes,
-        // the catalog would hold a fresh key paired with a stale cert, which
-        // rustls rejects on every subsequent reload until another rotation
-        // succeeds. Declaring the task non-cancellable and non-resumable keeps
-        // the scheduler from interrupting it mid-write.
+        // Non-cancellable: the task writes key then cert as separate versions.
+        // Interruption between writes would leave a mismatch rustls rejects.
         Capabilities::NONE
     }
 
@@ -82,11 +59,6 @@ impl TaskDefinition for RotateCertificateDefinition {
 }
 
 /// Installs the default rotation schedule if none exists yet.
-///
-/// Safe to call on every boot: it checks for an existing
-/// `rotate-certificate` schedule and only inserts one when missing. The
-/// list-then-insert is racy across processes sharing storage, but aperture
-/// is a single-process gateway so this is not a concern in practice.
 pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Result<()> {
     let repo = storage.task_schedules()?;
     let existing = repo.list(&ListQuery::default()).await?;
@@ -120,7 +92,6 @@ mod tests {
 
     use super::*;
 
-    /// A temporary blob store directory removed when dropped.
     struct TempDir(PathBuf);
 
     impl TempDir {
@@ -146,13 +117,6 @@ mod tests {
         Artifacts::new(storage, dir.0.clone())
     }
 
-    /// Locks the invariant that rotation is neither cancellable nor resumable.
-    ///
-    /// The capabilities flag controls whether the scheduler is allowed to
-    /// interrupt the task between its two artifact writes (key then cert).
-    /// Allowing interruption would land the catalog in a state rustls rejects
-    /// on every subsequent reload. See
-    /// `RotateCertificateDefinition::capabilities`.
     #[tokio::test]
     async fn rotation_capabilities_are_none() {
         let artifacts = fresh_store().await;

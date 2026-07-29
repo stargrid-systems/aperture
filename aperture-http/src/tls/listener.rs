@@ -1,9 +1,7 @@
 //! Hot-swappable TLS listener implementing `axum::serve::Listener`.
 //!
-//! Wraps a `TcpListener` and performs a TLS handshake on each accepted
-//! connection. The `rustls::ServerConfig` is held behind an `ArcSwap`, so
-//! swapping certificates at runtime is a single atomic store with no
-//! connection drop.
+//! Wraps a `TcpListener` and performs a TLS handshake per connection. The
+//! `ServerConfig` is behind an `ArcSwap` so cert swaps are atomic.
 
 use std::error::Error as StdError;
 use std::io;
@@ -18,29 +16,19 @@ use tokio_rustls::server::TlsStream;
 
 use super::SharedConfig;
 
-/// Backoff applied after a `TcpListener::accept` error to avoid busy-looping
-/// under persistent failures such as fd exhaustion.
+/// Backoff after a TCP accept error (fd exhaustion, etc.).
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
-
-/// Backoff applied after a TLS handshake failure. A flood of probes that open
-/// a TCP connection and immediately close it (or send garbage) would otherwise
-/// spin the accept loop without any yield.
+/// Backoff after a TLS handshake failure.
 const HANDSHAKE_ERROR_BACKOFF: Duration = Duration::from_millis(50);
-
-/// How many consecutive failures to swallow before logging again.
-///
-/// Keeps a broken listener visible in the log without flooding it. At the
-/// 50 ms backoff this fires roughly every 3 seconds under sustained failure.
+/// Log every N-th consecutive failure to avoid flooding.
 const ACCEPT_FAILURES_PER_LOG: u32 = 60;
 
-/// A `TcpListener` that performs TLS on every accepted connection.
 pub struct TlsListener {
     inner: TcpListener,
     config: SharedConfig,
 }
 
 impl TlsListener {
-    /// Creates a TLS listener wrapping `inner` with the given shared config.
     pub fn new(inner: TcpListener, config: SharedConfig) -> Self {
         Self { inner, config }
     }
@@ -56,8 +44,6 @@ impl Listener for TlsListener {
         loop {
             let (stream, addr) = match self.inner.accept().await {
                 Ok(conn) => {
-                    // Reset the accept-failure counter so the next accept
-                    // error starts fresh.
                     accept_failures = 0;
                     conn
                 }
@@ -99,8 +85,7 @@ impl Listener for TlsListener {
     }
 }
 
-/// Returns true the first time and then every `interval`-th time. Keeps the
-/// log clear under sustained failure while still surfacing the problem.
+/// Logs the first failure then every `interval`-th.
 fn should_log(consecutive: u32) -> bool {
     consecutive == 1 || consecutive.is_multiple_of(ACCEPT_FAILURES_PER_LOG)
 }

@@ -22,6 +22,7 @@ anyhow = { workspace = true, features = ["std"] }
 clap = { workspace = true, features = ["std", "derive", "env", "help", "usage", "error-context", "suggestions"] }
 hex = { workspace = true, features = ["alloc"] }
 jiff = { workspace = true, features = ["std"] }
+rustls = { workspace = true, features = ["ring"] }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync", "time", "signal"] }

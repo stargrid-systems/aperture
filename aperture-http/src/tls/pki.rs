@@ -1,27 +1,12 @@
 //! PKI generation and certificate loading.
 //!
-//! On first run, a self-signed CA (ECDSA P-256, 5-year validity) and a server
-//! certificate (14-day validity) are generated via rcgen. Both are stored as
-//! artifacts in DER format. The server certificate is regenerated periodically
-//! by the rotation task.
-//!
-//! # What lives on disk
-//!
-//! Four artifacts live under the data directory, all in binary DER form:
-//!
-//! | Key               | Media type             | Sensitivity |
-//! | ----------------- | ---------------------- | ----------- |
-//! | `tls_ca-cert`     | `application/pkix-cert`| public      |
-//! | `tls_ca-key`      | `application/pkcs8`    | **secret**  |
-//! | `tls_server-cert` | `application/pkix-cert`| public      |
-//! | `tls_server-key`  | `application/pkcs8`    | **secret**  |
-//!
-//! The CA private key is the single most security-sensitive file the gateway
-//! writes. Anyone who can read it can mint certs the gateway will trust.
+//! Artifacts (all DER): `tls_ca-cert` (pkix-cert), `tls_ca-key` (pkcs8,
+//! secret), `tls_server-cert` (pkix-cert), `tls_server-key` (pkcs8, secret).
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, LazyLock};
 
+use anyhow::Context as _;
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ArtifactKey, MediaType};
 use rcgen::{
@@ -31,13 +16,6 @@ use rcgen::{
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::fs;
-
-/// `application/pkix-cert`: DER-encoded X.509 certificate.
-static PKIX_CERT: LazyLock<MediaType> =
-    LazyLock::new(|| "application/pkix-cert".parse().expect("valid media type"));
-/// `application/pkcs8`: DER-encoded PKCS#8 private key.
-static PKCS8: LazyLock<MediaType> =
-    LazyLock::new(|| "application/pkcs8".parse().expect("valid media type"));
 use tokio::io::AsyncReadExt;
 use tokio::task::spawn_blocking;
 use x509_parser::extensions::GeneralName;
@@ -46,19 +24,16 @@ use x509_parser::x509::X509Name;
 use super::error::TlsError;
 use super::{CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY, SharedConfig};
 
-/// CA certificate validity in days (5 years).
+static PKIX_CERT: LazyLock<MediaType> =
+    LazyLock::new(|| "application/pkix-cert".parse().expect("valid media type"));
+static PKCS8: LazyLock<MediaType> =
+    LazyLock::new(|| "application/pkcs8".parse().expect("valid media type"));
+
 const CA_VALIDITY_DAYS: u64 = 365 * 5;
-
-/// Leaf certificate validity in days (short-lived, ACME-style).
 const LEAF_VALIDITY_DAYS: u64 = 14;
-
-/// Default CN stamped on the leaf cert on first run.
 const LEAF_COMMON_NAME: &str = "Aperture Gateway";
-
-/// Default CN stamped on the self-signed CA on first run.
 const CA_COMMON_NAME: &str = "Aperture Gateway CA";
 
-/// Generated PKI material in DER format.
 struct Pki {
     ca_cert: CertificateDer<'static>,
     ca_key: PrivatePkcs8KeyDer<'static>,
@@ -66,11 +41,8 @@ struct Pki {
     server_key: PrivatePkcs8KeyDer<'static>,
 }
 
-/// Generates a new CA and leaf certificate signed by that CA.
-///
-/// Performs ECDSA key generation and certificate signing, so it should run
-/// in a blocking context.
-fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
+/// Generates a CA and leaf cert signed by it. Blocking.
+fn generate_pki(bind_addr: SocketAddr) -> anyhow::Result<Pki> {
     let mut ca_params = CertificateParams::default();
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
@@ -96,12 +68,7 @@ fn generate_pki(bind_addr: SocketAddr) -> Result<Pki, TlsError> {
     })
 }
 
-/// Re-issues the leaf cert without changing its identity.
-///
-/// Reads the existing cert, extracts its subject DN and SANs, then signs a
-/// fresh cert (new key, fresh validity) against the CA stored in artifacts.
-/// Rotation therefore preserves whatever identity the operator set up:
-/// `bind_addr` is not a rotation concern, only first-run generation is.
+/// Re-issues the leaf cert preserving its subject and SANs.
 async fn regenerate_leaf_for_rotation(
     artifacts: &Artifacts,
 ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>), TlsError> {
@@ -109,21 +76,16 @@ async fn regenerate_leaf_for_rotation(
     let ca_key_der = read_artifact(artifacts, &CA_KEY).await?;
     let leaf_der = read_artifact(artifacts, &SERVER_CERT).await?;
 
-    spawn_blocking(move || {
+    Ok(spawn_blocking(move || {
         let ca_key = KeyPair::try_from(ca_key_der.as_slice())?;
         let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(ca_cert_der), ca_key)?;
         let (subject, sans) = extract_leaf_identity(&leaf_der)?;
         generate_leaf(&issuer, &subject, &sans)
     })
-    .await?
+    .await??)
 }
 
-/// Generates a fresh leaf against the existing CA using default identity.
-///
-/// Used by `ensure_certificates` when the CA pair is intact but the leaf is
-/// missing. The identity (CN + bind-addr-derived SANs) is the same shape the
-/// first-run path produces, so a recovered catalog is indistinguishable from
-/// a fresh one.
+/// Generates a leaf against the existing CA using default identity.
 async fn regenerate_leaf_with_default_identity(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
@@ -131,21 +93,21 @@ async fn regenerate_leaf_with_default_identity(
     let ca_cert_der = read_artifact(artifacts, &CA_CERT).await?;
     let ca_key_der = read_artifact(artifacts, &CA_KEY).await?;
 
-    spawn_blocking(move || {
+    Ok(spawn_blocking(move || {
         let ca_key = KeyPair::try_from(ca_key_der.as_slice())?;
         let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(ca_cert_der), ca_key)?;
         let subject = default_leaf_subject();
         let sans = compute_sans(bind_addr);
         generate_leaf(&issuer, &subject, &sans)
     })
-    .await?
+    .await??)
 }
 
 fn generate_leaf(
     issuer: &Issuer<'_, KeyPair>,
     subject: &DistinguishedName,
     sans: &[SanType],
-) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>), TlsError> {
+) -> anyhow::Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>)> {
     let mut params = CertificateParams::default();
     params.subject_alt_names = sans.to_vec();
     params.distinguished_name = subject.clone();
@@ -161,8 +123,6 @@ fn generate_leaf(
     ))
 }
 
-/// The subject DN used on first run. Rotation copies the subject from the
-/// existing cert instead of using this default.
 fn default_leaf_subject() -> DistinguishedName {
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, LEAF_COMMON_NAME);
@@ -175,12 +135,8 @@ fn set_validity(params: &mut CertificateParams, days: u64) {
     params.not_after = now + time::Duration::days(days as i64);
 }
 
-/// Computes the SAN list for a leaf cert on first run.
-///
-/// The localhost defaults always come first. If `bind_addr` carries a
-/// non-loopback IP, it is appended. Callers that ever extend the localhost
-/// defaults (extra DNS names, more IPs) must keep the `already` deduplication
-/// step so a cert does not end up listing the same SAN twice.
+/// Computes SANs for a leaf cert. Localhost is always included; a non-loopback
+/// bind IP is appended if set.
 fn compute_sans(bind_addr: SocketAddr) -> Vec<SanType> {
     let mut sans = vec![
         SanType::DnsName("localhost".try_into().expect("valid DNS name")),
@@ -197,118 +153,70 @@ fn compute_sans(bind_addr: SocketAddr) -> Vec<SanType> {
     sans
 }
 
-/// Extracts the subject DN and SANs from an existing leaf cert.
-///
-/// Used by rotation to re-issue the cert with the same identity. Supports
-/// the SAN variants our own PKI produces (`DnsName`, `IpAddress`) plus a
-/// few common extras (`RFC822Name`, `URI`). Unsupported variants cause an
-/// error so a future change to the SAN set is forced through review rather
-/// than silently dropped.
-fn extract_leaf_identity(der: &[u8]) -> Result<(DistinguishedName, Vec<SanType>), TlsError> {
-    let (_, cert) = x509_parser::parse_x509_certificate(der).map_err(|e| TlsError::CertParse {
-        source: anyhow::Error::from(e).context("parsing leaf for rotation"),
-    })?;
+/// Extracts subject DN and SANs from an existing leaf cert.
+fn extract_leaf_identity(der: &[u8]) -> anyhow::Result<(DistinguishedName, Vec<SanType>)> {
+    let (_, cert) =
+        x509_parser::parse_x509_certificate(der).context("parsing leaf for rotation")?;
 
     let subject = x509_name_to_rcgen(cert.subject())?;
 
-    let sans = match cert.subject_alternative_name() {
-        Ok(Some(ext)) => ext
+    let sans = match cert.subject_alternative_name().context("parsing SANs")? {
+        Some(ext) => ext
             .value
             .general_names
             .iter()
             .map(general_name_to_rcgen)
             .collect::<Result<Vec<_>, _>>()?,
-        Ok(None) => Vec::new(),
-        Err(e) => {
-            return Err(TlsError::CertParse {
-                source: anyhow::Error::from(e).context("parsing subject alternative names"),
-            });
-        }
+        None => Vec::new(),
     };
 
     Ok((subject, sans))
 }
 
-/// Converts an x509-parser subject DN into an rcgen `DistinguishedName`.
-fn x509_name_to_rcgen(name: &X509Name<'_>) -> Result<DistinguishedName, TlsError> {
+fn x509_name_to_rcgen(name: &X509Name<'_>) -> anyhow::Result<DistinguishedName> {
     let mut dn = DistinguishedName::new();
     for attr in name.iter_attributes() {
-        let oid_iter = attr.attr_type().iter();
-        let oid_vec: Vec<u64> = match oid_iter {
-            Some(it) => it.collect(),
-            None => {
-                return Err(TlsError::CertParse {
-                    source: anyhow::anyhow!(
-                        "non-standard OID encoding in subject attribute; cannot rotate"
-                    ),
-                });
-            }
-        };
+        let oid_vec: Vec<u64> = attr
+            .attr_type()
+            .iter()
+            .ok_or_else(|| anyhow::anyhow!("non-standard OID encoding in subject attribute"))?
+            .collect();
         let dn_type = DnType::from_oid(&oid_vec);
-        let value = attr.as_str().map_err(|e| TlsError::CertParse {
-            source: anyhow::Error::from(e).context("reading subject attribute value"),
-        })?;
+        let value = attr.as_str().context("reading subject attribute value")?;
         dn.push(dn_type, value.to_owned());
     }
     Ok(dn)
 }
 
-/// Converts one x509-parser `GeneralName` into an rcgen `SanType`.
-///
-/// Returns an error for unsupported variants. Our own PKI only produces
-/// `DnsName` and `IpAddress`, but custom certs may include others. An error
-/// forces the operator to either drop the unsupported SAN or extend this
-/// converter.
-fn general_name_to_rcgen(name: &GeneralName<'_>) -> Result<SanType, TlsError> {
+fn general_name_to_rcgen(name: &GeneralName<'_>) -> anyhow::Result<SanType> {
     let san = match name {
         GeneralName::DNSName(s) => SanType::DnsName((*s).try_into()?),
         GeneralName::RFC822Name(s) => SanType::Rfc822Name((*s).try_into()?),
         GeneralName::URI(s) => SanType::URI((*s).try_into()?),
-        GeneralName::IPAddress(octets) => {
-            let ip = ip_addr_from_octets(octets).map_err(|msg| TlsError::CertParse {
-                source: anyhow::Error::msg(msg).context("invalid IP SAN"),
-            })?;
-            SanType::IpAddress(ip)
-        }
-        other => {
-            return Err(TlsError::CertParse {
-                source: anyhow::anyhow!(
-                    "unsupported SAN variant during rotation: {other:?}; rotation only supports \
-                     DNS, IP, RFC822, and URI"
-                ),
-            });
-        }
+        GeneralName::IPAddress(octets) => SanType::IpAddress(ip_addr_from_octets(octets)?),
+        other => anyhow::bail!(
+            "unsupported SAN variant during rotation: {other:?}; only DNS, IP, RFC822, and URI \
+             are supported"
+        ),
     };
     Ok(san)
 }
 
-/// Maps an x509-parser IP octet slice to `IpAddr`. Mirrors rcgen's private
-/// helper so we can preserve IP SANs through rotation.
-fn ip_addr_from_octets(octets: &[u8]) -> Result<IpAddr, &'static str> {
-    if let Ok(ipv6_octets) = <&[u8; 16]>::try_from(octets) {
-        Ok(IpAddr::V6(Ipv6Addr::from(*ipv6_octets)))
-    } else if let Ok(ipv4_octets) = <&[u8; 4]>::try_from(octets) {
-        Ok(IpAddr::V4(Ipv4Addr::from(*ipv4_octets)))
+fn ip_addr_from_octets(octets: &[u8]) -> anyhow::Result<IpAddr> {
+    if let Ok(o) = <&[u8; 16]>::try_from(octets) {
+        Ok(IpAddr::V6(Ipv6Addr::from(*o)))
+    } else if let Ok(o) = <&[u8; 4]>::try_from(octets) {
+        Ok(IpAddr::V4(Ipv4Addr::from(*o)))
     } else {
-        Err("IP SAN has invalid octet length")
+        anyhow::bail!("IP SAN has invalid octet length")
     }
 }
 
-/// Ensures TLS certificate artifacts exist, generating them on first run.
+/// Ensures TLS artifacts exist, generating them on first run.
 ///
-/// Splits the work in two halves so a partial state is repaired surgically:
-///
-/// - If either CA artifact is missing, the entire CA pair is regenerated. When
-///   that happens any pre-existing leaf is signed by a now-rotated CA, so the
-///   leaf is regenerated unconditionally against the new CA.
-/// - If the CA pair is intact but either leaf artifact is missing, only the
-///   leaf pair is regenerated using the existing CA. This avoids throwing away
-///   a perfectly good CA (and an operator's custom CA) just because a single
-///   artifact went missing.
-///
-/// Within each pair, the key is written before its matching cert. A crash
-/// between the two writes leaves a state that rustls rejects at load time
-/// (stale cert, new key) rather than silently corrupting handshakes.
+/// If the CA pair is intact but the leaf is missing, only the leaf is
+/// regenerated. Keys are written before certs so a half-write leaves a state
+/// rustls rejects rather than silently corrupting handshakes.
 pub async fn ensure_certificates(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
@@ -327,15 +235,12 @@ pub async fn ensure_certificates(
         let pki = spawn_blocking(move || generate_pki(bind_addr)).await??;
         store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
         store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
-        // The CA pair just rotated. Any prior leaf is signed by the old CA,
-        // so regenerate the leaf unconditionally instead of trusting a stale
-        // signature. On a true first run there is no prior leaf to overwrite.
+        // CA pair rotated; regenerate leaf against the new CA.
         store_key_artifact(artifacts, &SERVER_KEY, &pki.server_key).await?;
         store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
         return Ok(());
     }
 
-    // CA pair intact, only the leaf is missing.
     tracing::info!("regenerating leaf certificate against existing CA");
     let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
@@ -343,14 +248,14 @@ pub async fn ensure_certificates(
     Ok(())
 }
 
-/// Loads the server certificate from artifacts and builds a `ServerConfig`.
+/// Loads the server cert and builds a `ServerConfig`.
 pub async fn load_server_config(artifacts: &Artifacts) -> Result<ServerConfig, TlsError> {
     let cert_der = read_artifact(artifacts, &SERVER_CERT).await?;
     let key_der = read_artifact(artifacts, &SERVER_KEY).await?;
-    spawn_blocking(move || build_server_config(&cert_der, &key_der)).await?
+    Ok(spawn_blocking(move || build_server_config(&cert_der, &key_der)).await??)
 }
 
-/// Reloads certificates from artifacts and swaps the shared config.
+/// Reloads certs from artifacts and swaps the shared config.
 pub async fn reload_certificates(
     artifacts: &Artifacts,
     config: &SharedConfig,
@@ -361,40 +266,24 @@ pub async fn reload_certificates(
     Ok(())
 }
 
-/// Returns true when the server certificate is past half of its own validity.
-///
-/// The threshold is computed from the cert's `not_before` and `not_after`, not
-/// from the hardcoded `LEAF_VALIDITY_DAYS`, so uploaded custom certs keep their
-/// own lifetime regardless of the default rotation policy.
+/// Returns true when the server cert is past half its validity. Computed from
+/// the cert's own timestamps, not the default lifetime.
 async fn needs_rotation(artifacts: &Artifacts) -> Result<bool, TlsError> {
     let der = read_artifact(artifacts, &SERVER_CERT).await?;
-    let (_, cert) = x509_parser::parse_x509_certificate(&der).map_err(|e| TlsError::CertParse {
-        source: anyhow::Error::from(e),
-    })?;
+    let (_, cert) =
+        x509_parser::parse_x509_certificate(&der).context("parsing cert for rotation check")?;
     let validity = cert.validity();
-    // `time_to_expiration` returns None when the cert is not currently valid
-    // (expired or not-yet-effective). Either way, rotation is wanted.
     let Some(remaining) = validity.time_to_expiration() else {
         return Ok(true);
     };
-    // `not_after - not_before` is None only if the cert is malformed
-    // (not_after <= not_before). Treat that as needing rotation too.
     let Some(total) = validity.not_after - validity.not_before else {
         return Ok(true);
     };
     Ok(remaining < total / 2)
 }
 
-/// Generates a new leaf certificate and stores it as artifacts.
-///
-/// The new leaf copies the subject DN and SANs from the existing cert, so
-/// rotation does not change the cert's identity. Only the key and validity
-/// window move forward. See [`extract_leaf_identity`].
-///
-/// The key is written before the cert. Combined with the reload watcher's
-/// debounce, this guarantees that a half-write (new key, stale cert) is
-/// detected as a load failure rather than silently corrupting handshakes.
-/// The next write (the cert) schedules another reload that succeeds.
+/// Generates and stores a new leaf, preserving identity. Key written before
+/// cert so a half-write is detected as a load failure by the reload watcher.
 async fn rotate_certificate(artifacts: &Artifacts) -> Result<(), TlsError> {
     let (cert, key) = regenerate_leaf_for_rotation(artifacts).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
@@ -402,10 +291,8 @@ async fn rotate_certificate(artifacts: &Artifacts) -> Result<(), TlsError> {
     Ok(())
 }
 
-/// Regenerates the leaf when it is due, reporting whether rotation occurred.
-///
-/// Live reload of the TLS listener is triggered separately by the artifact
-/// change feed (see [`crate::tls::TlsReload`]).
+/// Rotates the leaf if due. Live reload is triggered separately by the change
+/// feed (see [`crate::tls::TlsReload`]).
 pub(super) async fn rotate_if_due(artifacts: &Artifacts) -> Result<bool, TlsError> {
     if !needs_rotation(artifacts).await? {
         return Ok(false);
@@ -414,17 +301,12 @@ pub(super) async fn rotate_if_due(artifacts: &Artifacts) -> Result<bool, TlsErro
     Ok(true)
 }
 
-/// Builds a `rustls::ServerConfig` from DER-encoded cert and key.
-///
-/// Enables TLS 1.3 (preferred) and TLS 1.2 (for legacy client compatibility).
-/// TLS 1.1 and earlier are not negotiated.
-fn build_server_config(cert_der: &[u8], key_der: &[u8]) -> Result<ServerConfig, TlsError> {
+fn build_server_config(cert_der: &[u8], key_der: &[u8]) -> anyhow::Result<ServerConfig> {
     use rustls::version::{TLS12, TLS13};
 
     let cert_chain = vec![CertificateDer::from(cert_der.to_vec())];
-    let key = PrivateKeyDer::try_from(key_der.to_vec()).map_err(|e| TlsError::CertParse {
-        source: anyhow::anyhow!("key parse failed: {e}"),
-    })?;
+    let key = PrivateKeyDer::try_from(key_der.to_vec())
+        .map_err(|e| anyhow::anyhow!("key parse failed: {e}"))?;
 
     Ok(
         ServerConfig::builder_with_protocol_versions(&[&TLS13, &TLS12])
@@ -454,10 +336,7 @@ async fn store_key_artifact(
 }
 
 async fn read_artifact(artifacts: &Artifacts, key: &ArtifactKey) -> Result<Vec<u8>, TlsError> {
-    let located = artifacts
-        .locate(key)
-        .await?
-        .ok_or(TlsError::NoCertificate)?;
+    let located = artifacts.locate(key).await?.ok_or(TlsError::NoArtifact)?;
     let mut file = fs::File::open(&located.path).await?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).await?;
@@ -475,7 +354,6 @@ mod tests {
     use super::*;
     use crate::tls::{TlsReload, load_shared_config};
 
-    /// Installs the ring crypto provider once per test process.
     fn install_crypto() {
         use std::sync::Once;
 
@@ -487,7 +365,6 @@ mod tests {
         });
     }
 
-    /// A temporary blob store directory removed when dropped.
     struct TempDir(PathBuf);
 
     impl TempDir {
@@ -528,7 +405,6 @@ mod tests {
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
-        // Generate a cert that is already expired and overwrite the artifact.
         let ca_cert_der = read_artifact(&artifacts, &CA_CERT).await.unwrap();
         let ca_key_der = read_artifact(&artifacts, &CA_KEY).await.unwrap();
         let ca_key = KeyPair::try_from(ca_key_der.as_slice()).unwrap();
@@ -539,7 +415,6 @@ mod tests {
             .distinguished_name
             .push(rcgen::DnType::CommonName, "expired");
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        // Already expired a day ago.
         let now = time::OffsetDateTime::now_utc();
         params.not_before = now - time::Duration::days(10);
         params.not_after = now - time::Duration::days(1);
@@ -552,7 +427,6 @@ mod tests {
         assert!(needs_rotation(&artifacts).await.unwrap());
     }
 
-    /// Returns the current digest of `key`, panicking if absent.
     async fn digest_of(artifacts: &Artifacts, key: &ArtifactKey) -> Digest {
         artifacts
             .artifact(key)
@@ -564,10 +438,6 @@ mod tests {
             .clone()
     }
 
-    /// When a leaf artifact is missing but the CA pair is intact,
-    /// `ensure_certificates` regenerates only the leaf. The CA and its key
-    /// are preserved. This guards against throwing away an operator-uploaded
-    /// CA just because one leaf went missing.
     #[tokio::test]
     async fn ensure_certificates_regenerates_only_leaf_when_ca_pair_intact() {
         let (artifacts, _dir) = fresh_store().await;
@@ -579,7 +449,6 @@ mod tests {
         let old_server_cert = digest_of(&artifacts, &SERVER_CERT).await;
         let old_server_key = digest_of(&artifacts, &SERVER_KEY).await;
 
-        // Drop only the leaf cert. CA pair stays untouched.
         artifacts
             .evict_version(&SERVER_CERT, &old_server_cert)
             .await
@@ -587,10 +456,8 @@ mod tests {
 
         ensure_certificates(&artifacts, addr).await.unwrap();
 
-        // CA pair unchanged.
         assert_eq!(digest_of(&artifacts, &CA_CERT).await, old_ca_cert);
         assert_eq!(digest_of(&artifacts, &CA_KEY).await, old_ca_key);
-        // Leaf pair regenerated.
         assert_ne!(
             digest_of(&artifacts, &SERVER_CERT).await,
             old_server_cert,
@@ -603,8 +470,6 @@ mod tests {
         );
     }
 
-    /// When any CA artifact is missing, the entire PKI is regenerated.
-    /// The leaf is also re-issued because it was signed by the now-rotated CA.
     #[tokio::test]
     async fn ensure_certificates_regenerates_everything_when_ca_pair_missing() {
         let (artifacts, _dir) = fresh_store().await;
@@ -616,8 +481,6 @@ mod tests {
         let old_server_cert = digest_of(&artifacts, &SERVER_CERT).await;
         let old_server_key = digest_of(&artifacts, &SERVER_KEY).await;
 
-        // Drop only the CA cert. The new code path treats this as "CA pair
-        // missing" and regenerates everything.
         artifacts
             .evict_version(&CA_CERT, &old_ca_cert)
             .await
@@ -654,8 +517,6 @@ mod tests {
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
         let config = load_server_config(&artifacts).await.unwrap();
-        // A successfully built ServerConfig can provide a cert resolver.
-        // We just verify no panic and no error.
         let _ = config;
     }
 
@@ -666,7 +527,6 @@ mod tests {
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
-        // Overwrite the key with garbage.
         artifacts
             .put(&SERVER_KEY, Some(&PKCS8), &b"corrupt"[..])
             .await
@@ -705,10 +565,7 @@ mod tests {
         assert!(!rotated, "fresh cert should not need rotation");
     }
 
-    /// Rotation preserves the existing cert's identity. This test mints a leaf
-    /// with a custom CN and a non-default SAN, runs rotation, and asserts the
-    /// rotated cert carries the same identity. Catches a regression that
-    /// silently shrinks the SAN set on every rotation.
+    /// Rotation preserves CN and SANs.
     #[tokio::test]
     async fn rotation_preserves_subject_and_sans() {
         use x509_parser::extensions::GeneralName as X509GeneralName;
@@ -718,8 +575,6 @@ mod tests {
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
-        // Mint a custom leaf signed by the existing CA, with a recognisable
-        // CN and an extra SAN the default flow would not produce.
         let ca_cert_der = read_artifact(&artifacts, &CA_CERT).await.unwrap();
         let ca_key_der = read_artifact(&artifacts, &CA_KEY).await.unwrap();
         let (custom_cert, custom_key) = spawn_blocking(move || {
@@ -800,12 +655,8 @@ mod tests {
         let token = CancellationToken::new();
         let handle = tokio::spawn(reload.run(token.clone()));
 
-        // Trigger a cert change via the rotation path.
         rotate_certificate(&artifacts).await.unwrap();
 
-        // The watcher debounces for 500 ms, then reloads. Poll for the swap
-        // with a generous outer timeout so the test fails cleanly instead of
-        // hanging on a fixed sleep.
         let deadline = Duration::from_secs(5);
         let observed = timeout(deadline, async {
             loop {
@@ -825,11 +676,7 @@ mod tests {
         );
     }
 
-    /// End-to-end check that the generated PKI actually works for a TLS
-    /// handshake. The unit tests above verify the pieces in isolation. This
-    /// one wires `ensure_certificates`, `load_shared_config`, `TlsListener`,
-    /// and a `TlsConnector` rooted at the generated CA together so a
-    /// composition bug does not slip past the test suite.
+    /// End-to-end TLS handshake with generated PKI.
     #[tokio::test]
     async fn generated_pki_completes_a_real_tls_handshake() {
         install_crypto();
@@ -855,13 +702,9 @@ mod tests {
         let mut tls_listener = TlsListener::new(tcp, shared);
 
         let server = tokio::spawn(async move {
-            // One accept is enough. The trait drives the handshake.
             let _ = tls_listener.accept().await;
         });
 
-        // Build a client that trusts only the CA we generated. The leaf cert
-        // carries `localhost` and the loopback IPs as SANs, so connecting by
-        // name should verify cleanly.
         let ca_der = read_artifact(&artifacts, &CA_CERT).await.unwrap();
         let mut roots = RootCertStore::empty();
         roots.add(ca_der.as_slice().into()).unwrap();
@@ -887,8 +730,6 @@ mod tests {
             connector.connect(server_name, stream),
         )
         .await;
-        // Make sure the server task returns even on failure so its panicked
-        // status surfaces.
         let _ = timeout(Duration::from_secs(1), server).await;
         match handshake {
             Ok(Ok(_)) => { /* handshake completed */ }
@@ -897,14 +738,8 @@ mod tests {
         }
     }
 
-    /// Regression test for the key-before-cert write ordering.
-    ///
-    /// The doc on `rotate_certificate` promises: write key first, then cert.
-    /// If the writer is preempted between the two writes, the reload watcher
-    /// must detect the mismatch (fresh key, stale cert) as a load failure
-    /// rather than silently swapping in a broken config. This test simulates
-    /// the half-write by writing only a fresh key and then asking the reload
-    /// path to load. The load must fail; the shared config must not change.
+    /// Half-written key (new key, stale cert) must fail reload and not swap
+    /// the shared config.
     #[tokio::test]
     async fn reload_fails_on_half_written_key() {
         install_crypto();
@@ -915,9 +750,6 @@ mod tests {
         let config = load_shared_config(&artifacts).await.unwrap();
         let before = config.load_full();
 
-        // Write a fresh key but keep the stale cert. This is the exact state
-        // the doc warns about: a crash between the two writes of
-        // `rotate_certificate` would leave the catalog here.
         let fresh_key = spawn_blocking(|| {
             let key = KeyPair::generate().unwrap();
             PrivatePkcs8KeyDer::from(key.serialize_der())
@@ -928,8 +760,6 @@ mod tests {
             .await
             .unwrap();
 
-        // The reload reads both artifacts. Fresh key + stale cert is a
-        // mismatch rustls rejects. The shared config must be unchanged.
         let result = reload_certificates(&artifacts, &config).await;
         assert!(
             result.is_err(),

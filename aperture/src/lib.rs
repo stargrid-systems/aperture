@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_http::{
     AppState, HttpServer, OpenApiSpec, RotateCertificateDefinition, Spectra, SpectraConfig,
-    SpectraWorker, init_crypto_provider, install_default_rotation_schedule,
+    SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
 use aperture_storage::Storage;
@@ -22,18 +22,23 @@ mod runtime;
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Installs `ring` as the process-wide rustls crypto provider.
+///
+/// Panics if a provider is already installed. The provider drives cipher
+/// suite selection, so silently overriding it could change the security
+/// posture.
+fn init_crypto_provider() {
+    use rustls::crypto::ring;
+    ring::default_provider()
+        .install_default()
+        .expect("crypto provider already installed");
+}
+
 /// Runs the gateway until the process is terminated.
 ///
-/// `https_addr` and `http_addr` are independently optional:
-///
-/// - both set: HTTP listener redirects to HTTPS (default gateway setup)
-/// - https only: HTTPS serves the full API
-/// - http only: plain HTTP serves the full API (recovery mode)
-/// - neither: the supervisor runs with no listeners
-///
-/// The TLS PKI and certificate rotation schedule are only touched when
-/// `https_addr` is set. Both are idempotent, so disabling HTTPS leaves
-/// any previously generated artifacts intact.
+/// `https_addr` and `http_addr` are independently optional. When both are
+/// set, HTTP redirects to HTTPS. The TLS PKI and rotation schedule are only
+/// touched when `https_addr` is set.
 pub async fn serve(
     https_addr: Option<SocketAddr>,
     http_addr: Option<SocketAddr>,
