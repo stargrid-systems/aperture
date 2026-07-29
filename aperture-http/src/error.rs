@@ -111,7 +111,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::extract::Request;
-    use axum::http::StatusCode;
+    use axum::http::{Request as HttpRequest, StatusCode};
     use axum::response::{IntoResponse, Response};
     use axum::routing::post;
     use futures_util::TryStreamExt as _;
@@ -153,7 +153,7 @@ mod tests {
             .layer(RequestBodyLimitLayer::new(8));
         let response = app
             .oneshot(
-                Request::builder()
+                HttpRequest::builder()
                     .method("POST")
                     .uri("/")
                     .body(Body::from(vec![0u8; 64]))
