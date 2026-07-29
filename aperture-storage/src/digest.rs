@@ -55,7 +55,9 @@ impl FromStr for Digest {
         let algorithm: DigestAlgorithm = algorithm
             .parse()
             .map_err(|_| InvalidDigest(value.to_owned()))?;
-        let valid = hex.len() % 2 == 0 && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let valid = !hex.is_empty()
+            && hex.len() % 2 == 0
+            && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
         if !valid {
             return Err(InvalidDigest(value.to_owned()));
         }
@@ -136,10 +138,12 @@ pub struct InvalidDigest(pub String);
 /// Supported digest algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DigestAlgorithm {
+    /// SHA-256, rendered as the `sha256` algorithm prefix.
     Sha256,
 }
 
 impl DigestAlgorithm {
+    /// Returns the algorithm name, for example `sha256`.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Sha256 => "sha256",
@@ -184,6 +188,11 @@ mod tests {
     #[test]
     fn rejects_odd_hex() {
         assert!("sha256:abc".parse::<Digest>().is_err());
+    }
+
+    #[test]
+    fn rejects_empty_hex() {
+        assert!("sha256:".parse::<Digest>().is_err());
     }
 
     #[test]

@@ -144,18 +144,22 @@ impl Spectra {
         Ok(())
     }
 
-    /// Aborts any in-flight prepare task. The supervisor calls this on
-    /// shutdown via [`SpectraWorker`].
-    fn shutdown(&self) {
+    /// Aborts any in-flight prepare task and waits for it to finish. The
+    /// supervisor calls this on shutdown via [`SpectraWorker`].
+    async fn shutdown(&self) {
         self.inner.cancel.cancel();
-        if let Some(handle) = self
+        let handle = self
             .inner
             .task
             .lock()
             .expect("spectra task slot poisoned")
-            .take()
-        {
+            .take();
+        if let Some(handle) = handle {
             handle.abort();
+            // Awaits the task so it cannot outlive shutdown. `abort` makes
+            // this resolve promptly with a cancelled `JoinError`, ignored
+            // here since cancellation was intentional.
+            let _ = handle.await;
         }
     }
 }
@@ -188,6 +192,6 @@ impl SpectraWorker {
 impl Worker for SpectraWorker {
     async fn run(self, stop: Stop) {
         stop.cancelled().await;
-        self.0.shutdown();
+        self.0.shutdown().await;
     }
 }
