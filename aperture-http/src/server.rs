@@ -61,6 +61,9 @@ impl HttpServer {
         app: Router,
     ) -> anyhow::Result<Self> {
         let mut server = HttpServer::new();
+        // The bound HTTPS port, so redirects target the real listener. With an
+        // OS-assigned port (":0") the requested port would redirect to port 0.
+        let mut https_port: Option<u16> = None;
 
         if let Some(https_addr) = https_addr {
             ensure_certificates(&artifacts, https_addr).await?;
@@ -68,6 +71,7 @@ impl HttpServer {
             // Log the actual bound address so an OS-assigned port (":0")
             // surfaces in the startup banner instead of the requested one.
             let bound = tcp_listener.local_addr().unwrap_or(https_addr);
+            https_port = Some(bound.port());
             tracing::info!(%bound, "aperture listening (https)");
             let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener).await?;
             server = server.serve_tls(endpoint, app.clone());
@@ -76,10 +80,10 @@ impl HttpServer {
         if let Some(http_addr) = http_addr {
             let http_listener = TcpListener::bind(http_addr).await?;
             let bound = http_listener.local_addr().unwrap_or(http_addr);
-            let http_app = match https_addr {
-                Some(https) => {
+            let http_app = match https_port {
+                Some(port) => {
                     tracing::info!(%bound, "http redirect listening");
-                    redirect_router(https.port())
+                    redirect_router(port)
                 }
                 None => {
                     tracing::warn!(

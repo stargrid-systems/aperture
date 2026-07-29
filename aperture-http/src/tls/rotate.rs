@@ -1,17 +1,15 @@
 //! Certificate rotation task: re-issues the leaf cert when it nears expiry.
 
-use std::time::Duration;
-
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
 use aperture_tasks::{Capabilities, Interval, RunError, TaskContext, TaskDefinition};
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::pki;
 
-const ROTATION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const ROTATION_INTERVAL: SignedDuration = SignedDuration::from_secs(24 * 60 * 60);
 
 /// Rotation takes no parameters (identity-preserving).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -73,8 +71,7 @@ pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Res
     repo.create(&NewTaskSchedule {
         kind: RotateCertificateDefinition::KIND.to_owned(),
         input: serde_json::json!({}),
-        interval: Interval::from_micros(ROTATION_INTERVAL.as_micros() as i64)
-            .map_err(|e| anyhow::anyhow!(e).context("invalid interval"))?,
+        interval: Interval::new(ROTATION_INTERVAL)?,
         next_run_at: now,
         created_at: now,
     })

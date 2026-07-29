@@ -20,7 +20,7 @@ fn redirect_to_https(https_port: u16, request: Request) -> Response {
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
         .map(strip_port)
-        .filter(|h| !h.bytes().any(|b| b == b' ' || b == b'\t'));
+        .filter(|h| !h.bytes().any(|b| b.is_ascii_control() || b == b' '));
     let Some(host) = host else {
         return (
             StatusCode::BAD_REQUEST,
@@ -116,6 +116,17 @@ mod tests {
         let req = HttpRequest::builder()
             .uri("/p")
             .header("host", "evil.example other")
+            .body(Body::empty())
+            .unwrap();
+        let resp = redirect_to_https(8443, req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rejects_host_with_control_char() {
+        let req = HttpRequest::builder()
+            .uri("/p")
+            .header("host", "evil\t.example")
             .body(Body::empty())
             .unwrap();
         let resp = redirect_to_https(8443, req);

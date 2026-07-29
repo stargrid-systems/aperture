@@ -38,12 +38,18 @@ fn init_crypto_provider() {
 ///
 /// `https_addr` and `http_addr` are independently optional. When both are
 /// set, HTTP redirects to HTTPS. The TLS PKI and rotation schedule are only
-/// touched when `https_addr` is set.
+/// touched when `https_addr` is set. At least one listener must be set.
 pub async fn serve(
     https_addr: Option<SocketAddr>,
     http_addr: Option<SocketAddr>,
     data_dir: PathBuf,
 ) -> anyhow::Result<()> {
+    if https_addr.is_none() && http_addr.is_none() {
+        anyhow::bail!(
+            "at least one of --https-addr or --http-addr must be set (pass an empty string to \
+             disable a single listener)"
+        );
+    }
     if matches!((https_addr, http_addr), (Some(a), Some(b)) if a == b) {
         let addr = https_addr.unwrap();
         anyhow::bail!("--https-addr and --http-addr must differ (both were {addr})");
@@ -145,4 +151,22 @@ async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Artifacts, Storage)>
     let storage = Storage::open(db_path).await?;
     let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"));
     Ok((artifacts, storage))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn serve_rejects_when_no_listeners_configured() {
+        let err = serve(None, None, PathBuf::from("/nonexistent"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("at least one"),
+            "expected a no-listeners error, got: {err}"
+        );
+    }
 }
