@@ -127,7 +127,7 @@ async fn list_versions(
     operation_id = operation_ids::GET_ARTIFACT_VERSION,
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
-        ("digest" = String, Path, description = "Content digest"),
+        ("digest" = Digest, Path, description = "Content digest"),
     ),
     responses(
         (status = 200, description = "Version", body = ArtifactVersionResponse),
@@ -151,7 +151,7 @@ async fn get_version(
     operation_id = operation_ids::DELETE_ARTIFACT_VERSION,
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
-        ("digest" = String, Path, description = "Content digest"),
+        ("digest" = Digest, Path, description = "Content digest"),
     ),
     responses(
         (status = 204, description = "Version evicted"),
@@ -212,9 +212,9 @@ async fn upload_artifact(
     ),
     ApiError,
 > {
-    // Parse Content-Type as a MediaType at the boundary. An invalid value
-    // (e.g. `text/html; charset=utf-8` with parameters) is rejected here so
-    // the store never sees garbage.
+    // Parse Content-Type as a MediaType at the boundary. An unparseable
+    // value is treated as absent, so the store records no media type rather
+    // than garbage.
     let media_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -246,7 +246,7 @@ async fn upload_artifact(
     operation_id = operation_ids::DOWNLOAD_ARTIFACT_BLOB,
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
-        ("digest" = String, Path, description = "Content digest"),
+        ("digest" = Digest, Path, description = "Content digest"),
     ),
     responses(
         (status = 200, description = "Blob content",

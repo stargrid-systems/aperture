@@ -39,8 +39,8 @@ impl OciFetcher {
     /// the registry advertises so the caller can verify the stored bytes.
     ///
     /// `media_type` is the validated media type of the layer to pull. The
-    /// returned [`FetchMeta`] echoes it back so the caller can record the
-    /// actual type without re-parsing.
+    /// returned [`FetchMeta`] echoes it back so the caller can record it
+    /// without re-parsing.
     pub async fn fetch(
         &self,
         reference: &Reference,

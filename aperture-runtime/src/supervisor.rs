@@ -1,5 +1,5 @@
-//! [`Supervisor`]: owns a set of [`Worker`]s, drives them with a shared stop
-//! signal, and drains them in registration order on shutdown.
+//! A [`Supervisor`] owns a set of [`Worker`]s, drives them with a shared stop
+//! signal, and drains them on shutdown.
 
 use std::future::Future;
 use std::time::Duration;
@@ -7,12 +7,11 @@ use std::time::Duration;
 use futures_util::future::FutureExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::Worker;
-use crate::worker_set::WorkerSet;
+use crate::{Worker, WorkerSet};
 
-/// Maximum time the supervisor waits for a worker to drain before detaching
-/// it. Per-worker graceful shutdown should finish well within this. The
-/// ceiling exists so a single stuck worker cannot hang process exit.
+/// Maximum time the supervisor waits for the drain to complete before
+/// detaching any remaining tasks. Graceful shutdown should finish well within
+/// this. The ceiling exists so a single stuck worker cannot hang process exit.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Stop signal handed to a [`Worker`]. A clone of the supervisor's
@@ -22,9 +21,10 @@ pub type Stop = CancellationToken;
 
 /// Owns a set of [`Worker`]s and orchestrates their shutdown.
 ///
-/// Workers are spawned in registration order. On shutdown they are stopped
-/// (their stop token fires) and drained in the same order, with a hard
-/// timeout per worker.
+/// On shutdown every worker's stop token fires and the workers drain
+/// concurrently, with a shared hard timeout for the whole drain. A single
+/// stuck worker cannot hang process exit: once the timeout elapses the
+/// remaining tasks are detached.
 ///
 /// If a worker exits before the supervisor's signal, the supervisor still
 /// drains the remaining workers but the operator can interrupt a slow drain
@@ -44,8 +44,7 @@ impl Supervisor {
     }
 
     /// Spawns `worker` under `name`. The worker receives a [`Stop`] token
-    /// that fires when [`Supervisor::trigger`] is called or the supervisor is
-    /// dropped.
+    /// that fires when [`Supervisor::trigger`] is called.
     pub fn spawn<W: Worker>(&mut self, name: &'static str, worker: W) {
         let stop = self.stop_token.clone();
         let run = worker.run(stop);
@@ -54,15 +53,15 @@ impl Supervisor {
 
     /// Fires every worker's stop signal. Workers that have already exited are
     /// unaffected.
-    pub fn trigger(&mut self) {
+    pub fn trigger(&self) {
         self.stop_token.cancel();
     }
 
     /// Runs until either `signal` resolves or every worker exits on its own.
     ///
-    /// On `signal`, drains workers in registration order with a per-worker
-    /// timeout. On early worker exit, drains the remainder with an option for
-    /// the operator to interrupt with a second signal.
+    /// On `signal`, drains the workers concurrently with a shared timeout.
+    /// On early worker exit, drains the remainder with an option for the
+    /// operator to interrupt with a second signal.
     pub async fn run_until_signal<F>(mut self, signal: F)
     where
         F: Future<Output = ()> + Send + 'static,

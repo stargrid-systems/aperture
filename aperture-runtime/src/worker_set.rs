@@ -1,5 +1,5 @@
-//! [`WorkerSet`]: spawn a batch of named tasks, await any exit, drain with
-//! timeout.
+//! [`WorkerSet`] spawns a batch of named tasks, awaits any exit, and drains
+//! them with a timeout.
 
 use std::error::Error as StdError;
 use std::future::Future;

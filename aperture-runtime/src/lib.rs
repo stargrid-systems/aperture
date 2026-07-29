@@ -3,7 +3,7 @@
 //! Aperture is built out of long-running background tasks (the HTTP server,
 //! the task scheduler, the log worker). Each implements [`Worker`]. A
 //! [`Supervisor`] owns a set of workers, drives them with a shared stop
-//! signal, and drains them in registration order on shutdown.
+//! signal, and drains them on shutdown.
 //!
 //! Workers that themselves own multiple subtasks (for example, the HTTP
 //! server's listener + reload watcher) compose via [`WorkerSet`].
