@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use aperture_auth::AuthenticatedActor;
-use aperture_storage::TaskId;
+use aperture_storage::DbId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -10,19 +10,17 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::dto::{
-    CreateTaskRequest, Page, TaskDefinitionResponse, TaskListParams, TaskResponse, task_page,
-};
+use crate::dto::{CreateTaskRequest, Page, TaskDefinitionResponse, TaskListParams, TaskResponse};
 use crate::error::ApiError;
 
-pub fn router() -> OpenApiRouter<AppState> {
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_tasks, create_task))
         .routes(routes!(get_task))
         .routes(routes!(cancel_task))
 }
 
-pub fn definitions_router() -> OpenApiRouter<AppState> {
+pub(crate) fn definitions_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(list_definitions))
 }
 
@@ -54,17 +52,18 @@ async fn list_tasks(
         )
         .await?;
 
-    let live: HashMap<TaskId, _> = tasks
+    let live: HashMap<DbId, _> = tasks
         .active()
         .into_iter()
         .map(|task| (task.id, task.progress))
         .collect();
 
-    Ok(Json(task_page(page, &live)))
+    Ok(Json(TaskResponse::page(page, &live)))
 }
 
-/// Creates a task of the given kind and starts it. The body input is validated
-/// against the kind's input schema.
+/// Creates a task of the given kind and starts it.
+///
+/// The body input is validated against the kind's input schema.
 #[utoipa::path(
     post,
     path = "",
@@ -96,7 +95,7 @@ async fn create_task(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK,
-    params(("id" = TaskId, Path, description = "Task id")),
+    params(("id" = DbId, Path, description = "Task id")),
     responses(
         (status = 200, description = "Task", body = TaskResponse),
         (status = 404, description = "Unknown task"),
@@ -105,7 +104,7 @@ async fn create_task(
 async fn get_task(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<TaskId>,
+    Path(id): Path<DbId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
     state.auth().require(&auth.subject, "task", "read").await?;
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
@@ -118,7 +117,7 @@ async fn get_task(
     post,
     path = "/{id}/cancel",
     operation_id = operation_ids::CANCEL_TASK,
-    params(("id" = TaskId, Path, description = "Task id")),
+    params(("id" = DbId, Path, description = "Task id")),
     responses(
         (status = 202, description = "Cancellation requested"),
         (status = 404, description = "Unknown task"),
@@ -129,7 +128,7 @@ async fn get_task(
 async fn cancel_task(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<TaskId>,
+    Path(id): Path<DbId>,
 ) -> Result<StatusCode, ApiError> {
     state
         .auth()

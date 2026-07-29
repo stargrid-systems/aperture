@@ -1,5 +1,5 @@
 use aperture_auth::AuthenticatedActor;
-use aperture_storage::{EventFilter, SpanFilter, SpanId, SpanParentFilter};
+use aperture_storage::{DbId, EventFilter, SpanFilter, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -9,11 +9,11 @@ use super::operation_ids;
 use crate::AppState;
 use crate::dto::{
     BootResponse, LogEventResponse, LogListParams, LogSpanDetailResponse, LogSpanListParams,
-    LogSpanResponse, LogTargetListParams, Page, boots_response, event_page, span_page,
+    LogSpanResponse, LogTargetListParams, Page,
 };
 use crate::error::ApiError;
 
-pub fn router() -> OpenApiRouter<AppState> {
+pub(crate) fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_logs))
         .routes(routes!(list_log_targets))
@@ -48,9 +48,9 @@ async fn list_logs(
         until: params.until,
         fields,
     };
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let page = logs.list_events(&filter, &query).await?;
-    Ok(Json(event_page(page)))
+    Ok(Json(LogEventResponse::page(page)))
 }
 
 /// Lists distinct log targets for autocomplete.
@@ -67,7 +67,7 @@ async fn list_log_targets(
     Query(params): Query<LogTargetListParams>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     state.auth().require(&auth.subject, "log", "read").await?;
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let targets = logs.list_targets(params.q.as_deref()).await?;
     Ok(Json(targets))
 }
@@ -84,9 +84,9 @@ async fn list_log_boots(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BootResponse>>, ApiError> {
     state.auth().require(&auth.subject, "log", "read").await?;
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let boots = logs.list_boots().await?;
-    Ok(Json(boots_response(boots, state.boot_id())))
+    Ok(Json(BootResponse::from_boots(boots, state.boot_id())))
 }
 
 /// Lists tracing spans with optional filtering.
@@ -119,9 +119,9 @@ async fn list_spans(
         parent,
         fields,
     };
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let page = logs.list_spans(&filter, &query).await?;
-    Ok(Json(span_page(page)))
+    Ok(Json(LogSpanResponse::page(page)))
 }
 
 /// Returns a single span with its events.
@@ -129,7 +129,7 @@ async fn list_spans(
     get,
     path = "/spans/{id}",
     operation_id = operation_ids::GET_SPAN,
-    params(("id" = SpanId, Path, description = "Span id")),
+    params(("id" = DbId, Path, description = "Span id")),
     responses(
         (status = 200, description = "Span with events", body = LogSpanDetailResponse),
         (status = 404, description = "Unknown span"),
@@ -138,10 +138,10 @@ async fn list_spans(
 async fn get_span(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(id): Path<SpanId>,
+    Path(id): Path<DbId>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
     state.auth().require(&auth.subject, "log", "read").await?;
-    let logs = state.logs()?;
+    let logs = state.storage().logs()?;
     let span = logs.get_span(id).await?;
     let span = span.ok_or(ApiError::NOT_FOUND)?;
     let events = logs.events_for_span(id).await?;

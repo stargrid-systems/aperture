@@ -1,14 +1,13 @@
 use aperture_storage::{
-    ActorId, JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage,
-    TaskId, TaskStatus,
+    ActorId, DbId, JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage,
+    TaskStatus,
 };
 use jiff::Timestamp;
+use serde_json::json;
 
-fn at(millis: i64) -> Timestamp {
-    Timestamp::from_millisecond(millis).unwrap()
+fn at(micros: i64) -> Timestamp {
+    Timestamp::from_microsecond(micros).unwrap()
 }
-
-const INITIATOR: ActorId = ActorId::from_i64(1);
 
 #[tokio::test]
 async fn create_then_finish_records_lifecycle() {
@@ -19,8 +18,8 @@ async fn create_then_finish_records_lifecycle() {
         .create(
             "download",
             None,
-            INITIATOR,
-            r#"{"key":"spectra"}"#,
+            ActorId::SYSTEM,
+            &json!({"key": "spectra"}),
             at(1_000),
         )
         .await
@@ -30,7 +29,7 @@ async fn create_then_finish_records_lifecycle() {
     assert_eq!(task.kind, "download");
     assert_eq!(task.status, TaskStatus::Pending);
     assert_eq!(task.parent_id, None);
-    assert_eq!(task.input, r#"{"key":"spectra"}"#);
+    assert_eq!(task.input, json!({"key": "spectra"}));
     assert!(task.started_at.is_none());
 
     repo.mark_running(id, at(1_100)).await.unwrap();
@@ -38,7 +37,7 @@ async fn create_then_finish_records_lifecycle() {
         id,
         TaskStatus::Succeeded,
         at(2_000),
-        Some(r#"{"size":42}"#),
+        Some(&json!({"size": 42})),
         None,
     )
     .await
@@ -48,7 +47,7 @@ async fn create_then_finish_records_lifecycle() {
     assert_eq!(task.status, TaskStatus::Succeeded);
     assert_eq!(task.started_at, Some(at(1_100)));
     assert_eq!(task.finished_at, Some(at(2_000)));
-    assert_eq!(task.output.as_deref(), Some(r#"{"size":42}"#));
+    assert_eq!(task.output, Some(json!({"size": 42})));
 }
 
 #[tokio::test]
@@ -60,8 +59,8 @@ async fn create_running_starts_in_running_state() {
         .create_running(
             "download",
             None,
-            INITIATOR,
-            r#"{"key":"spectra"}"#,
+            ActorId::SYSTEM,
+            &json!({"key": "spectra"}),
             at(1_000),
         )
         .await
@@ -79,14 +78,14 @@ async fn finish_does_not_overwrite_a_finished_row() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create_running("download", None, INITIATOR, "{}", at(1_000))
+        .create_running("download", None, ActorId::SYSTEM, &json!({}), at(1_000))
         .await
         .unwrap();
     repo.finish(
         id,
         TaskStatus::Succeeded,
         at(1_100),
-        Some(r#"{"ok":true}"#),
+        Some(&json!({"ok": true})),
         None,
     )
     .await
@@ -106,7 +105,7 @@ async fn finish_does_not_overwrite_a_finished_row() {
 
     let task = repo.get(id).await.unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Succeeded);
-    assert_eq!(task.output.as_deref(), Some(r#"{"ok":true}"#));
+    assert_eq!(task.output, Some(json!({"ok": true})));
     assert_eq!(task.finished_at, Some(at(1_100)));
     assert!(task.error.is_none());
 }
@@ -117,15 +116,27 @@ async fn list_filters_by_status_kind_and_parent() {
     let repo = storage.tasks().unwrap();
 
     let parent = repo
-        .create("update", None, INITIATOR, "{}", at(1_000))
+        .create("update", None, ActorId::SYSTEM, &json!({}), at(1_000))
         .await
         .unwrap();
     let download = repo
-        .create("download", Some(parent), INITIATOR, "{}", at(1_100))
+        .create(
+            "download",
+            Some(parent),
+            ActorId::SYSTEM,
+            &json!({}),
+            at(1_100),
+        )
         .await
         .unwrap();
     let install = repo
-        .create("install", Some(parent), INITIATOR, "{}", at(1_200))
+        .create(
+            "install",
+            Some(parent),
+            ActorId::SYSTEM,
+            &json!({}),
+            at(1_200),
+        )
         .await
         .unwrap();
     repo.finish(install, TaskStatus::Failed, at(1_300), None, Some("boom"))
@@ -142,7 +153,7 @@ async fn list_filters_by_status_kind_and_parent() {
         )
         .await
         .unwrap();
-    let active_ids: Vec<TaskId> = active.items.iter().map(|task| task.id).collect();
+    let active_ids: Vec<DbId> = active.items.iter().map(|task| task.id).collect();
     assert_eq!(active_ids, vec![download, parent]);
 
     let finished = repo
@@ -179,7 +190,7 @@ async fn list_filters_by_status_kind_and_parent() {
     assert_eq!(roots.items[0].id, parent);
 
     let children = repo.children(parent).await.unwrap();
-    let child_ids: Vec<TaskId> = children.iter().map(|task| task.id).collect();
+    let child_ids: Vec<DbId> = children.iter().map(|task| task.id).collect();
     assert_eq!(child_ids, vec![download, install]);
 }
 
@@ -192,8 +203,8 @@ async fn list_filters_by_json_input_and_output() {
         .create_running(
             "download",
             None,
-            INITIATOR,
-            r#"{"key":"spectra","source":{"reference":"ghcr.io/x/spectra:1"}}"#,
+            ActorId::SYSTEM,
+            &json!({"key": "spectra", "source": {"reference": "ghcr.io/x/spectra:1"}}),
             at(1_000),
         )
         .await
@@ -202,20 +213,26 @@ async fn list_filters_by_json_input_and_output() {
         spectra,
         TaskStatus::Succeeded,
         at(1_050),
-        Some(r#"{"version":"1.0"}"#),
+        Some(&json!({"version": "1.0"})),
         None,
     )
     .await
     .unwrap();
     let other = repo
-        .create_running("download", None, INITIATOR, r#"{"key":"other"}"#, at(1_100))
+        .create_running(
+            "download",
+            None,
+            ActorId::SYSTEM,
+            &json!({"key": "other"}),
+            at(1_100),
+        )
         .await
         .unwrap();
     repo.finish(
         other,
         TaskStatus::Succeeded,
         at(1_150),
-        Some(r#"{"version":"2.0"}"#),
+        Some(&json!({"version": "2.0"})),
         None,
     )
     .await
@@ -301,16 +318,16 @@ async fn list_active_finds_unfinished_invocations() {
     let repo = storage.tasks().unwrap();
 
     let pending = repo
-        .create("download", None, INITIATOR, "{}", at(1_000))
+        .create("download", None, ActorId::SYSTEM, &json!({}), at(1_000))
         .await
         .unwrap();
     let running = repo
-        .create("download", None, INITIATOR, "{}", at(1_100))
+        .create("download", None, ActorId::SYSTEM, &json!({}), at(1_100))
         .await
         .unwrap();
     repo.mark_running(running, at(1_150)).await.unwrap();
     let done = repo
-        .create("download", None, INITIATOR, "{}", at(1_200))
+        .create("download", None, ActorId::SYSTEM, &json!({}), at(1_200))
         .await
         .unwrap();
     repo.finish(done, TaskStatus::Succeeded, at(1_300), None, None)
@@ -318,6 +335,6 @@ async fn list_active_finds_unfinished_invocations() {
         .unwrap();
 
     let active = repo.list_active().await.unwrap();
-    let ids: Vec<TaskId> = active.iter().map(|task| task.id).collect();
+    let ids: Vec<DbId> = active.iter().map(|task| task.id).collect();
     assert_eq!(ids, vec![pending, running]);
 }

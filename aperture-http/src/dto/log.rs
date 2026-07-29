@@ -1,7 +1,7 @@
 //! DTOs for the structured log endpoints.
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{BootInfo, Event, EventId, Level, Span, SpanId};
+use aperture_storage::{BootInfo, DbId, Event, Level, Span};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
@@ -49,9 +49,9 @@ impl From<LevelResponse> for Level {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogEventResponse {
     /// Event id.
-    pub id: EventId,
+    pub id: DbId,
     /// Span this event belongs to, if any.
-    pub span_id: Option<SpanId>,
+    pub span_id: Option<DbId>,
     /// Severity level.
     pub level: LevelResponse,
     /// Module path that emitted the event.
@@ -87,13 +87,20 @@ impl From<Event> for LogEventResponse {
     }
 }
 
+impl LogEventResponse {
+    /// Maps a storage page of events into the response envelope.
+    pub fn page(page: StoragePage<Event>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
+    }
+}
+
 /// A tracing span, returned by `GET /api/v1/logs/spans`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogSpanResponse {
     /// Span id.
-    pub id: SpanId,
+    pub id: DbId,
     /// Parent span id, if any.
-    pub parent_id: Option<SpanId>,
+    pub parent_id: Option<DbId>,
     /// Span name.
     pub name: String,
     /// Severity level.
@@ -129,6 +136,13 @@ impl From<Span> for LogSpanResponse {
     }
 }
 
+impl LogSpanResponse {
+    /// Maps a storage page of spans into the response envelope.
+    pub fn page(page: StoragePage<Span>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
+    }
+}
+
 /// A span with its child events, returned by `GET /api/v1/logs/spans/{id}`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogSpanDetailResponse {
@@ -159,7 +173,7 @@ pub struct LogListParams {
     /// Substring search across message and target.
     pub q: Option<String>,
     /// Only events belonging to this span.
-    pub span_id: Option<SpanId>,
+    pub span_id: Option<DbId>,
     /// Only events from this boot session.
     pub boot_id: Option<Uuid>,
     /// Only events at or after this time (RFC 3339).
@@ -205,7 +219,7 @@ pub struct LogSpanListParams {
     /// Only spans started at or before this time (RFC 3339).
     pub until: Option<Timestamp>,
     /// Only direct children of this span id.
-    pub parent_id: Option<SpanId>,
+    pub parent_id: Option<DbId>,
     /// When true, only root spans (no parent) are returned.
     pub parent_null: Option<bool>,
     /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.
@@ -231,16 +245,6 @@ pub struct LogTargetListParams {
     pub q: Option<String>,
 }
 
-/// Maps a storage page of events into the response envelope.
-pub fn event_page(page: StoragePage<Event>) -> Page<LogEventResponse> {
-    Page::from_storage(page, LogEventResponse::from)
-}
-
-/// Maps a storage page of spans into the response envelope.
-pub fn span_page(page: StoragePage<Span>) -> Page<LogSpanResponse> {
-    Page::from_storage(page, LogSpanResponse::from)
-}
-
 /// One boot session observed in the log store, returned by
 /// `GET /api/v1/logs/boots`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -257,17 +261,19 @@ pub struct BootResponse {
     pub is_current: bool,
 }
 
-/// Maps a list of storage [`BootInfo`] into boot responses, marking the
-/// current boot id.
-pub fn boots_response(boots: Vec<BootInfo>, current_boot_id: Uuid) -> Vec<BootResponse> {
-    boots
-        .into_iter()
-        .map(|b| BootResponse {
-            is_current: b.boot_id == current_boot_id,
-            boot_id: b.boot_id,
-            first_seen: b.first_seen,
-            last_seen: b.last_seen,
-            event_count: b.event_count,
-        })
-        .collect()
+impl BootResponse {
+    /// Maps a list of storage [`BootInfo`] into boot responses, marking the
+    /// current boot id.
+    pub fn from_boots(boots: Vec<BootInfo>, current_boot_id: Uuid) -> Vec<Self> {
+        boots
+            .into_iter()
+            .map(|b| Self {
+                is_current: b.boot_id == current_boot_id,
+                boot_id: b.boot_id,
+                first_seen: b.first_seen,
+                last_seen: b.last_seen,
+                event_count: b.event_count,
+            })
+            .collect()
+    }
 }

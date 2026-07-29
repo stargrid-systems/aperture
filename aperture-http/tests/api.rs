@@ -1,31 +1,30 @@
-use std::sync::Arc;
 use std::{env, fs, process};
 
-use aperture_artifacts::{Artifact, Artifacts, DownloadDefinition, Storage};
+use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, roles};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
-use aperture_storage::{ActorId, ArtifactId};
+use aperture_storage::{ActorId, DbId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode};
+use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION};
+use axum::http::{HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use jiff::Timestamp;
 use serde_json::{Value, json};
-use tokio::sync::watch;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-fn at(millis: i64) -> Timestamp {
-    Timestamp::from_millisecond(millis).unwrap()
+fn at(micros: i64) -> Timestamp {
+    Timestamp::from_microsecond(micros).unwrap()
 }
 
-fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
+fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
     Artifact {
-        id: ArtifactId::from(0),
-        key: key.to_owned(),
+        id: DbId::from(0),
+        key: ArtifactKey::new(key).unwrap(),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
-        digest: digest.to_owned(),
+        digest: digest.parse().unwrap(),
         media_type: None,
         version: Some("0.2.0".to_owned()),
         size_bytes: 1234,
@@ -34,33 +33,39 @@ fn version(key: &str, digest: &str, downloaded_at: i64) -> Artifact {
     }
 }
 
-async fn seeded_app() -> (Router, Arc<Artifacts>, Storage, String) {
-    let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
+async fn seeded_app() -> (Router, Artifacts, Storage, String) {
+    // Unique per call so parallel tests in the same binary do not stomp on
+    // each other's blob store.
+    let root = env::temp_dir().join(format!(
+        "aperture-api-{}-{}",
+        process::id(),
+        uuid::Uuid::new_v4()
+    ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Arc::new(Artifacts::new(storage.clone(), root));
+    let artifacts = Artifacts::new(storage.clone(), root);
 
     let repo = storage.artifacts().unwrap();
-    repo.record_version(&version("firmware", "sha256:fff", 1_000))
+    repo.record_version(&version("firmware", "sha256:ffff", 1_000))
         .await
         .unwrap();
-    repo.record_version(&version("spectra", "sha256:aaa", 2_000))
+    repo.record_version(&version("spectra", "sha256:aaaa", 2_000))
         .await
         .unwrap();
-    repo.record_version(&version("spectra", "sha256:bbb", 3_000))
+    repo.record_version(&version("spectra", "sha256:bbbb", 3_000))
         .await
         .unwrap();
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
-    let tasks = Tasks::new(storage.clone(), registry);
+    registry.register(DownloadDefinition::new(artifacts.clone()));
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
         .await
         .unwrap();
 
     let spectra = Spectra::new(
-        Arc::clone(&artifacts),
+        artifacts.clone(),
         tasks.clone(),
         SpectraConfig::default(),
         ActorId::SYSTEM,
@@ -72,15 +77,7 @@ async fn seeded_app() -> (Router, Arc<Artifacts>, Storage, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, roles::ADMIN).await.unwrap();
 
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        spectra,
-        tasks,
-        auth,
-        storage.clone(),
-        watch::channel(false).0,
-    );
+    let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks, auth);
     (app(state), artifacts, storage, raw_key.as_str().to_owned())
 }
 
@@ -106,14 +103,47 @@ async fn post_json(app: &Router, token: &str, uri: &str, body: Value) -> (Status
             Request::builder()
                 .method("POST")
                 .uri(uri)
-                .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),
         )
         .await
         .unwrap();
     read_json(response).await
+}
+
+async fn patch_json(app: &Router, token: &str, uri: &str, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    read_json(response).await
+}
+
+async fn delete(app: &Router, token: &str, uri: &str) -> StatusCode {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    response.status()
 }
 
 async fn read_json(response: Response) -> (StatusCode, Value) {
@@ -125,47 +155,6 @@ async fn read_json(response: Response) -> (StatusCode, Value) {
         serde_json::from_slice(&body).unwrap()
     };
     (status, json)
-}
-
-/// Builds an app whose API key has the given built-in role. Used to exercise
-/// authorization decisions for non-admin actors.
-async fn app_with_role(role: &str) -> (Router, String) {
-    let root = env::temp_dir().join(format!("aperture-api-{}", process::id()));
-    let _ = fs::remove_dir_all(&root);
-    let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Arc::new(Artifacts::new(storage.clone(), root));
-
-    let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(Arc::clone(&artifacts)));
-    let tasks = Tasks::new(storage.clone(), registry);
-
-    let auth = aperture_auth::AuthHandle::new(storage.clone())
-        .await
-        .unwrap();
-
-    let spectra = Spectra::new(
-        Arc::clone(&artifacts),
-        tasks.clone(),
-        SpectraConfig::default(),
-        ActorId::SYSTEM,
-    );
-
-    let password = Password::generate();
-    let actor = auth.create_user(role, &password, None).await.unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, role).await.unwrap();
-
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        spectra,
-        tasks,
-        auth,
-        storage,
-        watch::channel(false).0,
-    );
-    (app(state), raw_key.as_str().to_owned())
 }
 
 #[tokio::test]
@@ -180,7 +169,7 @@ async fn lists_artifacts_with_summary() {
     assert_eq!(items[0]["key"], "firmware");
     assert_eq!(items[1]["key"], "spectra");
     assert_eq!(items[1]["version_count"], 2);
-    assert_eq!(items[1]["digest"], "sha256:bbb");
+    assert_eq!(items[1]["digest"], "sha256:bbbb");
     assert!(json["next_cursor"].is_null());
 }
 
@@ -243,8 +232,8 @@ async fn lists_versions_newest_first() {
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["digest"], "sha256:bbb");
-    assert_eq!(items[1]["digest"], "sha256:aaa");
+    assert_eq!(items[0]["digest"], "sha256:bbbb");
+    assert_eq!(items[1]["digest"], "sha256:aaaa");
 }
 
 #[tokio::test]
@@ -256,7 +245,7 @@ async fn evicts_a_version() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/v1/artifacts/spectra/versions/sha256:aaa")
+                .uri("/api/v1/artifacts/spectra/versions/sha256:aaaa")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -268,7 +257,7 @@ async fn evicts_a_version() {
     let (status, _) = get_json(
         &app,
         &token,
-        "/api/v1/artifacts/spectra/versions/sha256:aaa",
+        "/api/v1/artifacts/spectra/versions/sha256:aaaa",
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -299,8 +288,8 @@ async fn reads_recorded_tasks() {
         .create(
             "download",
             None,
-            ActorId::from(1),
-            r#"{"key":"spectra"}"#,
+            ActorId::SYSTEM,
+            &json!({"key": "spectra"}),
             at(1_000),
         )
         .await
@@ -309,7 +298,7 @@ async fn reads_recorded_tasks() {
         id,
         TaskStatus::Succeeded,
         at(2_000),
-        Some(r#"{"digest":"sha256:bbb"}"#),
+        Some(&json!({"digest": "sha256:bbbb"})),
         None,
     )
     .await
@@ -324,7 +313,7 @@ async fn reads_recorded_tasks() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(task["status"], "succeeded");
     assert_eq!(task["input"]["key"], "spectra");
-    assert_eq!(task["output"]["digest"], "sha256:bbb");
+    assert_eq!(task["output"]["digest"], "sha256:bbbb");
 }
 
 #[tokio::test]
@@ -335,8 +324,8 @@ async fn filters_tasks_by_json_field() {
         .create(
             "download",
             None,
-            ActorId::from(1),
-            r#"{"key":"spectra"}"#,
+            ActorId::SYSTEM,
+            &json!({"key": "spectra"}),
             at(1_000),
         )
         .await
@@ -345,7 +334,7 @@ async fn filters_tasks_by_json_field() {
         spectra,
         TaskStatus::Succeeded,
         at(1_050),
-        Some(r#"{"version":"1.0"}"#),
+        Some(&json!({"version": "1.0"})),
         None,
     )
     .await
@@ -354,8 +343,8 @@ async fn filters_tasks_by_json_field() {
         .create(
             "download",
             None,
-            ActorId::from(1),
-            r#"{"key":"other"}"#,
+            ActorId::SYSTEM,
+            &json!({"key": "other"}),
             at(1_100),
         )
         .await
@@ -454,6 +443,353 @@ async fn filters_artifacts_and_versions() {
     )
     .await;
     assert!(miss["items"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn task_schedule_lifecycle() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    // Empty listing.
+    let (status, json) = get_json(&app, &token, "/api/v1/task-schedules").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json["items"].as_array().unwrap().is_empty());
+
+    // Create.
+    let (status, created) = post_json(
+        &app,
+        &token,
+        "/api/v1/task-schedules",
+        json!({
+            "kind": "download",
+            "input": {"key": "spectra"},
+            "interval": "PT5M",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["kind"], "download");
+    assert_eq!(created["interval"], "PT5M");
+    assert_eq!(created["input"]["key"], "spectra");
+    assert_eq!(created["enabled"], true);
+    let id = created["id"].as_str().unwrap();
+
+    // Listing reflects the new row.
+    let (_, json) = get_json(&app, &token, "/api/v1/task-schedules").await;
+    assert_eq!(json["items"].as_array().unwrap().len(), 1);
+    assert_eq!(json["items"][0]["id"], id);
+
+    // Get.
+    let (status, fetched) = get_json(&app, &token, &format!("/api/v1/task-schedules/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched["kind"], "download");
+
+    // Patch only the interval. Enabled stays true.
+    let (status, updated) = patch_json(
+        &app,
+        &token,
+        &format!("/api/v1/task-schedules/{id}"),
+        json!({"interval": "PT1H"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["interval"], "PT1H");
+    assert_eq!(updated["enabled"], true);
+
+    // Patch only enabled. Interval stays as set above.
+    let (status, updated) = patch_json(
+        &app,
+        &token,
+        &format!("/api/v1/task-schedules/{id}"),
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["interval"], "PT1H");
+    assert_eq!(updated["enabled"], false);
+
+    // Empty patch returns the row unchanged.
+    let (status, updated) = patch_json(
+        &app,
+        &token,
+        &format!("/api/v1/task-schedules/{id}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["interval"], "PT1H");
+    assert_eq!(updated["enabled"], false);
+
+    // Delete.
+    assert_eq!(
+        delete(&app, &token, &format!("/api/v1/task-schedules/{id}")).await,
+        StatusCode::NO_CONTENT
+    );
+    // Second delete is a 404.
+    assert_eq!(
+        delete(&app, &token, &format!("/api/v1/task-schedules/{id}")).await,
+        StatusCode::NOT_FOUND
+    );
+    let (status, _) = get_json(&app, &token, &format!("/api/v1/task-schedules/{id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn task_schedule_unknown_returns_404() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, _) = get_json(&app, &token, "/api/v1/task-schedules/999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = patch_json(
+        &app,
+        &token,
+        "/api/v1/task-schedules/999",
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn put_then_get_round_trips_blob_bytes() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .header("authorization", format!("Bearer {token}"))
+                .uri("/api/v1/artifacts/firmware")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(&b"hello aperture"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .expect("201 has a Location header")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let digest = json["digest"].as_str().unwrap().to_owned();
+    assert!(
+        digest.starts_with("sha256:"),
+        "digest should be sha256-prefixed, got {digest}"
+    );
+    // The Location header must point at a route the gateway actually serves.
+    // Following it must reach the version we just uploaded.
+    assert_eq!(
+        location,
+        format!("/api/v1/artifacts/firmware/versions/{digest}")
+    );
+    let (status, _) = get_json(&app, &token, &location).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Fetch the blob bytes back.
+    let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&blob_uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        "application/octet-stream"
+    );
+    assert_eq!(
+        response.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(etag, format!("\"{digest}\""));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&body[..], b"hello aperture");
+}
+
+#[tokio::test]
+async fn put_rejects_slash_in_key() {
+    // Artifact keys must be URL-safe. A `%2F` in the URL decodes to `/`
+    // before routing, so the artifact key validator sees `tls/server-cert`
+    // and rejects it.
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .header("authorization", format!("Bearer {token}"))
+                .uri("/api/v1/artifacts/tls%2Fserver-cert")
+                .header(CONTENT_TYPE, "application/pkix-cert")
+                .body(Body::from(&b"der-bytes"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_rejects_html_media_type_parameters() {
+    // Sanitisation rejects media types with parameters so a malicious client
+    // cannot inject `text/html; charset=...` and have it echoed back verbatim.
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .header("authorization", format!("Bearer {token}"))
+                .uri("/api/v1/artifacts/firmware")
+                .header(CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(&b"<html>"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let digest = json["digest"].as_str().unwrap().to_owned();
+
+    let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&blob_uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // The sanitised media type is dropped, so the GET falls back to the safe
+    // default rather than replaying `text/html`.
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        "application/octet-stream"
+    );
+}
+
+#[tokio::test]
+async fn blob_returns_304_when_etag_matches() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .header("authorization", format!("Bearer {token}"))
+                .uri("/api/v1/artifacts/firmware")
+                .body(Body::from(&b"conditional"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(put.into_body(), usize::MAX).await.unwrap();
+    let digest = serde_json::from_slice::<Value>(&body).unwrap()["digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let etag = HeaderValue::from_str(&format!("\"{digest}\"")).unwrap();
+
+    let blob_uri = format!("/api/v1/artifacts/firmware/versions/{digest}/blob");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&blob_uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header(IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        response.headers().get(ETAG).unwrap().to_str().unwrap(),
+        format!("\"{digest}\"")
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(body.is_empty(), "304 response body should be empty");
+}
+
+#[tokio::test]
+async fn blob_404_when_digest_unknown() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/artifacts/firmware/versions/sha256:deadbeef/blob")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// Builds an app whose single API key carries `role`, with no pre-seeded
+/// artifacts. Used by the authorization tests.
+async fn app_with_role(role: &str) -> (Router, String) {
+    let root = env::temp_dir().join(format!(
+        "aperture-api-{}-{}",
+        process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let storage = Storage::open(":memory:").await.unwrap();
+    let artifacts = Artifacts::new(storage.clone(), root);
+
+    let mut registry = TaskRegistry::new();
+    registry.register(DownloadDefinition::new(artifacts.clone()));
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+
+    let auth = aperture_auth::AuthHandle::new(storage.clone())
+        .await
+        .unwrap();
+
+    let spectra = Spectra::new(
+        artifacts.clone(),
+        tasks.clone(),
+        SpectraConfig::default(),
+        ActorId::SYSTEM,
+    );
+
+    let password = Password::generate();
+    let actor = auth.create_user(role, &password, None).await.unwrap();
+    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
+    let subject = aperture_auth::apikey_subject(api_key.id);
+    auth.assign_role(&subject, role).await.unwrap();
+
+    let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks, auth);
+    (app(state), raw_key.as_str().to_owned())
 }
 
 #[tokio::test]

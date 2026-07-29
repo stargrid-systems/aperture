@@ -1,9 +1,9 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use miette::IntoDiagnostic;
 use tokio::runtime;
 
 /// Stargrid hardware application gateway.
@@ -29,15 +29,14 @@ enum Command {
 #[derive(Debug, Args)]
 struct RunArgs {
     /// Address to bind the HTTPS server.
-    #[arg(long, env = "APERTURE_ADDR", default_value = "[::1]:8000")]
-    addr: SocketAddr,
-    /// Address for the HTTP listener (redirects to HTTPS by default).
+    /// Pass an empty string to disable HTTPS entirely (recovery mode).
+    #[arg(long, env = "APERTURE_HTTPS_ADDR", default_value = "[::1]:8443")]
+    https_addr: BindAddr,
+    /// Address for the HTTP listener.
+    /// Redirects to HTTPS when HTTPS is enabled, otherwise serves the full API.
+    /// Pass an empty string to disable the HTTP listener entirely.
     #[arg(long, env = "APERTURE_HTTP_ADDR", default_value = "[::1]:8080")]
-    http_addr: Option<SocketAddr>,
-    /// Serve the full API over plain HTTP instead of redirecting to HTTPS.
-    /// Intended for certificate recovery only.
-    #[arg(long, env = "APERTURE_INSECURE_HTTP", default_value_t = false)]
-    insecure_http: bool,
+    http_addr: BindAddr,
     /// Directory for runtime data and cached components.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
@@ -53,7 +52,32 @@ struct ResetPasswordArgs {
     data_dir: PathBuf,
 }
 
-fn main() -> miette::Result<()> {
+/// Listener address.
+///
+/// An empty string means "no listener". Anything else is parsed strictly as a
+/// `SocketAddr` (`host:port`), so hostnames like `localhost:8080` are not
+/// supported. Use an IP literal such as `127.0.0.1:8080` or
+/// `[::1]:8080` instead.
+#[derive(Clone, Debug)]
+struct BindAddr(Option<SocketAddr>);
+
+impl FromStr for BindAddr {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        if s.is_empty() {
+            return Ok(BindAddr(None));
+        }
+        s.parse::<SocketAddr>()
+            .map(Some)
+            .map(BindAddr)
+            .map_err(|err| {
+                anyhow::Error::from(err).context(format!("invalid socket address {s:?}"))
+            })
+    }
+}
+
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Version => {
@@ -62,9 +86,8 @@ fn main() -> miette::Result<()> {
         }
         Command::Openapi => block_on(emit_openapi()),
         Command::Run(args) => block_on(aperture::serve(
-            args.addr,
-            args.http_addr,
-            args.insecure_http,
+            args.https_addr.0,
+            args.http_addr.0,
             args.data_dir,
         )),
         Command::ResetPassword(args) => {
@@ -73,17 +96,14 @@ fn main() -> miette::Result<()> {
     }
 }
 
-async fn emit_openapi() -> miette::Result<()> {
+async fn emit_openapi() -> anyhow::Result<()> {
     let doc = aperture::openapi().await?;
-    let json = serde_json::to_string_pretty(&doc).into_diagnostic()?;
+    let json = serde_json::to_string_pretty(&doc)?;
     println!("{json}");
     Ok(())
 }
 
-fn block_on<F: Future<Output = miette::Result<()>>>(future: F) -> miette::Result<()> {
-    let runtime = runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .into_diagnostic()?;
+fn block_on<F: Future<Output = anyhow::Result<()>>>(future: F) -> anyhow::Result<()> {
+    let runtime = runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(future)
 }

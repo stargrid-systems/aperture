@@ -5,6 +5,7 @@ members = [
     "aperture-artifacts",
     "aperture-auth",
     "aperture-http",
+    "aperture-runtime",
     "aperture-storage",
     "aperture-tasks",
 ]
@@ -16,11 +17,13 @@ license = "AGPL-3.0-or-later"
 publish = false
 repository = "https://github.com/stargrid-systems/aperture"
 rust-version = "1.93"
+version = "0.1.0"
 
 [workspace.dependencies]
 aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
 aperture-auth = { version = "0.1.0", path = "aperture-auth" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
+aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
 aperture-tasks = { version = "0.1.0", path = "aperture-tasks" }
 
@@ -35,11 +38,14 @@ casbin = { version = "2.20", default-features = false }
 clap = { version = "4", default-features = false }
 cookie = { version = "0.18", default-features = false }
 futures-util = { version = "0.3", default-features = false }
+hex = { version = "0.4", default-features = false }
+http-body-util = { version = "0.1", default-features = false }
+httpdate = { version = "1", default-features = false }
 jiff = { version = "0.2", default-features = false }
 mime_guess = { version = "2", default-features = false }
-miette = { version = "7", default-features = false }
 oci-client = { version = "0.17", default-features = false }
 password-hash = { version = "0.5", default-features = false }
+percent-encoding = { version = "2", default-features = false }
 rand = { version = "0.9", default-features = false }
 rcgen = { version = "0.14", default-features = false }
 rustls = { version = "0.23", default-features = false }
@@ -49,6 +55,7 @@ serde_json = { version = "1", default-features = false }
 sha2 = { version = "0.11", default-features = false }
 subtle = { version = "2", default-features = false }
 thiserror = { version = "2", default-features = false }
+# rcgen exposes cert validity via `time::OffsetDateTime`; jiff covers the rest.
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-rustls = { version = "0.26", default-features = false }
@@ -58,10 +65,11 @@ tower = { version = "0.5", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tower-http = { version = "0.7", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
-turso = { version = "0.6", default-features = false }
+turso = { version = "0.7", default-features = false }
 uuid = { version = "1", default-features = false }
 utoipa = { version = "5", default-features = false }
 utoipa-axum = { version = "0.2", default-features = false }
+x509-parser = { version = "0.18", default-features = false }
 
 [workspace.lints.clippy]
 absolute_paths = "warn"

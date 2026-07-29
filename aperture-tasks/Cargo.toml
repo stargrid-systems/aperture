@@ -1,6 +1,6 @@
 [package]
 name = "aperture-tasks"
-version = "0.1.0"
+version.workspace = true
 description = "Aperture task system: typed, tracked units of work."
 authors.workspace = true
 edition.workspace = true
@@ -13,15 +13,17 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+aperture-runtime = { workspace = true }
 aperture-storage = { workspace = true }
+
 anyhow = { workspace = true, features = ["std"] }
 futures-util = { workspace = true, features = ["std"] }
 jiff = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["rt", "sync"] }
-tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true, features = ["std"] }
 utoipa = { workspace = true, features = ["macros"] }
 

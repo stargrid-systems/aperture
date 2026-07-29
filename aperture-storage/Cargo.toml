@@ -1,6 +1,6 @@
 [package]
 name = "aperture-storage"
-version = "0.1.0"
+version.workspace = true
 description = "Aperture storage layer."
 authors.workspace = true
 edition.workspace = true
@@ -13,19 +13,23 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-schema = ["dep:utoipa"]
+# Enables utoipa::ToSchema derives for the auth domain types so the HTTP layer
+# can project them into the OpenAPI spec. utoipa is already a hard dependency,
+# so this only gates the derives.
+schema = []
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
-jiff = { workspace = true, features = ["std"] }
+hex = { workspace = true, features = ["alloc"] }
+jiff = { workspace = true, features = ["std", "serde"] }
 password-hash = { workspace = true, features = ["alloc", "std"] }
-serde = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 subtle = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 turso = { workspace = true, features = ["fts"] }
-utoipa = { workspace = true, optional = true }
+utoipa = { workspace = true, features = ["macros", "jiff_0_2"] }
 uuid = { workspace = true, features = ["std"] }
 
 [dev-dependencies]

@@ -1,6 +1,7 @@
 //! DTOs for the artifact catalog endpoints.
 
-use aperture_artifacts::{Artifact, ArtifactKey, ListQuery, Page as StoragePage, VersionSort};
+use aperture_artifacts::{Artifact, ArtifactKeyEntry, ListQuery, Page as StoragePage, VersionSort};
+use aperture_storage::{Digest, MediaType};
 use jiff::Timestamp;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -18,7 +19,7 @@ pub struct ArtifactSummaryResponse {
     /// Where the newest version came from.
     pub source: String,
     /// Content digest of the newest version.
-    pub digest: String,
+    pub digest: Digest,
     /// Human-readable version of the newest version, if known.
     pub version: Option<String>,
     /// Stored blob size of the newest version, in bytes.
@@ -27,12 +28,12 @@ pub struct ArtifactSummaryResponse {
     pub downloaded_at: Timestamp,
 }
 
-impl From<ArtifactKey> for ArtifactSummaryResponse {
-    fn from(key: ArtifactKey) -> Self {
-        let latest = key.latest;
+impl From<ArtifactKeyEntry> for ArtifactSummaryResponse {
+    fn from(entry: ArtifactKeyEntry) -> Self {
+        let latest = entry.latest;
         Self {
-            key: latest.key,
-            version_count: key.version_count,
+            key: latest.key.to_string(),
+            version_count: entry.version_count,
             source: latest.source,
             digest: latest.digest,
             version: latest.version,
@@ -42,19 +43,26 @@ impl From<ArtifactKey> for ArtifactSummaryResponse {
     }
 }
 
+impl ArtifactSummaryResponse {
+    /// Maps a storage page of keys into the response envelope.
+    pub fn page(page: StoragePage<ArtifactKeyEntry>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
+    }
+}
+
 /// One stored version of an artifact.
 #[derive(Debug, Clone, serde::Serialize, ToSchema)]
 pub struct ArtifactVersionResponse {
     /// Logical artifact key.
     pub key: String,
     /// Content digest of the stored blob.
-    pub digest: String,
+    pub digest: Digest,
     /// Where this version came from.
     pub source: String,
     /// Human-readable version, if known.
     pub version: Option<String>,
     /// OCI media type, if applicable.
-    pub media_type: Option<String>,
+    pub media_type: Option<MediaType>,
     /// Stored blob size in bytes.
     pub size_bytes: u64,
     /// When this version was downloaded.
@@ -66,7 +74,7 @@ pub struct ArtifactVersionResponse {
 impl From<Artifact> for ArtifactVersionResponse {
     fn from(artifact: Artifact) -> Self {
         Self {
-            key: artifact.key,
+            key: artifact.key.to_string(),
             digest: artifact.digest,
             source: artifact.source,
             version: artifact.version,
@@ -75,6 +83,13 @@ impl From<Artifact> for ArtifactVersionResponse {
             downloaded_at: artifact.downloaded_at,
             verified_at: artifact.verified_at,
         }
+    }
+}
+
+impl ArtifactVersionResponse {
+    /// Maps a storage page of versions into the response envelope.
+    pub fn page(page: StoragePage<Artifact>) -> Page<Self> {
+        Page::from_storage(page, Self::from)
     }
 }
 
@@ -138,7 +153,7 @@ pub struct VersionListParams {
     /// Field to sort by. Defaults to downloaded time.
     pub sort: Option<VersionSortParam>,
     /// Only versions with this exact media type.
-    pub media_type: Option<String>,
+    pub media_type: Option<MediaType>,
     /// Only versions with this exact version string.
     pub version: Option<String>,
 }
@@ -157,14 +172,4 @@ impl VersionListParams {
             .map(Into::into)
             .unwrap_or(VersionSort::DownloadedAt)
     }
-}
-
-/// Maps a storage page of keys into the response envelope.
-pub fn artifact_page(page: StoragePage<ArtifactKey>) -> Page<ArtifactSummaryResponse> {
-    Page::from_storage(page, ArtifactSummaryResponse::from)
-}
-
-/// Maps a storage page of versions into the response envelope.
-pub fn version_page(page: StoragePage<Artifact>) -> Page<ArtifactVersionResponse> {
-    Page::from_storage(page, ArtifactVersionResponse::from)
 }

@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use aperture_storage::{ActorId, Storage, TaskId, TaskStatus};
+use aperture_storage::{ActorId, DbId, Storage, TaskStatus};
 use aperture_tasks::{
     Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry,
     Tasks,
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use utoipa::ToSchema;
 
-fn at(millis: i64) -> Timestamp {
-    Timestamp::from_millisecond(millis).unwrap()
+fn at(micros: i64) -> Timestamp {
+    Timestamp::from_microsecond(micros).unwrap()
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -82,7 +82,7 @@ impl TaskDefinition for Probe {
 /// A task that spawns a [`Probe`] child, publishes the child's id, then awaits
 /// it. When the parent is cancelled the child is too, so the await unwinds.
 struct Parent {
-    child_id: Arc<Mutex<Option<TaskId>>>,
+    child_id: Arc<Mutex<Option<DbId>>>,
     spawned: Arc<Notify>,
 }
 
@@ -138,7 +138,7 @@ impl TaskDefinition for Fail {
 
     async fn run(&self, _input: Empty, _ctx: TaskContext) -> Result<Empty, RunError> {
         Err(RunError::Failed(
-            anyhow::anyhow!("root cause")
+            anyhow::format_err!("root cause")
                 .context("middle")
                 .context("outer failure"),
         ))
@@ -161,10 +161,10 @@ async fn spawn_and_wait_returns_decoded_output() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Double);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
-        .spawn::<Double>(DoubleIn { n: 21 }, ActorId::from(1))
+        .spawn::<Double>(DoubleIn { n: 21 }, ActorId::SYSTEM)
         .await
         .unwrap();
     let id = handle.id();
@@ -173,7 +173,7 @@ async fn spawn_and_wait_returns_decoded_output() {
 
     let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();
     assert_eq!(recorded.status, TaskStatus::Succeeded);
-    assert_eq!(recorded.output.as_deref(), Some(r#"{"result":42}"#));
+    assert_eq!(recorded.output, Some(serde_json::json!({"result": 42})));
 }
 
 #[tokio::test]
@@ -182,10 +182,10 @@ async fn live_progress_is_visible_while_running() {
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let tasks = Tasks::new(storage, registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
-        .spawn::<Probe>(Empty {}, ActorId::from(1))
+        .spawn::<Probe>(Empty {}, ActorId::SYSTEM)
         .await
         .unwrap();
     ready.notified().await;
@@ -208,10 +208,10 @@ async fn cancellable_task_records_cancelled() {
     let (probe, ready, _gate) = probe(true);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
-        .spawn::<Probe>(Empty {}, ActorId::from(1))
+        .spawn::<Probe>(Empty {}, ActorId::SYSTEM)
         .await
         .unwrap();
     let id = handle.id();
@@ -231,10 +231,10 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
     registry.register(probe);
-    let tasks = Tasks::new(storage, registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
-        .spawn::<Probe>(Empty {}, ActorId::from(1))
+        .spawn::<Probe>(Empty {}, ActorId::SYSTEM)
         .await
         .unwrap();
     let id = handle.id();
@@ -259,10 +259,10 @@ async fn child_inherits_parent_cancellation() {
     let mut registry = TaskRegistry::new();
     registry.register(probe);
     registry.register(parent);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
-        .spawn::<Parent>(Empty {}, ActorId::from(1))
+        .spawn::<Parent>(Empty {}, ActorId::SYSTEM)
         .await
         .unwrap();
     let parent_id = handle.id();
@@ -287,10 +287,10 @@ async fn panicking_task_settles_as_failed() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Boom);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
-        .spawn::<Boom>(Empty {}, ActorId::from(1))
+        .spawn::<Boom>(Empty {}, ActorId::SYSTEM)
         .await
         .unwrap();
     let id = handle.id();
@@ -313,10 +313,10 @@ async fn failed_task_records_full_error_chain() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Fail);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
-        .spawn::<Fail>(Empty {}, ActorId::from(1))
+        .spawn::<Fail>(Empty {}, ActorId::SYSTEM)
         .await
         .unwrap();
     let id = handle.id();
@@ -336,10 +336,10 @@ async fn cancel_distinguishes_unknown_from_settled() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
     registry.register(Double);
-    let tasks = Tasks::new(storage.clone(), registry);
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     // An unknown id is not found.
-    let unknown = TaskId::from(999);
+    let unknown = DbId::from(999);
     assert!(matches!(
         tasks.cancel(unknown).await,
         Err(TaskError::NotFound(id)) if id == unknown
@@ -347,7 +347,7 @@ async fn cancel_distinguishes_unknown_from_settled() {
 
     // A task that already finished is reported as settled, not unknown.
     let handle = tasks
-        .spawn::<Double>(DoubleIn { n: 1 }, ActorId::from(1))
+        .spawn::<Double>(DoubleIn { n: 1 }, ActorId::SYSTEM)
         .await
         .unwrap();
     let id = handle.id();
@@ -363,7 +363,13 @@ async fn reconcile_marks_orphaned_invocations() {
     let id = storage
         .tasks()
         .unwrap()
-        .create("double", None, ActorId::from(1), "{}", at(1_000))
+        .create(
+            "double",
+            None,
+            ActorId::SYSTEM,
+            &serde_json::json!({}),
+            at(1_000),
+        )
         .await
         .unwrap();
     storage
@@ -373,7 +379,7 @@ async fn reconcile_marks_orphaned_invocations() {
         .await
         .unwrap();
 
-    let tasks = Tasks::new(storage.clone(), TaskRegistry::new());
+    let tasks = Tasks::new(storage.tasks().unwrap(), TaskRegistry::new());
     assert_eq!(tasks.reconcile().await.unwrap(), 1);
 
     let recorded = storage.tasks().unwrap().get(id).await.unwrap().unwrap();

@@ -1,12 +1,6 @@
 //! Structured log storage: tracing spans and events persisted for querying.
 
-use std::fmt;
-use std::num::ParseIntError;
-use std::result::Result as StdResult;
-use std::str::FromStr;
-
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
 use turso::transaction::Transaction;
 use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
@@ -14,106 +8,9 @@ use uuid::Uuid;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
-use crate::page::{CursorValue, EscapeLike, Filters, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::query::{EscapeLike, Filters};
 use crate::sql::{Columns, ToSql, get};
-
-/// Primary key of a row in the log_spans table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
-pub struct SpanId(DbId);
-
-impl SpanId {
-    pub const fn get(self) -> i64 {
-        self.0.get()
-    }
-}
-
-impl From<i64> for SpanId {
-    fn from(value: i64) -> Self {
-        Self(DbId::from(value))
-    }
-}
-
-impl fmt::Display for SpanId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for SpanId {
-    type Err = ParseIntError;
-    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
-        s.parse::<i64>().map(|v| Self(DbId::from(v)))
-    }
-}
-
-impl Serialize for SpanId {
-    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for SpanId {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        DbId::deserialize(deserializer).map(Self)
-    }
-}
-
-/// Primary key of a row in the log_events table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
-pub struct EventId(DbId);
-
-impl EventId {
-    pub const fn get(self) -> i64 {
-        self.0.get()
-    }
-}
-
-impl From<i64> for EventId {
-    fn from(value: i64) -> Self {
-        Self(DbId::from(value))
-    }
-}
-
-impl fmt::Display for EventId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for EventId {
-    type Err = ParseIntError;
-    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
-        s.parse::<i64>().map(|v| Self(DbId::from(v)))
-    }
-}
-
-impl Serialize for EventId {
-    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for EventId {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        DbId::deserialize(deserializer).map(Self)
-    }
-}
 
 mod col {
     pub const BOOT_ID: &str = "boot_id";
@@ -132,7 +29,7 @@ mod col {
     pub const TIMESTAMP: &str = "timestamp";
 }
 
-/// Columns selected for an [`Event`], in [`row_to_event`] order.
+/// Columns selected for an [`Event`], in [`Event::try_from`] order.
 const EVENT_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::SPAN_ID,
@@ -146,7 +43,7 @@ const EVENT_COLUMNS: Columns = Columns::new(&[
     col::FIELDS,
 ]);
 
-/// Columns selected for a [`Span`], in [`row_to_span`] order.
+/// Columns selected for a [`Span`], in [`Span::try_from`] order.
 const SPAN_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::PARENT_ID,
@@ -226,11 +123,23 @@ impl Level {
     }
 }
 
+impl From<&tracing::Level> for Level {
+    fn from(level: &tracing::Level) -> Self {
+        match *level {
+            tracing::Level::TRACE => Self::Trace,
+            tracing::Level::DEBUG => Self::Debug,
+            tracing::Level::INFO => Self::Info,
+            tracing::Level::WARN => Self::Warn,
+            tracing::Level::ERROR => Self::Error,
+        }
+    }
+}
+
 /// A persisted tracing span.
 #[derive(Debug, Clone)]
 pub struct Span {
-    pub id: SpanId,
-    pub parent_id: Option<SpanId>,
+    pub id: DbId,
+    pub parent_id: Option<DbId>,
     pub name: String,
     pub level: Level,
     pub target: String,
@@ -244,9 +153,9 @@ pub struct Span {
 /// A persisted tracing event (log record).
 #[derive(Debug, Clone)]
 pub struct Event {
-    pub id: EventId,
+    pub id: DbId,
     pub boot_id: Uuid,
-    pub span_id: Option<SpanId>,
+    pub span_id: Option<DbId>,
     pub level: Level,
     pub target: String,
     pub message: Option<String>,
@@ -271,7 +180,7 @@ pub struct EventFilter {
     pub min_level: Option<Level>,
     pub target: Vec<String>,
     pub query: Option<String>,
-    pub span_id: Option<SpanId>,
+    pub span_id: Option<DbId>,
     pub boot_id: Option<Uuid>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
@@ -287,7 +196,7 @@ pub enum SpanParentFilter {
     /// Only root spans (parent_id IS NULL).
     RootOnly,
     /// Only direct children of the given span id.
-    ChildrenOf(SpanId),
+    ChildrenOf(DbId),
 }
 
 /// Filters for span queries.
@@ -397,10 +306,13 @@ impl LogRepository {
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
-        filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(|id| id.get()));
-        filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
-        filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_millisecond()));
+        filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(DbId::get));
+        filters.eq_text_opt(
+            col::BOOT_ID,
+            filter.boot_id.as_ref().map(Uuid::to_string).as_deref(),
+        );
+        filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_microsecond()));
+        filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_microsecond()));
 
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
@@ -425,11 +337,11 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_event(&row)?);
+            items.push(Event::try_from(&row)?);
         }
         Ok(paginator.finish(items, |event| {
             (
-                CursorValue::Int(event.timestamp.as_millisecond()),
+                CursorValue::Int(event.timestamp.as_microsecond()),
                 event.id.get(),
             )
         }))
@@ -492,9 +404,12 @@ impl LogRepository {
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
-        filters.eq_blob_opt(col::BOOT_ID, filter.boot_id.map(|u| u.as_bytes().to_vec()));
-        filters.gte_int_opt(col::STARTED_AT, filter.since.map(|ts| ts.as_millisecond()));
-        filters.lte_int_opt(col::STARTED_AT, filter.until.map(|ts| ts.as_millisecond()));
+        filters.eq_text_opt(
+            col::BOOT_ID,
+            filter.boot_id.as_ref().map(Uuid::to_string).as_deref(),
+        );
+        filters.gte_int_opt(col::STARTED_AT, filter.since.map(|ts| ts.as_microsecond()));
+        filters.lte_int_opt(col::STARTED_AT, filter.until.map(|ts| ts.as_microsecond()));
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
         }
@@ -515,11 +430,11 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_span(&row)?);
+            items.push(Span::try_from(&row)?);
         }
         Ok(paginator.finish(items, |span| {
             (
-                CursorValue::Int(span.started_at.as_millisecond()),
+                CursorValue::Int(span.started_at.as_microsecond()),
                 span.id.get(),
             )
         }))
@@ -527,7 +442,7 @@ impl LogRepository {
 
     /// Returns a single span by id, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get_span(&self, id: SpanId) -> Result<Option<Span>> {
+    pub async fn get_span(&self, id: DbId) -> Result<Option<Span>> {
         let sql = format!(
             sql!(SELECT {cols} FROM log_spans_resolved WHERE id = ?1),
             cols = SPAN_COLUMNS,
@@ -538,14 +453,14 @@ impl LogRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_span(&row)?)),
+            Some(row) => Ok(Some(Span::try_from(&row)?)),
             None => Ok(None),
         }
     }
 
     /// Returns all events belonging to `span_id`, ordered by timestamp.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn events_for_span(&self, span_id: SpanId) -> Result<Vec<Event>> {
+    pub async fn events_for_span(&self, span_id: DbId) -> Result<Vec<Event>> {
         let sql = format!(
             sql!(SELECT {cols} FROM log_events_resolved WHERE span_id = ?1 ORDER BY timestamp),
             cols = EVENT_COLUMNS,
@@ -557,7 +472,7 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_event(&row)?);
+            items.push(Event::try_from(&row)?);
         }
         Ok(items)
     }
@@ -568,7 +483,7 @@ impl LogRepository {
         self.connection
             .execute(
                 sql!(UPDATE log_spans SET ended_at = ?1 WHERE ended_at IS NULL),
-                params_from_iter([Value::Integer(ended_at.as_millisecond())]),
+                params_from_iter([Value::Integer(ended_at.as_microsecond())]),
             )
             .await
             .map_err(StorageError::from_turso)
@@ -577,19 +492,19 @@ impl LogRepository {
     /// Deletes events and finished spans older than `before`. Returns the
     /// number of deleted events.
     pub async fn prune_before(&self, before: Timestamp) -> Result<u64> {
-        let millis = before.as_millisecond();
+        let micros = before.as_microsecond();
         let event_count = self
             .connection
             .execute(
                 sql!(DELETE FROM log_events WHERE timestamp < ?1),
-                params_from_iter([Value::Integer(millis)]),
+                params_from_iter([Value::Integer(micros)]),
             )
             .await
             .map_err(StorageError::from_turso)?;
         self.connection
             .execute(
                 sql!(DELETE FROM log_spans WHERE ended_at IS NOT NULL AND ended_at < ?1),
-                params_from_iter([Value::Integer(millis)]),
+                params_from_iter([Value::Integer(micros)]),
             )
             .await
             .map_err(StorageError::from_turso)?;
@@ -752,32 +667,40 @@ impl<'conn> LogBatch<'conn> {
     }
 }
 
-fn row_to_event(row: &turso::Row) -> Result<Event> {
-    Ok(Event {
-        id: EVENT_COLUMNS.extract(row, col::ID)?,
-        span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
-        level: EVENT_COLUMNS.extract(row, col::LEVEL)?,
-        target: EVENT_COLUMNS.extract(row, col::TARGET)?,
-        message: EVENT_COLUMNS.extract(row, col::MESSAGE)?,
-        timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP)?,
-        file: EVENT_COLUMNS.extract(row, col::FILE)?,
-        line: EVENT_COLUMNS.extract(row, col::LINE)?,
-        boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID)?,
-        fields: EVENT_COLUMNS.extract(row, col::FIELDS)?,
-    })
+impl TryFrom<&turso::Row> for Event {
+    type Error = StorageError;
+
+    fn try_from(row: &turso::Row) -> Result<Self> {
+        Ok(Event {
+            id: EVENT_COLUMNS.extract(row, col::ID)?,
+            span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
+            level: EVENT_COLUMNS.extract(row, col::LEVEL)?,
+            target: EVENT_COLUMNS.extract(row, col::TARGET)?,
+            message: EVENT_COLUMNS.extract(row, col::MESSAGE)?,
+            timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP)?,
+            file: EVENT_COLUMNS.extract(row, col::FILE)?,
+            line: EVENT_COLUMNS.extract(row, col::LINE)?,
+            boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID)?,
+            fields: EVENT_COLUMNS.extract(row, col::FIELDS)?,
+        })
+    }
 }
 
-fn row_to_span(row: &turso::Row) -> Result<Span> {
-    Ok(Span {
-        id: SPAN_COLUMNS.extract(row, col::ID)?,
-        parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID)?,
-        name: SPAN_COLUMNS.extract(row, col::NAME)?,
-        level: SPAN_COLUMNS.extract(row, col::LEVEL)?,
-        target: SPAN_COLUMNS.extract(row, col::TARGET)?,
-        file: SPAN_COLUMNS.extract(row, col::FILE)?,
-        line: SPAN_COLUMNS.extract(row, col::LINE)?,
-        started_at: SPAN_COLUMNS.extract(row, col::STARTED_AT)?,
-        ended_at: SPAN_COLUMNS.extract(row, col::ENDED_AT)?,
-        fields: SPAN_COLUMNS.extract(row, col::FIELDS)?,
-    })
+impl TryFrom<&turso::Row> for Span {
+    type Error = StorageError;
+
+    fn try_from(row: &turso::Row) -> Result<Self> {
+        Ok(Span {
+            id: SPAN_COLUMNS.extract(row, col::ID)?,
+            parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID)?,
+            name: SPAN_COLUMNS.extract(row, col::NAME)?,
+            level: SPAN_COLUMNS.extract(row, col::LEVEL)?,
+            target: SPAN_COLUMNS.extract(row, col::TARGET)?,
+            file: SPAN_COLUMNS.extract(row, col::FILE)?,
+            line: SPAN_COLUMNS.extract(row, col::LINE)?,
+            started_at: SPAN_COLUMNS.extract(row, col::STARTED_AT)?,
+            ended_at: SPAN_COLUMNS.extract(row, col::ENDED_AT)?,
+            fields: SPAN_COLUMNS.extract(row, col::FIELDS)?,
+        })
+    }
 }

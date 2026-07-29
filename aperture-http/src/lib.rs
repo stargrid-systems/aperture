@@ -3,12 +3,11 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
-use aperture_storage::{LogRepository, Storage};
+use aperture_storage::Storage;
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use axum::{Json, Router};
-use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
@@ -19,45 +18,47 @@ use uuid::Uuid;
 
 use self::api::router as api_routes;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
+pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
-pub use self::spectra::{Spectra, SpectraConfig};
+pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
+pub use self::tls::{RotateCertificateDefinition, install_default_rotation_schedule};
 
 mod api;
 mod auth;
+mod conditional;
 mod dto;
 mod error;
+mod server;
 mod spectra;
+mod tls;
 
 /// Shared application state handed to every request handler.
 #[derive(Clone)]
 pub struct AppState {
     version: &'static str,
     boot_id: Uuid,
+    storage: Storage,
     spectra: Spectra,
     tasks: Tasks,
     auth: aperture_auth::AuthHandle,
-    storage: Storage,
-    tls_reload_tx: watch::Sender<bool>,
 }
 
 impl AppState {
     pub fn new(
         version: &'static str,
         boot_id: Uuid,
+        storage: Storage,
         spectra: Spectra,
         tasks: Tasks,
         auth: aperture_auth::AuthHandle,
-        storage: Storage,
-        tls_reload_tx: watch::Sender<bool>,
     ) -> Self {
         Self {
             version,
             boot_id,
+            storage,
             spectra,
             tasks,
             auth,
-            storage,
-            tls_reload_tx,
         }
     }
 
@@ -67,6 +68,10 @@ impl AppState {
 
     pub(crate) fn boot_id(&self) -> Uuid {
         self.boot_id
+    }
+
+    pub(crate) fn storage(&self) -> &Storage {
+        &self.storage
     }
 
     pub(crate) fn spectra(&self) -> &Spectra {
@@ -79,19 +84,6 @@ impl AppState {
 
     pub(crate) fn auth(&self) -> &aperture_auth::AuthHandle {
         &self.auth
-    }
-
-    pub(crate) fn storage(&self) -> &Storage {
-        &self.storage
-    }
-
-    pub(crate) fn tls_reload_tx(&self) -> &watch::Sender<bool> {
-        &self.tls_reload_tx
-    }
-
-    /// Returns the repository over the structured log tables for this request.
-    pub(crate) fn logs(&self) -> Result<LogRepository, aperture_storage::StorageError> {
-        self.storage.logs()
     }
 }
 
@@ -119,6 +111,11 @@ pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
 }
 
 /// Builds the full axum application.
+///
+/// The JSON API lives under `/api`. Everything else falls back to the Spectra
+/// frontend, which the state's [`Spectra`] serves and fetches on demand.
+/// A [`TraceLayer`] creates a span for each request so per-request tracing
+/// shows up in the log viewer.
 pub fn app(state: AppState) -> Router {
     let (api, mut doc) = self::api_router().split_for_parts();
     project_tasks(&mut doc, &state.tasks().registry().descriptors());
@@ -131,9 +128,11 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Projects the registered task kinds into the spec: it adds each kind's input
-/// and output component schemas, then a discriminated `CreateTaskInput` union
-/// over the per-kind create bodies, and points `POST /tasks` at it.
+/// Projects registered task kinds into the OpenAPI spec.
+///
+/// Adds each kind's input/output component schemas, builds a discriminated
+/// `CreateTaskInput` one-of over the per-kind create bodies, and points
+/// `POST /tasks` at it.
 fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
     if descriptors.is_empty() {
         return;

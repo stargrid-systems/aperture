@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use aperture_storage::{ActorId, TaskId};
+use aperture_storage::{ActorId, DbId};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -16,7 +16,7 @@ use crate::tasks::{TaskHandle, TasksInner};
 /// under itself.
 #[derive(Clone)]
 pub struct TaskContext {
-    id: TaskId,
+    id: DbId,
     initiator: ActorId,
     inner: Arc<TasksInner>,
     cancel: CancellationToken,
@@ -25,7 +25,7 @@ pub struct TaskContext {
 
 impl TaskContext {
     pub(crate) fn new(
-        id: TaskId,
+        id: DbId,
         initiator: ActorId,
         inner: Arc<TasksInner>,
         cancel: CancellationToken,
@@ -41,7 +41,7 @@ impl TaskContext {
     }
 
     /// The id of the invocation this body is running.
-    pub fn id(&self) -> TaskId {
+    pub fn id(&self) -> DbId {
         self.id
     }
 

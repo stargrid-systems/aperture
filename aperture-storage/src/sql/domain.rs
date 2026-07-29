@@ -4,19 +4,27 @@ use uuid::Uuid;
 
 use super::{FromSql, ToSql};
 use crate::{
-    ActorId, ActorKind, ApiKeyId, ArtifactId, DbId, EventId, Level, Result, SessionId, SpanId,
-    StorageError, TaskId, TaskStatus, UserId,
+    ActorId, ActorKind, ApiKeyId, DbId, Level, Result, SessionId, StorageError, TaskStatus, UserId,
 };
 
 impl ToSql for Uuid {
     fn to_sql(&self) -> Value {
-        Value::Blob(self.as_bytes().to_vec())
+        // Unfortunately we can't yet send the UUID directly as 16 bytes.
+        // See: <https://github.com/tursodatabase/turso/issues/6221>.
+        Value::Text(self.to_string())
     }
 }
 
 impl FromSql for Uuid {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
+            Value::Text(raw) => {
+                Uuid::parse_str(&raw).map_err(|_| StorageError::ColumnTypeMismatch {
+                    column: idx,
+                    expected: "uuid",
+                    actual: Value::Text(raw),
+                })
+            }
             Value::Blob(bytes) => {
                 Uuid::from_slice(&bytes).map_err(|_| StorageError::ColumnTypeMismatch {
                     column: idx,
@@ -26,7 +34,7 @@ impl FromSql for Uuid {
             }
             actual => Err(StorageError::ColumnTypeMismatch {
                 column: idx,
-                expected: "uuid blob",
+                expected: "uuid",
                 actual,
             }),
         }
@@ -35,15 +43,15 @@ impl FromSql for Uuid {
 
 impl ToSql for Timestamp {
     fn to_sql(&self) -> Value {
-        Value::Integer(self.as_millisecond())
+        Value::Integer(self.as_microsecond())
     }
 }
 
 impl FromSql for Timestamp {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
-            Value::Integer(millis) => Timestamp::from_millisecond(millis)
-                .map_err(|_| StorageError::InvalidTimestamp { millis }),
+            Value::Integer(micros) => Timestamp::from_microsecond(micros)
+                .map_err(|_| StorageError::InvalidTimestamp { micros }),
             actual => Err(StorageError::ColumnTypeMismatch {
                 column: idx,
                 expected: "integer",
@@ -108,54 +116,6 @@ impl ToSql for ApiKeyId {
 }
 
 impl FromSql for ApiKeyId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for TaskId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for TaskId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for ArtifactId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for ArtifactId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for SpanId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for SpanId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for EventId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for EventId {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         i64::from_sql(value, idx).map(Self::from)
     }

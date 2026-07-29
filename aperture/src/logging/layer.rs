@@ -10,13 +10,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use aperture_runtime::{Stop, Worker};
 use aperture_storage::{EventRecord, Level, LogRepository, SpanRecord};
 use jiff::Timestamp;
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tokio::time::{MissedTickBehavior, interval, timeout};
+use tokio::sync::mpsc;
+use tokio::time::{MissedTickBehavior, interval};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId, Record as TracingRecord};
-use tracing::{Event, Level as TracingLevel, Subscriber};
+use tracing::{Event, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
@@ -30,7 +30,7 @@ mod collector;
 const CHANNEL_CAPACITY: usize = 4096;
 
 /// How long the background writer waits for more records before flushing.
-const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
+const FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Maximum records to batch before flushing.
 const FLUSH_BATCH: usize = 128;
@@ -91,67 +91,91 @@ pub struct DbLogLayer {
     dropped: Arc<AtomicU64>,
 }
 
-/// Handle to the background writer task. Keep it alive for as long as the
-/// layer is active. Call [`shutdown`](Self::shutdown) for a clean flush
-/// before the process exits.
-///
-/// If this handle is dropped without calling `shutdown`, the writer task is
-/// aborted immediately and pending records may be lost.
-pub struct WorkerHandle {
-    join: Option<JoinHandle<()>>,
-    shutdown: Option<oneshot::Sender<()>>,
+/// The receiving end of a [`DbLogLayer`]'s channel, held until a
+/// [`LogRepository`] is available.
+pub struct DeferredLogWorker {
+    rx: mpsc::Receiver<Record>,
+    dropped: Arc<AtomicU64>,
 }
 
-impl WorkerHandle {
-    /// Signals the writer to drain remaining records, flush to the database,
-    /// and exit. Waits up to 5 seconds for a clean exit, then aborts.
-    pub async fn shutdown(mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
-        }
-        if let Some(join) = self.join.take()
-            && timeout(Duration::from_secs(5), join).await.is_err()
-        {
-            tracing::warn!("log writer did not shut down within 5s");
+impl DeferredLogWorker {
+    pub fn connect(self, repo: LogRepository, boot_id: Uuid) -> LogWorker {
+        LogWorker {
+            rx: self.rx,
+            repo,
+            dropped: self.dropped,
+            boot_id,
         }
     }
 }
 
-impl Drop for WorkerHandle {
-    fn drop(&mut self) {
-        if let Some(join) = self.join.take() {
-            join.abort();
+/// Drains the layer's channel and batch-inserts records into the database.
+/// Produced by [`DeferredLogWorker::connect`]. Drive it via a [`Supervisor`]
+/// so it shuts down alongside the rest of the gateway.
+///
+/// [`Supervisor`]: aperture_runtime::Supervisor
+pub struct LogWorker {
+    rx: mpsc::Receiver<Record>,
+    repo: LogRepository,
+    dropped: Arc<AtomicU64>,
+    boot_id: Uuid,
+}
+
+impl Worker for LogWorker {
+    async fn run(mut self, stop: Stop) {
+        let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
+        let mut interval = interval(FLUSH_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                biased;
+                () = stop.cancelled() => {
+                    while let Ok(record) = self.rx.try_recv() {
+                        batch.push(record);
+                    }
+                    flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                    close_remaining_spans(&self.repo).await;
+                    break;
+                }
+                maybe_record = self.rx.recv() => {
+                    match maybe_record {
+                        Some(record) => batch.push(record),
+                        None => {
+                            flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                            close_remaining_spans(&self.repo).await;
+                            break;
+                        }
+                    }
+                    if batch.len() >= FLUSH_BATCH {
+                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                    }
+                }
+                _ = interval.tick() => {
+                    if !batch.is_empty() {
+                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                    }
+                }
+            }
         }
     }
 }
 
 impl DbLogLayer {
-    /// Creates the layer and a channel receiver for testing. The receiver
-    /// gets all records the layer produces.
-    fn channel() -> (Self, mpsc::Receiver<Record>) {
+    /// Creates the layer and the matching deferred worker.
+    ///
+    /// The layer can be installed in the tracing subscriber immediately;
+    /// records buffer in the channel until [`DeferredLogWorker::connect`]
+    /// produces a runnable [`LogWorker`].
+    pub fn new() -> (Self, DeferredLogWorker) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let dropped = Arc::new(AtomicU64::new(0));
-        (Self { tx, dropped }, rx)
-    }
-
-    /// Creates the layer and spawns the background writer task.
-    ///
-    /// Returns the layer and a [`WorkerHandle`] for clean shutdown. The handle
-    /// should be kept alive for the lifetime of the application. Call
-    /// [`WorkerHandle::shutdown`] before exiting to flush pending records.
-    pub fn spawn(repo: LogRepository, boot_id: Uuid) -> (Self, WorkerHandle) {
-        let (layer, rx) = Self::channel();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let dropped_clone = Arc::clone(&layer.dropped);
-
-        let join = tokio::spawn(writer_task(repo, rx, dropped_clone, shutdown_rx, boot_id));
-
-        let handle = WorkerHandle {
-            join: Some(join),
-            shutdown: Some(shutdown_tx),
+        let layer = Self {
+            tx,
+            dropped: Arc::clone(&dropped),
         };
-
-        (layer, handle)
+        let deferred = DeferredLogWorker { rx, dropped };
+        (layer, deferred)
     }
 
     fn try_send(&self, record: Record) {
@@ -188,7 +212,7 @@ where
             tracing_id,
             parent_tracing_id,
             name: meta.name().to_owned(),
-            level: tracing_to_db_level(meta.level()),
+            level: Level::from(meta.level()),
             target: meta.target().to_owned(),
             file: meta.file().map(str::to_owned),
             line: meta.line(),
@@ -225,7 +249,7 @@ where
 
         self.try_send(Record::Event(EventMsg {
             span_tracing_id,
-            level: tracing_to_db_level(meta.level()),
+            level: Level::from(meta.level()),
             target,
             message: visitor.take_message(),
             timestamp: Timestamp::now(),
@@ -264,51 +288,6 @@ where
             tracing_id: id.into_u64(),
             fields,
         }));
-    }
-}
-
-/// Background writer task: drains the channel and batch-inserts records.
-async fn writer_task(
-    repo: LogRepository,
-    mut rx: mpsc::Receiver<Record>,
-    dropped: Arc<AtomicU64>,
-    mut shutdown: oneshot::Receiver<()>,
-    boot_id: Uuid,
-) {
-    let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
-    let mut interval = interval(FLUSH_INTERVAL);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! {
-            biased;
-            _ = &mut shutdown => {
-                while let Ok(record) = rx.try_recv() {
-                    batch.push(record);
-                }
-                flush(&repo, &mut batch, &dropped, boot_id).await;
-                close_remaining_spans(&repo).await;
-                break;
-            }
-            maybe_record = rx.recv() => {
-                match maybe_record {
-                    Some(record) => batch.push(record),
-                    None => {
-                        flush(&repo, &mut batch, &dropped, boot_id).await;
-                        close_remaining_spans(&repo).await;
-                        break;
-                    }
-                }
-                if batch.len() >= FLUSH_BATCH {
-                    flush(&repo, &mut batch, &dropped, boot_id).await;
-                }
-            }
-            _ = interval.tick() => {
-                if !batch.is_empty() {
-                    flush(&repo, &mut batch, &dropped, boot_id).await;
-                }
-            }
-        }
     }
 }
 
@@ -357,11 +336,16 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
             return;
         }
     };
-    for record in batch.drain(..) {
-        match record {
-            Record::SpanStart(s) => {
-                let _ = tx
-                    .insert_span(SpanRecord {
+    // Any insert error poisons the transaction. Fail fast so we do not waste
+    // time on doomed follow-up inserts. The dropped count is loaded once here
+    // and returned so the subtraction after commit uses the exact value we
+    // recorded. Reloading after the await would race with `try_send` failures
+    // and subtract drops that were never persisted.
+    let insert_outcome: Result<u64, aperture_storage::StorageError> = async {
+        for record in batch.drain(..) {
+            match record {
+                Record::SpanStart(s) => {
+                    tx.insert_span(SpanRecord {
                         tracing_id: s.tracing_id,
                         parent_tracing_id: s.parent_tracing_id,
                         boot_id,
@@ -373,19 +357,17 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         started_at: s.started_at,
                         fields: &s.fields,
                     })
-                    .await;
-            }
-            Record::SpanFields(f) => {
-                let _ = tx
-                    .update_span_fields(f.tracing_id, boot_id, &f.fields)
-                    .await;
-            }
-            Record::SpanEnd(s) => {
-                let _ = tx.close_span(s.tracing_id, boot_id, s.ended_at).await;
-            }
-            Record::Event(e) => {
-                let _ = tx
-                    .insert_event(EventRecord {
+                    .await?;
+                }
+                Record::SpanFields(f) => {
+                    tx.update_span_fields(f.tracing_id, boot_id, &f.fields)
+                        .await?;
+                }
+                Record::SpanEnd(s) => {
+                    tx.close_span(s.tracing_id, boot_id, s.ended_at).await?;
+                }
+                Record::Event(e) => {
+                    tx.insert_event(EventRecord {
                         span_tracing_id: e.span_tracing_id,
                         level: e.level,
                         target: &e.target,
@@ -396,14 +378,31 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                         boot_id,
                         fields: &e.fields,
                     })
-                    .await;
+                    .await?;
+                }
             }
         }
+        let count = dropped.load(Ordering::Relaxed);
+        if count > 0 {
+            tx.record_dropped(count, Timestamp::now(), boot_id).await?;
+        }
+        Ok(count)
     }
-    let count = dropped.load(Ordering::Relaxed);
-    if count > 0 {
-        let _ = tx.record_dropped(count, Timestamp::now(), boot_id).await;
-    }
+    .await;
+
+    let count = match insert_outcome {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::warn!(
+                error = &err as &dyn StdError,
+                "log batch insert failed, rolling back"
+            );
+            // The records we tried to flush are lost. The caller already drained
+            // them out of `batch`, so the only recovery is to drop the tx.
+            return;
+        }
+    };
+
     match tx.commit().await {
         Ok(()) => {
             if count > 0 {
@@ -428,17 +427,6 @@ async fn close_remaining_spans(repo: &LogRepository) {
     }
 }
 
-/// Maps a `tracing::Level` to the storage `Level`.
-fn tracing_to_db_level(level: &TracingLevel) -> Level {
-    match *level {
-        TracingLevel::TRACE => Level::Trace,
-        TracingLevel::DEBUG => Level::Debug,
-        TracingLevel::INFO => Level::Info,
-        TracingLevel::WARN => Level::Warn,
-        TracingLevel::ERROR => Level::Error,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use tracing::Dispatch;
@@ -451,7 +439,8 @@ mod tests {
     /// the DB engine emits events, those events would fill the channel.
     #[test]
     fn flush_span_filters_events_and_child_spans() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
@@ -506,7 +495,8 @@ mod tests {
     /// Events emitted outside any flush span are captured normally.
     #[test]
     fn normal_events_are_captured() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
@@ -525,7 +515,8 @@ mod tests {
     /// A span created within another span must record the parent's tracing id.
     #[test]
     fn parent_child_span_relationship() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -561,7 +552,8 @@ mod tests {
     /// A root span (no parent entered) must have `parent_tracing_id = None`.
     #[test]
     fn root_span_has_no_parent() {
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -585,7 +577,8 @@ mod tests {
     fn late_span_fields_are_captured() {
         use tracing::field;
 
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 
@@ -642,7 +635,8 @@ mod tests {
     fn empty_only_span_produces_null_fields() {
         use tracing::field;
 
-        let (layer, mut rx) = DbLogLayer::channel();
+        let (layer, deferred) = DbLogLayer::new();
+        let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = Dispatch::new(subscriber).set_default();
 

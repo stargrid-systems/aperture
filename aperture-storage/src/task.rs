@@ -2,74 +2,23 @@
 //!
 //! One row per invocation, identified by a surrogate `id`. The row holds the
 //! invocation's kind, its place in any parent/child hierarchy, its lifecycle
-//! status, and its JSON-encoded input and output. The input and output payloads
-//! are opaque here. The task layer owns their shapes and (de)serialization, so
-//! storage stays a plain record of what ran.
+//! status, and its JSON input and output objects. The shapes of those objects
+//! are opaque here. The task layer owns them and (de)serialization, so storage
+//! stays a plain record of what ran.
 
-use std::fmt;
-use std::num::ParseIntError;
 use std::result::Result as StdResult;
-use std::str::FromStr;
 
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use turso::{Connection, Row, params_from_iter};
 
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::id::DbId;
 use crate::macros::sql;
-use crate::page::{CursorValue, Filters, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::query::Filters;
 use crate::sql::{Columns, ToSql};
-
-/// Primary key of a row in the `tasks` table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
-pub struct TaskId(DbId);
-
-impl TaskId {
-    pub const fn get(self) -> i64 {
-        self.0.get()
-    }
-}
-
-impl From<i64> for TaskId {
-    fn from(value: i64) -> Self {
-        Self(DbId::from(value))
-    }
-}
-
-impl fmt::Display for TaskId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for TaskId {
-    type Err = ParseIntError;
-    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
-        s.parse::<i64>().map(|v| Self(DbId::from(v)))
-    }
-}
-
-impl Serialize for TaskId {
-    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for TaskId {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        DbId::deserialize(deserializer).map(Self)
-    }
-}
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
@@ -85,7 +34,8 @@ mod col {
     pub const STATUS: &str = "status";
 }
 
-/// Columns selected for a [`TaskInvocation`], in [`row_to_task`] order.
+/// Columns selected for a [`TaskInvocation`], in [`TaskInvocation::try_from`]
+/// order.
 const TASK_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KIND,
@@ -156,19 +106,19 @@ impl TaskStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskInvocation {
     /// Store-assigned id.
-    pub id: TaskId,
+    pub id: DbId,
     /// The kind of task, matching a registered definition.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<TaskId>,
+    pub parent_id: Option<DbId>,
     /// The actor that initiated this task. Child tasks inherit the parent's.
     pub initiator_id: ActorId,
     /// The lifecycle state.
     pub status: TaskStatus,
-    /// JSON-encoded input the task was created with.
-    pub input: String,
-    /// JSON-encoded output, set once the task succeeds.
-    pub output: Option<String>,
+    /// JSON value passed to the task at spawn.
+    pub input: Value,
+    /// JSON value returned by the task on success.
+    pub output: Option<Value>,
     /// Failure detail, if any.
     pub error: Option<String>,
     /// When the invocation was recorded.
@@ -303,7 +253,7 @@ pub enum ParentFilter {
     /// Only top-level invocations, with no parent.
     Root,
     /// Only the children of one invocation.
-    Of(TaskId),
+    Of(DbId),
 }
 
 /// Repository over the task catalog.
@@ -317,16 +267,16 @@ impl TaskRepository {
     }
 
     /// Records a new invocation in the [`TaskStatus::Pending`] state and
-    /// returns its assigned id. `input` is the JSON-encoded task input.
+    /// returns its assigned id. `input` is the task's input value.
     #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create(
         &self,
         kind: &str,
-        parent_id: Option<TaskId>,
+        parent_id: Option<DbId>,
         initiator_id: ActorId,
-        input: &str,
+        input: &Value,
         created_at: Timestamp,
-    ) -> Result<TaskId> {
+    ) -> Result<DbId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
@@ -345,7 +295,7 @@ impl TaskRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(TaskId::from(self.connection.last_insert_rowid()))
+        Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
     /// Records a new invocation already in the [`TaskStatus::Running`] state
@@ -356,11 +306,11 @@ impl TaskRepository {
     pub async fn create_running(
         &self,
         kind: &str,
-        parent_id: Option<TaskId>,
+        parent_id: Option<DbId>,
         initiator_id: ActorId,
-        input: &str,
+        input: &Value,
         started_at: Timestamp,
-    ) -> Result<TaskId> {
+    ) -> Result<DbId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
@@ -380,12 +330,12 @@ impl TaskRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(TaskId::from(self.connection.last_insert_rowid()))
+        Ok(DbId::from(self.connection.last_insert_rowid()))
     }
 
     /// Marks the invocation with `id` as running.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn mark_running(&self, id: TaskId, started_at: Timestamp) -> Result<()> {
+    pub async fn mark_running(&self, id: DbId, started_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
                 sql!(UPDATE tasks SET status = ?1, started_at = ?2 WHERE id = ?3),
@@ -401,7 +351,7 @@ impl TaskRepository {
     }
 
     /// Records the terminal outcome of the invocation with `id`. `output` is
-    /// the JSON-encoded result on success, `error` the detail on failure.
+    /// the task's output value on success, `error` the detail on failure.
     ///
     /// Only an unfinished row is updated. A row that already reached a terminal
     /// state keeps it, so a late interrupt during shutdown cannot clobber a
@@ -409,10 +359,10 @@ impl TaskRepository {
     #[tracing::instrument(level = "info", skip(self, output, error))]
     pub async fn finish(
         &self,
-        id: TaskId,
+        id: DbId,
         status: TaskStatus,
         finished_at: Timestamp,
-        output: Option<&str>,
+        output: Option<&Value>,
         error: Option<&str>,
     ) -> Result<()> {
         self.connection
@@ -437,7 +387,7 @@ impl TaskRepository {
 
     /// Returns the invocation with `id`, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: TaskId) -> Result<Option<TaskInvocation>> {
+    pub async fn get(&self, id: DbId) -> Result<Option<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE id = ?1),
             cols = TASK_COLUMNS
@@ -448,7 +398,7 @@ impl TaskRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_task(&row)?)),
+            Some(row) => Ok(Some(TaskInvocation::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -508,7 +458,7 @@ impl TaskRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(row_to_task(&row)?);
+            items.push(TaskInvocation::try_from(&row)?);
         }
         Ok(paginator.finish(items, |task| {
             (CursorValue::Int(task.id.get()), task.id.get())
@@ -517,7 +467,7 @@ impl TaskRepository {
 
     /// Lists the children of `parent_id`, oldest first.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn children(&self, parent_id: TaskId) -> Result<Vec<TaskInvocation>> {
+    pub async fn children(&self, parent_id: DbId) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE parent_id = ?1 ORDER BY id),
             cols = TASK_COLUMNS,
@@ -529,7 +479,7 @@ impl TaskRepository {
             .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            tasks.push(row_to_task(&row)?);
+            tasks.push(TaskInvocation::try_from(&row)?);
         }
         Ok(tasks)
     }
@@ -552,7 +502,7 @@ impl TaskRepository {
             .map_err(StorageError::from_turso)?;
         let mut tasks = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            tasks.push(row_to_task(&row)?);
+            tasks.push(TaskInvocation::try_from(&row)?);
         }
         Ok(tasks)
     }
@@ -562,20 +512,24 @@ fn db_values(statuses: &[TaskStatus]) -> Vec<&'static str> {
     statuses.iter().map(|status| status.as_db()).collect()
 }
 
-fn row_to_task(row: &Row) -> Result<TaskInvocation> {
-    Ok(TaskInvocation {
-        id: TASK_COLUMNS.extract(row, col::ID)?,
-        kind: TASK_COLUMNS.extract(row, col::KIND)?,
-        parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
-        initiator_id: TASK_COLUMNS.extract(row, col::INITIATOR_ID)?,
-        status: TASK_COLUMNS.extract(row, col::STATUS)?,
-        input: TASK_COLUMNS.extract(row, col::INPUT)?,
-        output: TASK_COLUMNS.extract(row, col::OUTPUT)?,
-        error: TASK_COLUMNS.extract(row, col::ERROR)?,
-        created_at: TASK_COLUMNS.extract(row, col::CREATED_AT)?,
-        started_at: TASK_COLUMNS.extract(row, col::STARTED_AT)?,
-        finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT)?,
-    })
+impl TryFrom<&Row> for TaskInvocation {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(TaskInvocation {
+            id: TASK_COLUMNS.extract(row, col::ID)?,
+            kind: TASK_COLUMNS.extract(row, col::KIND)?,
+            parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
+            initiator_id: TASK_COLUMNS.extract(row, col::INITIATOR_ID)?,
+            status: TASK_COLUMNS.extract(row, col::STATUS)?,
+            input: TASK_COLUMNS.extract(row, col::INPUT)?,
+            output: TASK_COLUMNS.extract(row, col::OUTPUT)?,
+            error: TASK_COLUMNS.extract(row, col::ERROR)?,
+            created_at: TASK_COLUMNS.extract(row, col::CREATED_AT)?,
+            started_at: TASK_COLUMNS.extract(row, col::STARTED_AT)?,
+            finished_at: TASK_COLUMNS.extract(row, col::FINISHED_AT)?,
+        })
+    }
 }
 
 #[cfg(test)]

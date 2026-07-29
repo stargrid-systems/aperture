@@ -10,7 +10,7 @@
 //! refreshes itself until the real interface is ready.
 
 pub use self::config::SpectraConfig;
-pub use self::manager::Spectra;
+pub use self::manager::{Spectra, SpectraWorker};
 pub(crate) use self::serve::fallback;
 
 mod config;

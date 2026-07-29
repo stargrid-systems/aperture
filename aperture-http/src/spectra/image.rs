@@ -6,20 +6,22 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::http::HeaderValue;
+use aperture_storage::Digest;
 use backhand::{FilesystemReader, InnerNode, SquashfsFileReader};
 use mime_guess::Mime;
 use tokio::task::spawn_blocking;
+
+use crate::conditional::Etag;
 
 /// An opened squashfs image plus the index of files it holds.
 pub(super) struct SpectraImage {
     pub(super) fs: Arc<FilesystemReader<'static>>,
     files: HashMap<String, SquashfsFileReader>,
-    pub(super) etag: HeaderValue,
+    pub(super) etag: Etag,
 }
 
 impl SpectraImage {
-    pub(super) fn open(path: &Path, digest: &str) -> anyhow::Result<Self> {
+    pub(super) fn open(path: &Path, digest: &Digest) -> anyhow::Result<Self> {
         let reader = BufReader::new(File::open(path)?);
         let fs = FilesystemReader::from_reader(reader)?;
         let files = fs
@@ -32,8 +34,7 @@ impl SpectraImage {
                 }
             })
             .collect();
-        let etag = HeaderValue::from_str(&format!("\"{digest}\""))
-            .unwrap_or_else(|_| HeaderValue::from_static("\"spectra\""));
+        let etag = Etag::from_digest(digest);
         Ok(Self {
             fs: Arc::new(fs),
             files,
@@ -97,7 +98,7 @@ pub(super) struct Resolved {
 }
 
 /// Opens the squashfs at `path` off the async runtime.
-pub(super) async fn open_image(path: PathBuf, digest: String) -> anyhow::Result<SpectraImage> {
+pub(super) async fn open_image(path: PathBuf, digest: Digest) -> anyhow::Result<SpectraImage> {
     let image = spawn_blocking(move || SpectraImage::open(&path, &digest)).await??;
     if image.is_empty() {
         tracing::warn!("spectra image has no servable files; check how it was packed");
@@ -112,7 +113,7 @@ mod tests {
     const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/site.sqfs");
 
     fn image() -> SpectraImage {
-        SpectraImage::open(Path::new(FIXTURE), "sha256:test").unwrap()
+        SpectraImage::open(Path::new(FIXTURE), &"sha256:abcd".parse().unwrap()).unwrap()
     }
 
     #[test]

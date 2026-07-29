@@ -9,27 +9,32 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
-use aperture_storage::{Artifact, ArtifactId, ArtifactKey, ListQuery, Page, Storage, VersionSort};
+use aperture_storage::{
+    Artifact, ArtifactKey, ArtifactKeyEntry, DbId, Digest, ListQuery, MediaType, Page, Storage,
+    VersionSort,
+};
 use aperture_tasks::ProgressHandle;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use oci_client::Reference;
 use tokio::fs;
 use tokio::io::AsyncRead;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
 use crate::blob::BlobStore;
-use crate::digest::Digest;
+use crate::change::{ArtifactChange, ChangeKind};
 use crate::error::{ArtifactError, Result};
 use crate::fetch::{FetchMeta, Fetched, OciFetcher, Resolved};
 use crate::hash_writer::HashWriter;
-use crate::media_type::MediaType;
 use crate::progress::ProgressWriter;
+
+/// Capacity of the in-process change feed.
+const CHANGE_FEED_CAPACITY: usize = 64;
 
 /// How long a resolved reference stays cached before it is re-checked against
 /// the registry.
-const RESOLUTION_TTL_MS: i64 = 5 * 60 * 1000;
+const RESOLUTION_TTL: SignedDuration = SignedDuration::from_mins(5);
 
-/// What a [`Artifacts::sync`] run removed.
+/// What an [`Artifacts::sync`] run removed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SyncReport {
     /// Blobs on disk that no catalog entry referenced.
@@ -51,7 +56,7 @@ pub struct Located {
 #[derive(Debug, Clone)]
 pub struct FetchRequest {
     /// Logical key to record the artifact under.
-    pub key: String,
+    pub key: ArtifactKey,
     /// Where and how to fetch it from.
     pub source: FetchSource,
 }
@@ -108,16 +113,19 @@ struct Inner {
     blobs: BlobStore,
     oci: OciFetcher,
     /// Recent reference resolutions, so repeated downloads skip the manifest
-    /// lookup for up to [`RESOLUTION_TTL_MS`].
+    /// lookup for up to [`RESOLUTION_TTL`].
     resolutions: Mutex<HashMap<String, CachedResolution>>,
     /// One lock per content digest, so concurrent downloads of the same content
     /// collapse onto a single transfer instead of each pulling it.
     pull_locks: Mutex<HashMap<Digest, Weak<AsyncMutex<()>>>>,
+    /// Best-effort feed of artifact changes. See [`ArtifactChange`].
+    changes: broadcast::Sender<ArtifactChange>,
 }
 
 impl Artifacts {
     /// Creates a store backed by `storage`, keeping blobs under `store_root`.
     pub fn new(storage: Storage, store_root: PathBuf) -> Self {
+        let (changes, _) = broadcast::channel(CHANGE_FEED_CAPACITY);
         Self {
             inner: Arc::new(Inner {
                 storage,
@@ -125,18 +133,28 @@ impl Artifacts {
                 oci: OciFetcher::new(),
                 resolutions: Mutex::new(HashMap::new()),
                 pull_locks: Mutex::new(HashMap::new()),
+                changes,
             }),
         }
     }
 
+    /// Subscribes to artifact changes.
+    pub fn subscribe(&self) -> broadcast::Receiver<ArtifactChange> {
+        self.inner.changes.subscribe()
+    }
+
     /// Returns the blob of the newest stored version of `key`, if present on
     /// disk.
-    pub async fn locate(&self, key: &str) -> Result<Option<Located>> {
+    pub async fn locate(&self, key: &ArtifactKey) -> Result<Option<Located>> {
         self.inner.locate(key).await
     }
 
     /// Returns the blob of the `(key, digest)` version, if present on disk.
-    pub async fn locate_version(&self, key: &str, digest: &str) -> Result<Option<Located>> {
+    pub async fn locate_version(
+        &self,
+        key: &ArtifactKey,
+        digest: &Digest,
+    ) -> Result<Option<Located>> {
         self.inner.locate_version(key, digest).await
     }
 
@@ -146,12 +164,12 @@ impl Artifacts {
         &self,
         q: Option<&str>,
         query: &ListQuery,
-    ) -> Result<Page<ArtifactKey>> {
+    ) -> Result<Page<ArtifactKeyEntry>> {
         Ok(self.inner.storage.artifacts()?.list_keys(q, query).await?)
     }
 
     /// Returns one artifact key with its newest version and version count.
-    pub async fn artifact(&self, key: &str) -> Result<Option<ArtifactKey>> {
+    pub async fn artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactKeyEntry>> {
         Ok(self.inner.storage.artifacts()?.get_key(key).await?)
     }
 
@@ -159,9 +177,9 @@ impl Artifacts {
     /// `media_type` and `version`.
     pub async fn list_versions(
         &self,
-        key: &str,
+        key: &ArtifactKey,
         sort: VersionSort,
-        media_type: Option<&str>,
+        media_type: Option<&MediaType>,
         version: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Artifact>> {
@@ -174,7 +192,7 @@ impl Artifacts {
     }
 
     /// Returns the `(key, digest)` version, if stored.
-    pub async fn version(&self, key: &str, digest: &str) -> Result<Option<Artifact>> {
+    pub async fn version(&self, key: &ArtifactKey, digest: &Digest) -> Result<Option<Artifact>> {
         Ok(self
             .inner
             .storage
@@ -185,24 +203,44 @@ impl Artifacts {
 
     /// Removes the `(key, digest)` version, and its blob if no other version
     /// references it. Returns whether the version existed.
-    pub async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
-        self.inner.evict_version(key, digest).await
+    pub async fn evict_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<bool> {
+        let removed = self.inner.evict_version(key, digest).await?;
+        if removed {
+            self.inner.notify(ArtifactChange {
+                key: key.clone(),
+                kind: ChangeKind::Removed,
+                digest: None,
+            });
+        }
+        Ok(removed)
     }
 
     /// Stores `reader` as a content-addressed blob and records it under `key`.
-    /// Returns the stored version.
-    pub async fn put<R>(&self, key: &str, media_type: Option<&str>, reader: R) -> Result<Artifact>
+    ///
+    /// Returns the stored version. The `digest` field of the returned artifact
+    /// is always a valid `Digest` (i.e. `artifact.digest.parse::<Digest>()`
+    /// succeeds). The same guarantee holds for any `Artifact` read back from
+    /// the catalog.
+    ///
+    /// `media_type` is stored verbatim. Callers must validate upstream if they
+    /// need to reject invalid values.
+    pub async fn put<R>(
+        &self,
+        key: &ArtifactKey,
+        media_type: Option<&MediaType>,
+        reader: R,
+    ) -> Result<Artifact>
     where
         R: AsyncRead + Unpin,
     {
         let (digest, size) = self.inner.blobs.put(reader).await?;
         let now = Timestamp::now();
         let artifact = Artifact {
-            id: ArtifactId::from(0),
-            key: key.to_owned(),
+            id: DbId::from(0),
+            key: key.clone(),
             source: "upload".to_owned(),
-            digest: digest.to_string(),
-            media_type: media_type.map(|s| s.to_owned()),
+            digest: digest.clone(),
+            media_type: media_type.cloned(),
             version: None,
             size_bytes: size,
             downloaded_at: now,
@@ -213,58 +251,80 @@ impl Artifacts {
             .artifacts()?
             .record_version(&artifact)
             .await?;
+        self.inner.notify(ArtifactChange {
+            key: key.clone(),
+            kind: ChangeKind::Written,
+            digest: Some(digest.clone()),
+        });
         Ok(artifact)
     }
 
     /// Ensures the artifact in `request` is present, downloading it if needed,
-    /// and returns the stored version. If the newest version is already on disk
-    /// it is returned without fetching. Transferred bytes are reported into
-    /// `progress`.
+    /// and returns the stored version.
+    ///
+    /// If the newest version is already on disk it is returned without
+    /// fetching. Transferred bytes are reported into `progress`.
     pub async fn download(
         &self,
         request: FetchRequest,
         progress: ProgressHandle,
     ) -> Result<Artifact> {
-        self.inner.download(&request, &progress).await
+        let (artifact, written) = self.inner.download(&request, &progress).await?;
+        if written {
+            self.inner.notify(ArtifactChange {
+                key: artifact.key.clone(),
+                kind: ChangeKind::Written,
+                digest: Some(artifact.digest.clone()),
+            });
+        }
+        Ok(artifact)
     }
 
-    /// Reconciles the catalog with the blob store. Removes catalog entries
-    /// whose blob is missing, removes blobs that no entry references, and
-    /// clears leftover temporary files.
+    /// Reconciles the catalog with the blob store.
+    ///
+    /// Removes catalog entries whose blob is missing, removes blobs that no
+    /// entry references, and clears leftover temporary files.
     pub async fn sync(&self) -> Result<SyncReport> {
         self.inner.sync().await
     }
 }
 
 impl Inner {
-    async fn locate(&self, key: &str) -> Result<Option<Located>> {
+    /// Publishes `change` to the feed.
+    ///
+    /// Late or lagging receivers are dropped. A send error here is expected
+    /// and silently ignored.
+    fn notify(&self, change: ArtifactChange) {
+        let _ = self.changes.send(change);
+    }
+
+    async fn locate(&self, key: &ArtifactKey) -> Result<Option<Located>> {
         match self.storage.artifacts()?.latest(key).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,
             None => Ok(None),
         }
     }
 
-    async fn locate_version(&self, key: &str, digest: &str) -> Result<Option<Located>> {
+    async fn locate_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<Option<Located>> {
         match self.storage.artifacts()?.get_version(key, digest).await? {
             Some(artifact) => self.locate_digest(&artifact.digest).await,
             None => Ok(None),
         }
     }
 
-    async fn locate_digest(&self, raw: &str) -> Result<Option<Located>> {
-        let digest: Digest = raw.parse()?;
-        if !self.blobs.contains(&digest).await {
+    async fn locate_digest(&self, digest: &Digest) -> Result<Option<Located>> {
+        if !self.blobs.contains(digest).await {
             return Ok(None);
         }
         Ok(Some(Located {
-            path: self.blobs.path(&digest),
-            digest,
+            path: self.blobs.path(digest),
+            digest: digest.clone(),
         }))
     }
 
     /// Removes a stored version, and its blob when no other version still
     /// references that digest. Returns whether the version existed.
-    async fn evict_version(&self, key: &str, digest: &str) -> Result<bool> {
+    async fn evict_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<bool> {
         let repository = self.storage.artifacts()?;
         let Some(artifact) = repository.get_version(key, digest).await? else {
             return Ok(false);
@@ -276,34 +336,34 @@ impl Inner {
             .await?
             .iter()
             .any(|version| version.digest == artifact.digest);
-        if !still_referenced && let Ok(parsed) = artifact.digest.parse::<Digest>() {
-            self.blobs.remove(&parsed).await?;
+        if !still_referenced {
+            self.blobs.remove(&artifact.digest).await?;
         }
         Ok(true)
     }
 
     /// Resolves the request to a content digest, reuses the blob if it is
-    /// already present, and otherwise fetches it. Reuse is keyed on the
-    /// resolved digest, so the recorded source is irrelevant: the same
-    /// content is never pulled twice, and a repointed tag is picked up
-    /// because the reference is re-resolved (subject to the resolution
-    /// cache).
+    /// already present, and otherwise fetches it.
+    ///
+    /// Returns the artifact and whether a new version was recorded (and thus
+    /// whether a change-feed notification is warranted).
     async fn download(
         &self,
         request: &FetchRequest,
         progress: &ProgressHandle,
-    ) -> Result<Artifact> {
+    ) -> Result<(Artifact, bool)> {
         let repository = self.storage.artifacts()?;
         let now = Timestamp::now();
         let resolved = self.resolve(request, now).await?;
-        let digest_str = resolved.digest.to_string();
 
         // Fast path: this version is already recorded and its blob is present.
-        // Pure reads, so no lock is needed.
-        if let Some(existing) = repository.get_version(&request.key, &digest_str).await?
+        // Read-only, so no lock is needed.
+        if let Some(existing) = repository
+            .get_version(&request.key, &resolved.digest)
+            .await?
             && self.blobs.contains(&resolved.digest).await
         {
-            return Ok(existing);
+            return Ok((existing, false));
         }
 
         // Anything that writes runs under the per-digest lock, so concurrent
@@ -312,8 +372,11 @@ impl Inner {
         let _guard = lock.lock().await;
 
         // Re-check under the lock: another caller may have finished meanwhile.
-        if let Some(existing) = repository.get_version(&request.key, &digest_str).await? {
-            return Ok(existing);
+        if let Some(existing) = repository
+            .get_version(&request.key, &resolved.digest)
+            .await?
+        {
+            return Ok((existing, false));
         }
         // The blob is present (shared from another key), so record without
         // pulling.
@@ -327,7 +390,7 @@ impl Inner {
                 now,
             );
             repository.record_version(&artifact).await?;
-            return Ok(artifact);
+            return Ok((artifact, true));
         }
 
         let fetched = self.execute(request, progress).await?;
@@ -340,7 +403,7 @@ impl Inner {
             Timestamp::now(),
         );
         repository.record_version(&artifact).await?;
-        Ok(artifact)
+        Ok((artifact, true))
     }
 
     /// Resolves `request` to its content, using the cache when a recent entry
@@ -355,11 +418,7 @@ impl Inner {
                 reference,
                 media_type,
             } => {
-                let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(anyhow::format_err!(
-                        "invalid reference {reference:?}: {err}"
-                    ))
-                })?;
+                let reference = parse_reference(reference)?;
                 self.oci.resolve(&reference, media_type).await?
             }
         };
@@ -402,11 +461,7 @@ impl Inner {
                 reference,
                 media_type,
             } => {
-                let reference: Reference = reference.parse().map_err(|err| {
-                    ArtifactError::Fetch(anyhow::format_err!(
-                        "invalid reference {reference:?}: {err}"
-                    ))
-                })?;
+                let reference = parse_reference(reference)?;
                 self.fetch_oci(&reference, media_type, progress).await
             }
         }
@@ -468,16 +523,8 @@ impl Inner {
         let mut tracked: HashSet<Digest> = HashSet::new();
 
         for artifact in repository.all_versions().await? {
-            let Ok(digest) = artifact.digest.parse::<Digest>() else {
-                // An unreadable digest can never match a blob, so drop the row.
-                repository
-                    .delete_version(&artifact.key, &artifact.digest)
-                    .await?;
-                report.removed_entries += 1;
-                continue;
-            };
-            if self.blobs.contains(&digest).await {
-                tracked.insert(digest);
+            if self.blobs.contains(&artifact.digest).await {
+                tracked.insert(artifact.digest.clone());
             } else {
                 repository
                     .delete_version(&artifact.key, &artifact.digest)
@@ -497,9 +544,18 @@ impl Inner {
     }
 }
 
+/// Parses an OCI reference string, attaching context on failure.
+fn parse_reference(reference: &str) -> Result<Reference> {
+    reference.parse().map_err(|err| {
+        ArtifactError::Fetch(
+            anyhow::Error::from(err).context(format!("invalid reference {reference:?}")),
+        )
+    })
+}
+
 /// Whether a resolution made at `resolved_at` is still fresh at `now`.
 fn is_fresh(resolved_at: Timestamp, now: Timestamp) -> bool {
-    now.as_millisecond() - resolved_at.as_millisecond() < RESOLUTION_TTL_MS
+    now.duration_since(resolved_at) < RESOLUTION_TTL
 }
 
 /// Builds a version record. Content is digest-addressed, so `at` stamps both
@@ -513,11 +569,11 @@ fn build_artifact(
     at: Timestamp,
 ) -> Artifact {
     Artifact {
-        id: ArtifactId::from(0),
+        id: DbId::from(0),
         key: request.key.clone(),
         source: request.source_str().to_owned(),
-        digest: digest.to_string(),
-        media_type: Some(media_type.to_string()),
+        digest: digest.clone(),
+        media_type: Some(media_type.clone()),
         version,
         size_bytes: size,
         downloaded_at: at,
@@ -527,28 +583,137 @@ fn build_artifact(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use std::{env, fs, process};
+
+    use aperture_storage::Storage;
+    use tokio::time::timeout;
+
     use super::*;
 
-    fn at(millis: i64) -> Timestamp {
-        Timestamp::from_millisecond(millis).unwrap()
+    fn at(micros: i64) -> Timestamp {
+        Timestamp::from_microsecond(micros).unwrap()
     }
 
     fn oci_request(reference: &str, media_type: &str) -> FetchRequest {
         FetchRequest {
-            key: "spectra".to_owned(),
+            key: ArtifactKey::new("spectra").expect("valid key"),
             source: FetchSource::Oci {
                 reference: reference.to_owned(),
-                media_type: MediaType::from(media_type),
+                media_type: media_type.parse().expect("valid media type"),
             },
         }
+    }
+
+    /// Builds an in-memory artifacts store rooted at a fresh temp dir.
+    async fn fresh_store() -> (Artifacts, PathBuf) {
+        let dir = env::temp_dir().join(format!(
+            "aperture-artifacts-tests-{}-{}",
+            process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let storage = Storage::open(":memory:").await.unwrap();
+        let artifacts = Artifacts::new(storage, dir.clone());
+        (artifacts, dir)
+    }
+
+    /// Removes the temp dir created by [`fresh_store`]. Best-effort.
+    fn cleanup(dir: PathBuf) {
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn put_publishes_written_event() {
+        let (artifacts, dir) = fresh_store().await;
+        let mut rx = artifacts.subscribe();
+        let key = ArtifactKey::new("firmware").unwrap();
+        let artifact = artifacts
+            .put(
+                &key,
+                Some(&"application/octet-stream".parse().unwrap()),
+                &b"bytes"[..],
+            )
+            .await
+            .unwrap();
+        let change = rx.recv().await.expect("feed emitted an event");
+        assert_eq!(change.key, key);
+        assert_eq!(change.kind, ChangeKind::Written);
+        assert_eq!(
+            change.digest.map(|d| d.to_string()),
+            Some(artifact.digest.to_string()),
+            "Written events must carry the new digest",
+        );
+        cleanup(dir);
+    }
+
+    #[tokio::test]
+    async fn put_records_media_type_verbatim() {
+        // Artifacts::put no longer sanitises the media type. The HTTP layer
+        // validates upstream via FromStr, so anything reaching the store is
+        // already known good and is stored verbatim.
+        let (artifacts, dir) = fresh_store().await;
+        let key = ArtifactKey::new("firmware").unwrap();
+        let artifact = artifacts
+            .put(
+                &key,
+                Some(&"application/octet-stream".parse().unwrap()),
+                &b"bytes2"[..],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            artifact.media_type.as_ref().map(|mt| mt.as_str()),
+            Some("application/octet-stream")
+        );
+
+        cleanup(dir);
+    }
+
+    #[tokio::test]
+    async fn evict_version_publishes_removed_event() {
+        let (artifacts, dir) = fresh_store().await;
+        let key = ArtifactKey::new("firmware").unwrap();
+        let artifact = artifacts.put(&key, None, &b"bytes"[..]).await.unwrap();
+
+        let mut rx = artifacts.subscribe();
+        artifacts
+            .evict_version(&key, &artifact.digest)
+            .await
+            .unwrap();
+        let change = rx.recv().await.expect("feed emitted an event");
+        assert_eq!(change.key, key);
+        assert_eq!(change.kind, ChangeKind::Removed);
+        assert!(
+            change.digest.is_none(),
+            "Removed events do not carry a digest"
+        );
+        cleanup(dir);
+    }
+
+    #[tokio::test]
+    async fn late_subscriber_misses_earlier_events() {
+        let (artifacts, dir) = fresh_store().await;
+        let key = ArtifactKey::new("firmware").unwrap();
+        artifacts.put(&key, None, &b"first"[..]).await.unwrap();
+
+        // Subscribe after the write completed. No event should arrive.
+        let mut rx = artifacts.subscribe();
+        let outcome = timeout(Duration::from_millis(50), rx.recv()).await;
+        assert!(
+            outcome.is_err(),
+            "late subscriber should not see prior events"
+        );
+        cleanup(dir);
     }
 
     #[test]
     fn resolution_is_fresh_within_the_ttl() {
         let base = at(1_000_000);
+        let ttl_micros: i64 = RESOLUTION_TTL.as_micros().try_into().unwrap();
         assert!(is_fresh(base, base));
-        assert!(is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS - 1)));
-        assert!(!is_fresh(base, at(1_000_000 + RESOLUTION_TTL_MS)));
+        assert!(is_fresh(base, at(1_000_000 + ttl_micros - 1)));
+        assert!(!is_fresh(base, at(1_000_000 + ttl_micros)));
     }
 
     #[test]

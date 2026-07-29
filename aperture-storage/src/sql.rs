@@ -11,7 +11,6 @@ pub use self::columns::Columns;
 use crate::error::{Result, StorageError};
 
 mod blob;
-mod boolean;
 mod columns;
 mod domain;
 mod integer;

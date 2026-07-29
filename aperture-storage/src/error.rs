@@ -2,6 +2,9 @@
 
 use std::result::Result as StdResult;
 
+use crate::digest::InvalidDigest;
+use crate::key::InvalidArtifactKey;
+
 /// Errors returned by the storage layer.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -58,19 +61,40 @@ pub enum StorageError {
         target: &'static str,
     },
 
-    /// A timestamp stored as milliseconds could not be converted.
-    #[error("invalid timestamp {millis} ms")]
-    InvalidTimestamp { millis: i64 },
+    /// A timestamp stored as microseconds could not be converted.
+    #[error("invalid timestamp {micros} us")]
+    InvalidTimestamp { micros: i64 },
+
+    #[error("invalid interval: {error}")]
+    InvalidInterval { error: String },
 
     /// A JSON column value could not be deserialized.
     #[error("invalid JSON at column {column}: {error}")]
     InvalidJson { column: usize, error: String },
+
+    /// An artifact key failed validation.
+    #[error("invalid artifact key: {0}")]
+    InvalidArtifactKey(#[from] InvalidArtifactKey),
+
+    /// A digest string failed validation.
+    #[error("invalid digest: {raw}")]
+    InvalidDigest { raw: String },
+
+    /// A media type string failed validation.
+    #[error("invalid media type: {raw}")]
+    InvalidMediaType { raw: String },
 }
 
 impl StorageError {
     /// Wraps a turso engine error as a [`StorageError::Database`].
     pub(crate) fn from_turso(error: turso::Error) -> Self {
         StorageError::Database(error.into())
+    }
+}
+
+impl From<InvalidDigest> for StorageError {
+    fn from(err: InvalidDigest) -> Self {
+        StorageError::InvalidDigest { raw: err.0 }
     }
 }
 
