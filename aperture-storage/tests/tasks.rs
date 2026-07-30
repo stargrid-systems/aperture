@@ -1,6 +1,6 @@
 use aperture_storage::{
-    ActorId, DbId, JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage,
-    TaskStatus,
+    ActorId, JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage,
+    TaskId, TaskStatus,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -153,7 +153,7 @@ async fn list_filters_by_status_kind_and_parent() {
         )
         .await
         .unwrap();
-    let active_ids: Vec<DbId> = active.items.iter().map(|task| task.id).collect();
+    let active_ids: Vec<TaskId> = active.items.iter().map(|task| task.id).collect();
     assert_eq!(active_ids, vec![download, parent]);
 
     let finished = repo
@@ -190,7 +190,7 @@ async fn list_filters_by_status_kind_and_parent() {
     assert_eq!(roots.items[0].id, parent);
 
     let children = repo.children(parent).await.unwrap();
-    let child_ids: Vec<DbId> = children.iter().map(|task| task.id).collect();
+    let child_ids: Vec<TaskId> = children.iter().map(|task| task.id).collect();
     assert_eq!(child_ids, vec![download, install]);
 }
 
@@ -335,6 +335,6 @@ async fn list_active_finds_unfinished_invocations() {
         .unwrap();
 
     let active = repo.list_active().await.unwrap();
-    let ids: Vec<DbId> = active.iter().map(|task| task.id).collect();
+    let ids: Vec<TaskId> = active.iter().map(|task| task.id).collect();
     assert_eq!(ids, vec![pending, running]);
 }

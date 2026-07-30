@@ -22,10 +22,9 @@ fn argon2() -> Argon2<'static> {
 }
 
 /// A plaintext password. Redacts in Debug output to avoid accidental leakage.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, utoipa::ToSchema)]
 #[serde(transparent)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
+#[schema(value_type = String)]
 pub struct Password(String);
 
 impl Password {

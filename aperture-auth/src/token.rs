@@ -47,10 +47,9 @@ impl fmt::Debug for SessionToken {
 }
 
 /// A raw API key. Redacts in Debug output.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, utoipa::ToSchema)]
 #[serde(transparent)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
+#[schema(value_type = String)]
 pub struct RawApiKey(String);
 
 impl RawApiKey {

@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::{
-    ActorId, DbId, JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, TaskInvocation,
+    ActorId, JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, TaskId, TaskInvocation,
     TaskRepository, TaskStatus,
 };
 use jiff::Timestamp;
@@ -49,7 +49,7 @@ struct TaskShared {
 struct RunningTask {
     shared: Arc<TaskShared>,
     kind: String,
-    parent_id: Option<DbId>,
+    parent_id: Option<TaskId>,
     capabilities: Capabilities,
     started_at: Timestamp,
     abort: AbortHandle,
@@ -59,11 +59,11 @@ struct RunningTask {
 #[derive(Debug, Clone)]
 pub struct ActiveTask {
     /// The invocation id.
-    pub id: DbId,
+    pub id: TaskId,
     /// The kind of task.
     pub kind: String,
     /// The parent invocation, if any.
-    pub parent_id: Option<DbId>,
+    pub parent_id: Option<TaskId>,
     /// What the kind supports.
     pub capabilities: Capabilities,
     /// Live progress.
@@ -75,7 +75,7 @@ pub struct ActiveTask {
 pub(crate) struct TasksInner {
     tasks: TaskRepository,
     registry: TaskRegistry,
-    running: Mutex<HashMap<DbId, RunningTask>>,
+    running: Mutex<HashMap<TaskId, RunningTask>>,
     joinset: Mutex<JoinSet<()>>,
 }
 
@@ -147,7 +147,7 @@ impl Tasks {
     }
 
     /// Returns the recorded invocation `id`, if it exists.
-    pub async fn get(&self, id: DbId) -> Result<Option<TaskInvocation>, TaskError> {
+    pub async fn get(&self, id: TaskId) -> Result<Option<TaskInvocation>, TaskError> {
         Ok(self.inner.tasks.get(id).await?)
     }
 
@@ -156,7 +156,7 @@ impl Tasks {
     /// cancellable. Returns [`TaskError::AlreadySettled`] if the task
     /// exists but has finished, and [`TaskError::NotFound`] if no such task
     /// exists.
-    pub async fn cancel(&self, id: DbId) -> Result<bool, TaskError> {
+    pub async fn cancel(&self, id: TaskId) -> Result<bool, TaskError> {
         {
             let running = self.inner.running.lock().expect("running poisoned");
             if let Some(task) = running.get(&id) {
@@ -191,7 +191,7 @@ impl Tasks {
     }
 
     /// Live progress of the running task `id`, or `None` if it is not running.
-    pub fn progress(&self, id: DbId) -> Option<Progress> {
+    pub fn progress(&self, id: TaskId) -> Option<Progress> {
         let running = self.inner.running.lock().expect("running poisoned");
         running.get(&id).map(|task| task.shared.progress.snapshot())
     }
@@ -222,7 +222,7 @@ impl Tasks {
     /// shutdown: resumable tasks are aborted and recorded as interrupted, while
     /// unresumable tasks are awaited so they finish cleanly.
     pub async fn shutdown(&self) {
-        let entries: Vec<(DbId, bool, AbortHandle, Arc<TaskShared>)> = {
+        let entries: Vec<(TaskId, bool, AbortHandle, Arc<TaskShared>)> = {
             let running = self.inner.running.lock().expect("running poisoned");
             running
                 .iter()
@@ -280,7 +280,7 @@ impl TasksInner {
         self: &Arc<Self>,
         kind: &str,
         input: Value,
-        parent_id: Option<DbId>,
+        parent_id: Option<TaskId>,
         initiator: ActorId,
     ) -> Result<(TaskInvocation, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
@@ -359,7 +359,7 @@ impl TasksInner {
         self: &Arc<Self>,
         kind: &str,
         input: Value,
-        parent_id: Option<DbId>,
+        parent_id: Option<TaskId>,
         initiator: ActorId,
     ) -> Result<TaskHandle<O>, TaskError> {
         let (invocation, phase) = self.start(kind, input, parent_id, initiator).await?;
@@ -371,7 +371,7 @@ impl TasksInner {
         })
     }
 
-    fn parent_token(&self, parent: DbId) -> Option<CancellationToken> {
+    fn parent_token(&self, parent: TaskId) -> Option<CancellationToken> {
         self.running
             .lock()
             .expect("running poisoned")
@@ -380,7 +380,7 @@ impl TasksInner {
     }
 
     /// Records the terminal outcome of `id` and wakes anyone awaiting it.
-    pub(crate) async fn finish(&self, id: DbId, outcome: Result<Value, TaskError>) {
+    pub(crate) async fn finish(&self, id: TaskId, outcome: Result<Value, TaskError>) {
         let now = Timestamp::now();
         let (status, output, error) = match outcome {
             Ok(value) => (TaskStatus::Succeeded, Some(value), None),
@@ -410,7 +410,7 @@ impl TasksInner {
     /// Also reaps any completed entries from the JoinSet. Tokio's JoinSet
     /// retains finished entries until they are joined, so without this the
     /// set would grow without bound over the process lifetime.
-    fn settle(&self, id: DbId) {
+    fn settle(&self, id: TaskId) {
         if let Some(task) = self.running.lock().expect("running poisoned").remove(&id) {
             let _ = task.shared.phase.send(Phase::Settled);
         }
@@ -439,7 +439,7 @@ impl TasksInner {
 /// A typed handle to a spawned task. Await it for the output, or read live
 /// [`TaskHandle::progress`] while it runs.
 pub struct TaskHandle<O> {
-    id: DbId,
+    id: TaskId,
     inner: Arc<TasksInner>,
     phase: watch::Receiver<Phase>,
     _output: PhantomData<fn() -> O>,
@@ -447,7 +447,7 @@ pub struct TaskHandle<O> {
 
 impl<O> TaskHandle<O> {
     /// The invocation id.
-    pub fn id(&self) -> DbId {
+    pub fn id(&self) -> TaskId {
         self.id
     }
 

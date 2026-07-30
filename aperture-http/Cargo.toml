@@ -13,9 +13,9 @@ workspace = true
 
 [dependencies]
 aperture-artifacts = { workspace = true }
-aperture-auth = { workspace = true, features = ["schema"] }
+aperture-auth = { workspace = true }
 aperture-runtime = { workspace = true }
-aperture-storage = { workspace = true, features = ["schema"] }
+aperture-storage = { workspace = true }
 aperture-tasks = { workspace = true }
 
 anyhow = { workspace = true, features = ["std"] }

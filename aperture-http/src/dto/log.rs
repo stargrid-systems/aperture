@@ -1,7 +1,7 @@
 //! DTOs for the structured log endpoints.
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{BootInfo, DbId, Event, Level, Span};
+use aperture_storage::{BootInfo, Event, EventId, Level, Span, SpanId};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
@@ -49,9 +49,9 @@ impl From<LevelResponse> for Level {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogEventResponse {
     /// Event id.
-    pub id: DbId,
+    pub id: EventId,
     /// Span this event belongs to, if any.
-    pub span_id: Option<DbId>,
+    pub span_id: Option<SpanId>,
     /// Severity level.
     pub level: LevelResponse,
     /// Module path that emitted the event.
@@ -98,9 +98,9 @@ impl LogEventResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogSpanResponse {
     /// Span id.
-    pub id: DbId,
+    pub id: SpanId,
     /// Parent span id, if any.
-    pub parent_id: Option<DbId>,
+    pub parent_id: Option<SpanId>,
     /// Span name.
     pub name: String,
     /// Severity level.
@@ -173,7 +173,7 @@ pub struct LogListParams {
     /// Substring search across message and target.
     pub q: Option<String>,
     /// Only events belonging to this span.
-    pub span_id: Option<DbId>,
+    pub span_id: Option<SpanId>,
     /// Only events from this boot session.
     pub boot_id: Option<Uuid>,
     /// Only events at or after this time (RFC 3339).
@@ -219,7 +219,7 @@ pub struct LogSpanListParams {
     /// Only spans started at or before this time (RFC 3339).
     pub until: Option<Timestamp>,
     /// Only direct children of this span id.
-    pub parent_id: Option<DbId>,
+    pub parent_id: Option<SpanId>,
     /// When true, only root spans (no parent) are returned.
     pub parent_null: Option<bool>,
     /// Structured field filter as a JSON object, e.g. `{"key":"value"}`.

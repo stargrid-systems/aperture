@@ -1,5 +1,5 @@
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{DbId, Interval, TaskSchedule};
+use aperture_storage::{Interval, TaskId, TaskSchedule, TaskScheduleId};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,13 +9,13 @@ use crate::dto::{OrderParam, Page};
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TaskScheduleResponse {
-    pub id: DbId,
+    pub id: TaskScheduleId,
     pub kind: String,
     pub input: Value,
     pub interval: Interval,
     pub next_run_at: Timestamp,
     pub last_run_at: Option<Timestamp>,
-    pub last_task_id: Option<DbId>,
+    pub last_task_id: Option<TaskId>,
     pub enabled: bool,
     pub created_at: Timestamp,
 }

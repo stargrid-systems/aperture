@@ -3,9 +3,7 @@ use turso::Value;
 use uuid::Uuid;
 
 use super::{FromSql, ToSql};
-use crate::{
-    ActorId, ActorKind, ApiKeyId, DbId, Level, Result, SessionId, StorageError, TaskStatus, UserId,
-};
+use crate::{ActorKind, DbId, Level, Result, StorageError, TaskStatus};
 
 impl ToSql for Uuid {
     fn to_sql(&self) -> Value {
@@ -68,54 +66,6 @@ impl ToSql for DbId {
 }
 
 impl FromSql for DbId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for ActorId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for ActorId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for UserId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for UserId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for SessionId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for SessionId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
-impl ToSql for ApiKeyId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for ApiKeyId {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         i64::from_sql(value, idx).map(Self::from)
     }

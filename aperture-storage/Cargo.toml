@@ -12,12 +12,6 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
-[features]
-# Enables utoipa::ToSchema derives for the auth domain types so the HTTP layer
-# can project them into the OpenAPI spec. utoipa is already a hard dependency,
-# so this only gates the derives.
-schema = []
-
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 hex = { workspace = true, features = ["alloc"] }

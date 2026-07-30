@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use aperture_storage::{ActorId, DbId, Storage, TaskStatus};
+use aperture_storage::{ActorId, Storage, TaskId, TaskStatus};
 use aperture_tasks::{
     Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry,
     Tasks,
@@ -82,7 +82,7 @@ impl TaskDefinition for Probe {
 /// A task that spawns a [`Probe`] child, publishes the child's id, then awaits
 /// it. When the parent is cancelled the child is too, so the await unwinds.
 struct Parent {
-    child_id: Arc<Mutex<Option<DbId>>>,
+    child_id: Arc<Mutex<Option<TaskId>>>,
     spawned: Arc<Notify>,
 }
 
@@ -339,7 +339,7 @@ async fn cancel_distinguishes_unknown_from_settled() {
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     // An unknown id is not found.
-    let unknown = DbId::from(999);
+    let unknown = TaskId::from(999);
     assert!(matches!(
         tasks.cancel(unknown).await,
         Err(TaskError::NotFound(id)) if id == unknown

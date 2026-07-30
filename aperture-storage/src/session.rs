@@ -1,68 +1,17 @@
 //! Login sessions: token hashes with sliding expiry, backed by the database.
 
-use std::fmt;
-use std::num::ParseIntError;
-use std::result::Result as StdResult;
-use std::str::FromStr;
-
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
 use turso::{Connection, Row, params_from_iter};
 
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
-use crate::id::DbId;
-use crate::macros::sql;
+use crate::macros::{db_id, sql};
 use crate::secret::TokenHash;
 use crate::sql::{Columns, ToSql};
 
-/// Primary key of a row in the `sessions` table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
-pub struct SessionId(DbId);
-
-impl SessionId {
-    pub const fn get(self) -> i64 {
-        self.0.get()
-    }
-}
-
-impl From<i64> for SessionId {
-    fn from(value: i64) -> Self {
-        Self(DbId::from(value))
-    }
-}
-
-impl fmt::Display for SessionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for SessionId {
-    type Err = ParseIntError;
-    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
-        s.parse::<i64>().map(|v| Self(DbId::from(v)))
-    }
-}
-
-impl Serialize for SessionId {
-    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for SessionId {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        DbId::deserialize(deserializer).map(Self)
-    }
+db_id! {
+    /// Primary key of a row in the `sessions` table.
+    pub struct SessionId;
 }
 
 mod col {

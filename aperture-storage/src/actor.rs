@@ -5,77 +5,24 @@
 //! task invocation records its initiator so the system always knows who caused
 //! what.
 
-use std::fmt;
-use std::num::ParseIntError;
-use std::result::Result as StdResult;
-use std::str::FromStr;
-
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
-use crate::id::DbId;
-use crate::macros::sql;
+use crate::macros::{db_id, sql};
 use crate::sql::{Columns, ToSql, get};
 
-/// Primary key of a row in the `actors` table.
-///
-/// Used wherever an actor is referenced: `users.actor_id`,
-/// `sessions.actor_id`, `api_keys.actor_id`, `tasks.initiator_id`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-#[cfg_attr(feature = "schema", schema(value_type = String))]
-pub struct ActorId(DbId);
+db_id! {
+    /// Primary key of a row in the `actors` table.
+    ///
+    /// Used wherever an actor is referenced: `users.actor_id`,
+    /// `sessions.actor_id`, `api_keys.actor_id`, `tasks.initiator_id`.
+    pub struct ActorId;
+}
 
 impl ActorId {
     /// The well-known system actor (id 1). Seeded by the initial migration.
-    pub const SYSTEM: Self = Self(DbId::from_i64(1));
-
-    pub const fn get(self) -> i64 {
-        self.0.get()
-    }
-
-    pub const fn from_i64(value: i64) -> Self {
-        Self(DbId::from_i64(value))
-    }
-}
-
-impl From<i64> for ActorId {
-    fn from(value: i64) -> Self {
-        Self(DbId::from(value))
-    }
-}
-
-impl fmt::Display for ActorId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for ActorId {
-    type Err = ParseIntError;
-    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
-        s.parse::<i64>().map(|v| Self(DbId::from(v)))
-    }
-}
-
-impl Serialize for ActorId {
-    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ActorId {
-    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        DbId::deserialize(deserializer).map(Self)
-    }
+    pub const SYSTEM: Self = Self::from_i64(1);
 }
 
 mod col {
