@@ -2,7 +2,7 @@ use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
-use aperture_storage::DbId;
+use aperture_storage::ArtifactId;
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -20,7 +20,7 @@ fn at(micros: i64) -> Timestamp {
 
 fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
     Artifact {
-        id: DbId::from(0),
+        id: ArtifactId::from(0),
         key: ArtifactKey::new(key).unwrap(),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
         digest: digest.parse().unwrap(),

@@ -1,7 +1,7 @@
 use std::{env, fs};
 
 use aperture_storage::{
-    Artifact, ArtifactKey, DbId, Digest, ListQuery, MediaType, Storage, VersionSort,
+    Artifact, ArtifactId, ArtifactKey, Digest, ListQuery, MediaType, Storage, VersionSort,
 };
 use jiff::Timestamp;
 
@@ -23,7 +23,7 @@ fn mt(s: &str) -> MediaType {
 
 fn version(key_str: &'static str, digest_str: &str, downloaded_at: i64) -> Artifact {
     Artifact {
-        id: DbId::from(0),
+        id: ArtifactId::from(0),
         key: key(key_str),
         source: "ghcr.io/stargrid-systems/spectra:0.2.0".to_owned(),
         digest: digest(digest_str),

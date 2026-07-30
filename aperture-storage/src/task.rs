@@ -13,11 +13,15 @@ use serde_json::Value;
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
-use crate::id::DbId;
-use crate::macros::sql;
+use crate::macros::{db_id, sql};
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, ToSql};
+
+db_id! {
+    /// Primary key of a task invocation.
+    pub struct TaskId;
+}
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
@@ -103,11 +107,11 @@ impl TaskStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskInvocation {
     /// Store-assigned id.
-    pub id: DbId,
+    pub id: TaskId,
     /// The kind of task, matching a registered definition.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<DbId>,
+    pub parent_id: Option<TaskId>,
     /// The lifecycle state.
     pub status: TaskStatus,
     /// JSON value passed to the task at spawn.
@@ -248,7 +252,7 @@ pub enum ParentFilter {
     /// Only top-level invocations, with no parent.
     Root,
     /// Only the children of one invocation.
-    Of(DbId),
+    Of(TaskId),
 }
 
 /// Repository over the task catalog.
@@ -267,10 +271,10 @@ impl TaskRepository {
     pub async fn create(
         &self,
         kind: &str,
-        parent_id: Option<DbId>,
+        parent_id: Option<TaskId>,
         input: &Value,
         created_at: Timestamp,
-    ) -> Result<DbId> {
+    ) -> Result<TaskId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
@@ -288,7 +292,7 @@ impl TaskRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(DbId::from(self.connection.last_insert_rowid()))
+        Ok(TaskId::from(self.connection.last_insert_rowid()))
     }
 
     /// Records a new invocation already in the [`TaskStatus::Running`] state
@@ -299,10 +303,10 @@ impl TaskRepository {
     pub async fn create_running(
         &self,
         kind: &str,
-        parent_id: Option<DbId>,
+        parent_id: Option<TaskId>,
         input: &Value,
         started_at: Timestamp,
-    ) -> Result<DbId> {
+    ) -> Result<TaskId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
@@ -321,12 +325,12 @@ impl TaskRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(DbId::from(self.connection.last_insert_rowid()))
+        Ok(TaskId::from(self.connection.last_insert_rowid()))
     }
 
     /// Marks the invocation with `id` as running.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn mark_running(&self, id: DbId, started_at: Timestamp) -> Result<()> {
+    pub async fn mark_running(&self, id: TaskId, started_at: Timestamp) -> Result<()> {
         self.connection
             .execute(
                 sql!(UPDATE tasks SET status = ?1, started_at = ?2 WHERE id = ?3),
@@ -350,7 +354,7 @@ impl TaskRepository {
     #[tracing::instrument(level = "info", skip(self, output, error))]
     pub async fn finish(
         &self,
-        id: DbId,
+        id: TaskId,
         status: TaskStatus,
         finished_at: Timestamp,
         output: Option<&Value>,
@@ -378,7 +382,7 @@ impl TaskRepository {
 
     /// Returns the invocation with `id`, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: DbId) -> Result<Option<TaskInvocation>> {
+    pub async fn get(&self, id: TaskId) -> Result<Option<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE id = ?1),
             cols = TASK_COLUMNS
@@ -458,7 +462,7 @@ impl TaskRepository {
 
     /// Lists the children of `parent_id`, oldest first.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn children(&self, parent_id: DbId) -> Result<Vec<TaskInvocation>> {
+    pub async fn children(&self, parent_id: TaskId) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
             sql!(SELECT {cols} FROM tasks WHERE parent_id = ?1 ORDER BY id),
             cols = TASK_COLUMNS,

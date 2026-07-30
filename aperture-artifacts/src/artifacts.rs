@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use aperture_storage::{
-    Artifact, ArtifactKey, ArtifactKeyEntry, DbId, Digest, ListQuery, MediaType, Page, Storage,
-    VersionSort,
+    Artifact, ArtifactId, ArtifactKey, ArtifactKeyEntry, Digest, ListQuery, MediaType, Page,
+    Storage, VersionSort,
 };
 use aperture_tasks::ProgressHandle;
 use jiff::{SignedDuration, Timestamp};
@@ -236,7 +236,7 @@ impl Artifacts {
         let (digest, size) = self.inner.blobs.put(reader).await?;
         let now = Timestamp::now();
         let artifact = Artifact {
-            id: DbId::from(0),
+            id: ArtifactId::from(0),
             key: key.clone(),
             source: "upload".to_owned(),
             digest: digest.clone(),
@@ -569,7 +569,7 @@ fn build_artifact(
     at: Timestamp,
 ) -> Artifact {
     Artifact {
-        id: DbId::from(0),
+        id: ArtifactId::from(0),
         key: request.key.clone(),
         source: request.source_str().to_owned(),
         digest: digest.clone(),

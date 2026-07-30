@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::DbId;
+use aperture_storage::TaskId;
 use aperture_tasks::{
     JsonField, JsonFilter, JsonPath, ParentFilter, Progress, ProgressMessage, StatusFilter,
     TaskDescriptor, TaskInvocation, TaskStatus,
@@ -89,11 +89,11 @@ impl From<Progress> for ProgressResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TaskResponse {
     /// Invocation id.
-    pub id: DbId,
+    pub id: TaskId,
     /// The kind of task.
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
-    pub parent_id: Option<DbId>,
+    pub parent_id: Option<TaskId>,
     /// Lifecycle state.
     pub status: TaskStatusResponse,
     /// The input the task was created with.
@@ -225,7 +225,7 @@ pub struct TaskListParams {
     /// Only tasks of this kind.
     pub kind: Option<String>,
     /// Only children of this task.
-    pub parent: Option<DbId>,
+    pub parent: Option<TaskId>,
     /// Only top-level tasks (no parent). Ignored when `parent` is set.
     pub root: Option<bool>,
     /// Only tasks whose input JSON has `input_value` at this path, for example
@@ -285,7 +285,7 @@ pub struct InvalidFilter;
 impl TaskResponse {
     /// Maps a storage page of tasks into the response envelope, attaching live
     /// progress to running tasks from `live` (keyed by task id).
-    pub fn page(page: StoragePage<TaskInvocation>, live: &HashMap<DbId, Progress>) -> Page<Self> {
+    pub fn page(page: StoragePage<TaskInvocation>, live: &HashMap<TaskId, Progress>) -> Page<Self> {
         Page::from_storage(page, |task| {
             let progress = live.get(&task.id).cloned();
             Self::new(task, progress)

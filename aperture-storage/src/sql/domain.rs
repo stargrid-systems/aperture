@@ -3,7 +3,7 @@ use turso::Value;
 use uuid::Uuid;
 
 use super::{FromSql, ToSql};
-use crate::{DbId, Level, Result, StorageError, TaskStatus};
+use crate::{Level, Result, StorageError, TaskStatus};
 
 impl ToSql for Uuid {
     fn to_sql(&self) -> Value {
@@ -56,18 +56,6 @@ impl FromSql for Timestamp {
                 actual,
             }),
         }
-    }
-}
-
-impl ToSql for DbId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for DbId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
     }
 }
 

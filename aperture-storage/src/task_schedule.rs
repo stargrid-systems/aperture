@@ -5,12 +5,17 @@ use serde_json::Value;
 use turso::{Connection, Row, params_from_iter};
 
 use crate::error::{Result, StorageError};
-use crate::id::DbId;
 use crate::interval::Interval;
-use crate::macros::sql;
+use crate::macros::{db_id, sql};
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::{Assignments, Filters};
 use crate::sql::{Columns, ToSql};
+use crate::task::TaskId;
+
+db_id! {
+    /// Primary key of a row in the `task_schedules` table.
+    pub struct TaskScheduleId;
+}
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
@@ -41,13 +46,13 @@ const SCHEDULE_COLUMNS: Columns = Columns::new(&[
 /// A periodic task schedule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSchedule {
-    pub id: DbId,
+    pub id: TaskScheduleId,
     pub kind: String,
     pub input: Value,
     pub interval: Interval,
     pub next_run_at: Timestamp,
     pub last_run_at: Option<Timestamp>,
-    pub last_task_id: Option<DbId>,
+    pub last_task_id: Option<TaskId>,
     pub enabled: bool,
     pub created_at: Timestamp,
 }
@@ -77,7 +82,7 @@ impl TaskScheduleRepository {
     }
 
     #[tracing::instrument(level = "info", skip(self, new))]
-    pub async fn create(&self, new: &NewTaskSchedule) -> Result<DbId> {
+    pub async fn create(&self, new: &NewTaskSchedule) -> Result<TaskScheduleId> {
         let params = params_from_iter([
             new.kind.to_sql(),
             new.input.to_sql(),
@@ -97,12 +102,12 @@ impl TaskScheduleRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(DbId::from(self.connection.last_insert_rowid()))
+        Ok(TaskScheduleId::from(self.connection.last_insert_rowid()))
     }
 
     /// Returns the task schedule with `id`, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, id: DbId) -> Result<Option<TaskSchedule>> {
+    pub async fn get(&self, id: TaskScheduleId) -> Result<Option<TaskSchedule>> {
         let sql = format!(
             sql!(SELECT {cols} FROM task_schedules WHERE id = ?1),
             cols = SCHEDULE_COLUMNS
@@ -153,7 +158,7 @@ impl TaskScheduleRepository {
     #[tracing::instrument(level = "info", skip(self, patch))]
     pub async fn update(
         &self,
-        id: DbId,
+        id: TaskScheduleId,
         patch: &TaskSchedulePatch,
     ) -> Result<Option<TaskSchedule>> {
         let mut assignments = Assignments::new();
@@ -175,7 +180,7 @@ impl TaskScheduleRepository {
 
     /// Returns whether a row was removed.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn delete(&self, id: DbId) -> Result<bool> {
+    pub async fn delete(&self, id: TaskScheduleId) -> Result<bool> {
         let existed = self.get(id).await?.is_some();
         if existed {
             self.connection
@@ -219,10 +224,10 @@ impl TaskScheduleRepository {
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn mark_run(
         &self,
-        id: DbId,
+        id: TaskScheduleId,
         now: Timestamp,
         interval: &Interval,
-        last_task_id: Option<DbId>,
+        last_task_id: Option<TaskId>,
     ) -> Result<()> {
         // saturating_add turns overflow into i64::MAX, which is outside jiff's
         // timestamp range, so from_microsecond reports InvalidTimestamp.

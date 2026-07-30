@@ -1,4 +1,4 @@
-use aperture_storage::{DbId, Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch};
+use aperture_storage::{Interval, ListQuery, NewTaskSchedule, Storage, TaskId, TaskSchedulePatch};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -133,12 +133,12 @@ async fn mark_run_advances_next_run_at() {
         .create(&new_schedule("a", 60_000_000, 1_000))
         .await
         .unwrap();
-    repo.mark_run(id, ts(2_000), &interval(60_000_000), Some(DbId::from(42)))
+    repo.mark_run(id, ts(2_000), &interval(60_000_000), Some(TaskId::from(42)))
         .await
         .unwrap();
     let fetched = repo.get(id).await.unwrap().unwrap();
     assert_eq!(fetched.last_run_at, Some(ts(2_000)));
-    assert_eq!(fetched.last_task_id, Some(DbId::from(42)));
+    assert_eq!(fetched.last_task_id, Some(TaskId::from(42)));
     assert_eq!(fetched.next_run_at, ts(60_002_000));
 }
 

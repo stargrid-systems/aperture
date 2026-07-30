@@ -11,13 +11,17 @@ use turso::{Connection, Row, params_from_iter};
 
 use crate::digest::Digest;
 use crate::error::{Result, StorageError};
-use crate::id::DbId;
 use crate::key::ArtifactKey;
-use crate::macros::sql;
+use crate::macros::{db_id, sql};
 use crate::media_type::MediaType;
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, ToSql, get};
+
+db_id! {
+    /// Primary key of a row in the `artifacts` table.
+    pub struct ArtifactId;
+}
 
 mod col {
     pub const DIGEST: &str = "digest";
@@ -48,7 +52,7 @@ const ARTIFACT_COLUMNS: Columns = Columns::new(&[
 #[derive(Debug, Clone, PartialEq)]
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
-    pub id: DbId,
+    pub id: ArtifactId,
     /// Logical key, for example `spectra` or `tls_server-cert`.
     pub key: ArtifactKey,
     /// Where it came from (an image reference or a URL).

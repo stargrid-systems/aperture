@@ -163,7 +163,7 @@ mod tests {
         kind: &str,
         interval_micros: i64,
         next_run_at: i64,
-    ) -> aperture_storage::DbId {
+    ) -> aperture_storage::TaskScheduleId {
         let repo = storage.task_schedules().unwrap();
         repo.create(&NewTaskSchedule {
             kind: kind.to_owned(),

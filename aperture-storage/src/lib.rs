@@ -9,30 +9,28 @@ use std::time::Duration;
 
 use turso::{Builder, Connection, Database};
 
-pub use self::artifact::{Artifact, ArtifactKeyEntry, ArtifactRepository, VersionSort};
+pub use self::artifact::{Artifact, ArtifactId, ArtifactKeyEntry, ArtifactRepository, VersionSort};
 pub use self::digest::{Digest, DigestAlgorithm, InvalidDigest};
 pub use self::error::{Result, StorageError};
-pub use self::id::DbId;
 pub use self::interval::{Interval, InvalidInterval};
 pub use self::key::{ArtifactKey, InvalidArtifactKey, MAX_LEN as ARTIFACT_KEY_MAX_LEN};
 pub use self::log::{
-    BootInfo, Event, EventFilter, EventRecord, Level, LogBatch, LogRepository, Span, SpanFilter,
-    SpanParentFilter, SpanRecord,
+    BootInfo, Event, EventFilter, EventId, EventRecord, Level, LogBatch, LogRepository, Span,
+    SpanFilter, SpanId, SpanParentFilter, SpanRecord,
 };
 pub use self::media_type::{InvalidMediaType, MediaType};
 pub use self::page::{ListQuery, Order, Page};
 pub use self::task::{
-    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskInvocation,
-    TaskRepository, TaskStatus,
+    InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskId,
+    TaskInvocation, TaskRepository, TaskStatus,
 };
 pub use self::task_schedule::{
-    NewTaskSchedule, TaskSchedule, TaskSchedulePatch, TaskScheduleRepository,
+    NewTaskSchedule, TaskSchedule, TaskScheduleId, TaskSchedulePatch, TaskScheduleRepository,
 };
 
 mod artifact;
 mod digest;
 mod error;
-mod id;
 mod interval;
 mod key;
 mod log;
