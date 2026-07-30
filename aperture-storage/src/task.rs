@@ -18,10 +18,10 @@ use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, ToSql};
 
-db_id!(
+db_id! {
     /// Primary key of a task invocation.
     pub struct TaskId;
-);
+}
 
 mod col {
     pub const CREATED_AT: &str = "created_at";
