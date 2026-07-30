@@ -3,7 +3,7 @@ use turso::Value;
 use uuid::Uuid;
 
 use super::{FromSql, ToSql};
-use crate::{ActorKind, DbId, Level, Result, StorageError, TaskStatus};
+use crate::{ActorKind, Level, Result, StorageError, TaskStatus};
 
 impl ToSql for Uuid {
     fn to_sql(&self) -> Value {
@@ -59,18 +59,6 @@ impl FromSql for Timestamp {
     }
 }
 
-impl ToSql for DbId {
-    fn to_sql(&self) -> Value {
-        Value::Integer(self.get())
-    }
-}
-
-impl FromSql for DbId {
-    fn from_sql(value: Value, idx: usize) -> Result<Self> {
-        i64::from_sql(value, idx).map(Self::from)
-    }
-}
-
 impl ToSql for Level {
     fn to_sql(&self) -> Value {
         Value::Integer(self.as_db())
@@ -84,13 +72,13 @@ impl FromSql for Level {
     }
 }
 
-impl ToSql for TaskStatus {
+impl ToSql for ActorKind {
     fn to_sql(&self) -> Value {
         Value::Text(self.as_db().to_owned())
     }
 }
 
-impl FromSql for TaskStatus {
+impl FromSql for ActorKind {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
             Value::Text(s) => Self::from_db(&s),
@@ -103,13 +91,13 @@ impl FromSql for TaskStatus {
     }
 }
 
-impl ToSql for ActorKind {
+impl ToSql for TaskStatus {
     fn to_sql(&self) -> Value {
         Value::Text(self.as_db().to_owned())
     }
 }
 
-impl FromSql for ActorKind {
+impl FromSql for TaskStatus {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
             Value::Text(s) => Self::from_db(&s),

@@ -16,7 +16,6 @@ pub use self::api_key::{ApiKey, ApiKeyId, ApiKeyRepository};
 pub use self::artifact::{Artifact, ArtifactId, ArtifactKeyEntry, ArtifactRepository, VersionSort};
 pub use self::digest::{Digest, DigestAlgorithm, InvalidDigest};
 pub use self::error::{Result, StorageError};
-pub use self::id::DbId;
 pub use self::interval::{Interval, InvalidInterval};
 pub use self::key::{ArtifactKey, InvalidArtifactKey, MAX_LEN as ARTIFACT_KEY_MAX_LEN};
 pub use self::log::{
@@ -44,7 +43,6 @@ mod api_key;
 mod artifact;
 mod digest;
 mod error;
-mod id;
 mod interval;
 mod key;
 mod log;
