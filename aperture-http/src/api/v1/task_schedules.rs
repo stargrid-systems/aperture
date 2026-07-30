@@ -1,4 +1,4 @@
-use aperture_storage::DbId;
+use aperture_storage::TaskScheduleId;
 use aperture_tasks::NewTaskSchedule;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -77,7 +77,7 @@ async fn create_task_schedule(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK_SCHEDULE,
-    params(("id" = DbId, Path, description = "Task schedule id")),
+    params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     responses(
         (status = 200, description = "Task schedule", body = TaskScheduleResponse),
         (status = 404, description = "Unknown task schedule"),
@@ -85,7 +85,7 @@ async fn create_task_schedule(
 )]
 async fn get_task_schedule(
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<TaskScheduleId>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
     let schedule = state
         .storage()
@@ -101,7 +101,7 @@ async fn get_task_schedule(
     patch,
     path = "/{id}",
     operation_id = operation_ids::UPDATE_TASK_SCHEDULE,
-    params(("id" = DbId, Path, description = "Task schedule id")),
+    params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     request_body = UpdateTaskScheduleRequest,
     responses(
         (status = 200, description = "Task schedule updated", body = TaskScheduleResponse),
@@ -110,7 +110,7 @@ async fn get_task_schedule(
 )]
 async fn update_task_schedule(
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<TaskScheduleId>,
     Json(request): Json<UpdateTaskScheduleRequest>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
     let schedule = state
@@ -127,7 +127,7 @@ async fn update_task_schedule(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_TASK_SCHEDULE,
-    params(("id" = DbId, Path, description = "Task schedule id")),
+    params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     responses(
         (status = 204, description = "Task schedule deleted"),
         (status = 404, description = "Unknown task schedule"),
@@ -135,7 +135,7 @@ async fn update_task_schedule(
 )]
 async fn delete_task_schedule(
     State(state): State<AppState>,
-    Path(id): Path<DbId>,
+    Path(id): Path<TaskScheduleId>,
 ) -> Result<StatusCode, ApiError> {
     let removed = state.storage().task_schedules()?.delete(id).await?;
     if removed {

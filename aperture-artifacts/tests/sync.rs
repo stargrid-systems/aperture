@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, ListQuery, Storage, VersionSort};
-use aperture_storage::DbId;
+use aperture_storage::ArtifactId;
 use jiff::Timestamp;
 
 fn temp_root(tag: &str) -> PathBuf {
@@ -20,7 +20,7 @@ async fn sync_removes_versions_without_blobs() {
 
     // A catalog version whose blob never made it to disk.
     repo.record_version(&Artifact {
-        id: DbId::from(0),
+        id: ArtifactId::from(0),
         key: ArtifactKey::new("spectra").unwrap(),
         source: "src".to_owned(),
         digest: "sha256:deadbeef".parse().unwrap(),

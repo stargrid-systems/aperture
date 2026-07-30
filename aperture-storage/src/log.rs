@@ -6,11 +6,20 @@ use turso::{Connection, Statement, Value, params_from_iter};
 use uuid::Uuid;
 
 use crate::error::{Result, StorageError};
-use crate::id::DbId;
-use crate::macros::sql;
+use crate::macros::{db_id, sql};
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::{EscapeLike, Filters};
 use crate::sql::{Columns, ToSql, get};
+
+db_id! {
+    /// Primary key of a row in the `log_spans` table.
+    pub struct SpanId;
+}
+
+db_id! {
+    /// Primary key of a row in the `log_events` table.
+    pub struct EventId;
+}
 
 mod col {
     pub const BOOT_ID: &str = "boot_id";
@@ -138,8 +147,8 @@ impl From<&tracing::Level> for Level {
 /// A persisted tracing span.
 #[derive(Debug, Clone)]
 pub struct Span {
-    pub id: DbId,
-    pub parent_id: Option<DbId>,
+    pub id: SpanId,
+    pub parent_id: Option<SpanId>,
     pub name: String,
     pub level: Level,
     pub target: String,
@@ -153,9 +162,9 @@ pub struct Span {
 /// A persisted tracing event (log record).
 #[derive(Debug, Clone)]
 pub struct Event {
-    pub id: DbId,
+    pub id: EventId,
     pub boot_id: Uuid,
-    pub span_id: Option<DbId>,
+    pub span_id: Option<SpanId>,
     pub level: Level,
     pub target: String,
     pub message: Option<String>,
@@ -180,7 +189,7 @@ pub struct EventFilter {
     pub min_level: Option<Level>,
     pub target: Vec<String>,
     pub query: Option<String>,
-    pub span_id: Option<DbId>,
+    pub span_id: Option<SpanId>,
     pub boot_id: Option<Uuid>,
     pub since: Option<Timestamp>,
     pub until: Option<Timestamp>,
@@ -196,7 +205,7 @@ pub enum SpanParentFilter {
     /// Only root spans (parent_id IS NULL).
     RootOnly,
     /// Only direct children of the given span id.
-    ChildrenOf(DbId),
+    ChildrenOf(SpanId),
 }
 
 /// Filters for span queries.
@@ -306,7 +315,7 @@ impl LogRepository {
         }
 
         filters.one_of(col::TARGET, filter.target.iter().map(String::as_str));
-        filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(DbId::get));
+        filters.eq_int_opt(col::SPAN_ID, filter.span_id.map(SpanId::get));
         filters.eq_text_opt(
             col::BOOT_ID,
             filter.boot_id.as_ref().map(Uuid::to_string).as_deref(),
@@ -442,7 +451,7 @@ impl LogRepository {
 
     /// Returns a single span by id, if it exists.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get_span(&self, id: DbId) -> Result<Option<Span>> {
+    pub async fn get_span(&self, id: SpanId) -> Result<Option<Span>> {
         let sql = format!(
             sql!(SELECT {cols} FROM log_spans_resolved WHERE id = ?1),
             cols = SPAN_COLUMNS,
@@ -460,7 +469,7 @@ impl LogRepository {
 
     /// Returns all events belonging to `span_id`, ordered by timestamp.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn events_for_span(&self, span_id: DbId) -> Result<Vec<Event>> {
+    pub async fn events_for_span(&self, span_id: SpanId) -> Result<Vec<Event>> {
         let sql = format!(
             sql!(SELECT {cols} FROM log_events_resolved WHERE span_id = ?1 ORDER BY timestamp),
             cols = EVENT_COLUMNS,
