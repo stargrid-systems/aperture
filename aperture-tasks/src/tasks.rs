@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::{
-    JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, TaskId, TaskInvocation,
+    ActorId, JsonFilter, ListQuery, Page, ParentFilter, StatusFilter, TaskId, TaskInvocation,
     TaskRepository, TaskStatus,
 };
 use jiff::Timestamp;
@@ -108,18 +108,24 @@ impl Tasks {
     pub async fn spawn<T: TaskDefinition>(
         &self,
         input: T::Input,
+        initiator: ActorId,
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
         self.inner
-            .spawn_value::<T::Output>(T::KIND, value, None)
+            .spawn_value::<T::Output>(T::KIND, value, None, initiator)
             .await
     }
 
     /// Spawns a top-level task by kind string, validating `input` against the
     /// kind's input type, and returns the created invocation. Used by the API,
     /// which does not await a typed output.
-    pub async fn create(&self, kind: &str, input: Value) -> Result<TaskInvocation, TaskError> {
-        let (invocation, _phase) = self.inner.start(kind, input, None).await?;
+    pub async fn create(
+        &self,
+        kind: &str,
+        input: Value,
+        initiator: ActorId,
+    ) -> Result<TaskInvocation, TaskError> {
+        let (invocation, _phase) = self.inner.start(kind, input, None, initiator).await?;
         Ok(invocation)
     }
 
@@ -275,6 +281,7 @@ impl TasksInner {
         kind: &str,
         input: Value,
         parent_id: Option<TaskId>,
+        initiator: ActorId,
     ) -> Result<(TaskInvocation, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
             self.registry
@@ -286,7 +293,7 @@ impl TasksInner {
         let now = Timestamp::now();
         let id = self
             .tasks
-            .create_running(kind, parent_id, &input, now)
+            .create_running(kind, parent_id, initiator, &input, now)
             .await?;
 
         let cancel = match parent_id.and_then(|parent| self.parent_token(parent)) {
@@ -300,7 +307,13 @@ impl TasksInner {
             phase: phase_tx,
         });
 
-        let ctx = TaskContext::new(id, Arc::clone(self), cancel, Arc::clone(&shared.progress));
+        let ctx = TaskContext::new(
+            id,
+            initiator,
+            Arc::clone(self),
+            cancel,
+            Arc::clone(&shared.progress),
+        );
         let capabilities = definition.capabilities();
 
         // Hold the registry lock across spawn and insert so the body cannot
@@ -329,6 +342,7 @@ impl TasksInner {
             id,
             kind: kind.to_owned(),
             parent_id,
+            initiator_id: initiator,
             status: TaskStatus::Running,
             input,
             output: None,
@@ -346,8 +360,9 @@ impl TasksInner {
         kind: &str,
         input: Value,
         parent_id: Option<TaskId>,
+        initiator: ActorId,
     ) -> Result<TaskHandle<O>, TaskError> {
-        let (invocation, phase) = self.start(kind, input, parent_id).await?;
+        let (invocation, phase) = self.start(kind, input, parent_id, initiator).await?;
         Ok(TaskHandle {
             id: invocation.id,
             inner: Arc::clone(self),

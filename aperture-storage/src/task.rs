@@ -12,6 +12,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 use turso::{Connection, Row, params_from_iter};
 
+use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
@@ -19,7 +20,7 @@ use crate::query::Filters;
 use crate::sql::{Columns, ToSql};
 
 db_id! {
-    /// Primary key of a task invocation.
+    /// Primary key of a row in the `tasks` table.
     pub struct TaskId;
 }
 
@@ -28,6 +29,7 @@ mod col {
     pub const ERROR: &str = "error";
     pub const FINISHED_AT: &str = "finished_at";
     pub const ID: &str = "id";
+    pub const INITIATOR_ID: &str = "initiator_id";
     pub const INPUT: &str = "input";
     pub const KIND: &str = "kind";
     pub const OUTPUT: &str = "output";
@@ -42,6 +44,7 @@ const TASK_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::KIND,
     col::PARENT_ID,
+    col::INITIATOR_ID,
     col::STATUS,
     col::INPUT,
     col::OUTPUT,
@@ -112,6 +115,8 @@ pub struct TaskInvocation {
     pub kind: String,
     /// The parent invocation, if this task was spawned by another.
     pub parent_id: Option<TaskId>,
+    /// The actor that initiated this task. Child tasks inherit the parent's.
+    pub initiator_id: ActorId,
     /// The lifecycle state.
     pub status: TaskStatus,
     /// JSON value passed to the task at spawn.
@@ -272,12 +277,14 @@ impl TaskRepository {
         &self,
         kind: &str,
         parent_id: Option<TaskId>,
+        initiator_id: ActorId,
         input: &Value,
         created_at: Timestamp,
     ) -> Result<TaskId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
+            initiator_id.to_sql(),
             TaskStatus::Pending.to_sql(),
             input.to_sql(),
             created_at.to_sql(),
@@ -285,8 +292,8 @@ impl TaskRepository {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO tasks (kind, parent_id, status, input, created_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5)
+                    INSERT INTO tasks (kind, parent_id, initiator_id, status, input, created_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ),
                 params,
             )
@@ -304,12 +311,14 @@ impl TaskRepository {
         &self,
         kind: &str,
         parent_id: Option<TaskId>,
+        initiator_id: ActorId,
         input: &Value,
         started_at: Timestamp,
     ) -> Result<TaskId> {
         let params = params_from_iter([
             kind.to_sql(),
             parent_id.to_sql(),
+            initiator_id.to_sql(),
             TaskStatus::Running.to_sql(),
             input.to_sql(),
             started_at.to_sql(),
@@ -318,8 +327,8 @@ impl TaskRepository {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO tasks (kind, parent_id, status, input, created_at, started_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    INSERT INTO tasks (kind, parent_id, initiator_id, status, input, created_at, started_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 ),
                 params,
             )
@@ -515,6 +524,7 @@ impl TryFrom<&Row> for TaskInvocation {
             id: TASK_COLUMNS.extract(row, col::ID)?,
             kind: TASK_COLUMNS.extract(row, col::KIND)?,
             parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
+            initiator_id: TASK_COLUMNS.extract(row, col::INITIATOR_ID)?,
             status: TASK_COLUMNS.extract(row, col::STATUS)?,
             input: TASK_COLUMNS.extract(row, col::INPUT)?,
             output: TASK_COLUMNS.extract(row, col::OUTPUT)?,

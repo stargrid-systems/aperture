@@ -31,6 +31,10 @@ macro_rules! db_id {
             pub const fn get(self) -> i64 {
                 self.0
             }
+
+            pub const fn from_i64(value: i64) -> Self {
+                Self(value)
+            }
         }
 
         impl From<i64> for $name {

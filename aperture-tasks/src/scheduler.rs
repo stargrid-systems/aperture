@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aperture_runtime::Stop;
-use aperture_storage::TaskScheduleRepository;
+use aperture_storage::{ActorId, TaskScheduleRepository};
 use jiff::Timestamp;
 use tokio::time::{MissedTickBehavior, interval};
 
@@ -45,7 +45,12 @@ impl Scheduler {
         let mut spawned = 0;
         for schedule in due {
             let input = schedule.input;
-            match self.inner.tasks.create(&schedule.kind, input).await {
+            match self
+                .inner
+                .tasks
+                .create(&schedule.kind, input, ActorId::SYSTEM)
+                .await
+            {
                 Ok(invocation) => {
                     spawned += 1;
                     if let Err(err) = repo

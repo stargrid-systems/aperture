@@ -5,6 +5,7 @@
 
 use aperture_storage::Storage;
 use aperture_tasks::{TaskDescriptor, Tasks};
+use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::trace::TraceLayer;
@@ -23,6 +24,7 @@ pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
 pub use self::tls::{RotateCertificateDefinition, install_default_rotation_schedule};
 
 mod api;
+mod auth;
 mod conditional;
 mod dto;
 mod error;
@@ -38,6 +40,8 @@ pub struct AppState {
     storage: Storage,
     spectra: Spectra,
     tasks: Tasks,
+    auth: aperture_auth::AuthHandle,
+    login_limiter: aperture_auth::LoginLimiter,
 }
 
 impl AppState {
@@ -47,6 +51,7 @@ impl AppState {
         storage: Storage,
         spectra: Spectra,
         tasks: Tasks,
+        auth: aperture_auth::AuthHandle,
     ) -> Self {
         Self {
             version,
@@ -54,6 +59,8 @@ impl AppState {
             storage,
             spectra,
             tasks,
+            auth,
+            login_limiter: aperture_auth::LoginLimiter::default(),
         }
     }
 
@@ -76,6 +83,14 @@ impl AppState {
     pub(crate) fn tasks(&self) -> &Tasks {
         &self.tasks
     }
+
+    pub(crate) fn auth(&self) -> &aperture_auth::AuthHandle {
+        &self.auth
+    }
+
+    pub(crate) fn login_limiter(&self) -> &aperture_auth::LoginLimiter {
+        &self.login_limiter
+    }
 }
 
 #[derive(OpenApi)]
@@ -93,9 +108,10 @@ fn api_router() -> OpenApiRouter<AppState> {
 }
 
 /// Returns the generated OpenAPI specification for the gateway API, with the
-/// registered task kinds in `descriptors` projected into it.
+/// registered task kinds projected in.
 pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
     let mut spec = self::api_router().split_for_parts().1;
+    auth::add_security_schemes(&mut spec);
     project_tasks(&mut spec, descriptors);
     spec
 }
@@ -113,6 +129,7 @@ pub fn app(state: AppState) -> Router {
         .merge(api)
         .route("/api/openapi.json", get(move || openapi_doc(doc.clone())))
         .fallback(spectra_fallback)
+        .layer(from_fn_with_state(state.clone(), auth::auth_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

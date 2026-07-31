@@ -4,12 +4,13 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
+use aperture_auth::AuthHandle;
 use aperture_http::{
     AppState, HttpServer, OpenApiSpec, RotateCertificateDefinition, Spectra, SpectraConfig,
     SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
-use aperture_storage::Storage;
+use aperture_storage::{ActorId, Storage};
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
 use tokio::{fs, signal};
 use uuid::Uuid;
@@ -65,13 +66,21 @@ pub async fn serve(
 
     artifacts.sync().await?;
 
+    // Auth: build enforcer and seed default policies.
+    let auth = AuthHandle::new(storage.clone()).await?;
+
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, artifacts.clone());
     let tasks = Tasks::new(storage.tasks()?, registry);
 
     let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
-    let spectra = Spectra::new(artifacts.clone(), tasks.clone(), SpectraConfig::default());
+    let spectra = Spectra::new(
+        artifacts.clone(),
+        tasks.clone(),
+        SpectraConfig::default(),
+        ActorId::SYSTEM,
+    );
     spectra.activate_if_present().await?;
 
     if https_addr.is_some() {
@@ -84,6 +93,7 @@ pub async fn serve(
         storage.clone(),
         spectra.clone(),
         tasks.clone(),
+        auth,
     );
     let app = aperture_http::app(state);
 
@@ -136,6 +146,31 @@ pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
 fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
     registry.register(DownloadDefinition::new(artifacts.clone()));
     registry.register(RotateCertificateDefinition::new(artifacts));
+}
+
+/// Resets the password for `username` and prints the new password to stdout.
+///
+/// Revokes every active session for the user's actor so the old password
+/// stops working immediately.
+pub async fn reset_password(username: &str, data_dir: &Path) -> anyhow::Result<()> {
+    let db_path = data_dir.join("aperture.db");
+    let db_path = db_path.to_str().ok_or_else(|| {
+        anyhow::format_err!("data dir is not valid UTF-8: {}", data_dir.display())
+    })?;
+    let storage = Storage::open(db_path).await?;
+    let users = storage.users()?;
+    let user = users
+        .find_by_username(username)
+        .await?
+        .ok_or_else(|| anyhow::format_err!("user {username:?} not found"))?;
+    let password = aperture_auth::Password::generate();
+    let hash = password.hash()?;
+    users
+        .update_password(user.id, &hash, Some(jiff::Timestamp::now()))
+        .await?;
+    storage.sessions()?.delete_for_actor(user.actor_id).await?;
+    println!("{}", password.as_str());
+    Ok(())
 }
 
 /// Opens the storage database and blob store under `data_dir`.

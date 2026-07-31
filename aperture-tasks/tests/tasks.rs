@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use aperture_storage::{Storage, TaskId, TaskStatus};
+use aperture_storage::{ActorId, Storage, TaskId, TaskStatus};
 use aperture_tasks::{
     Capabilities, ProgressMessage, RunError, TaskContext, TaskDefinition, TaskError, TaskRegistry,
     Tasks,
@@ -163,7 +163,10 @@ async fn spawn_and_wait_returns_decoded_output() {
     registry.register(Double);
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let handle = tasks.spawn::<Double>(DoubleIn { n: 21 }).await.unwrap();
+    let handle = tasks
+        .spawn::<Double>(DoubleIn { n: 21 }, ActorId::SYSTEM)
+        .await
+        .unwrap();
     let id = handle.id();
     let output = handle.wait().await.unwrap();
     assert_eq!(output.result, 42);
@@ -181,7 +184,10 @@ async fn live_progress_is_visible_while_running() {
     registry.register(probe);
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
+    let handle = tasks
+        .spawn::<Probe>(Empty {}, ActorId::SYSTEM)
+        .await
+        .unwrap();
     ready.notified().await;
 
     let progress = handle.progress().expect("running task has progress");
@@ -204,7 +210,10 @@ async fn cancellable_task_records_cancelled() {
     registry.register(probe);
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
+    let handle = tasks
+        .spawn::<Probe>(Empty {}, ActorId::SYSTEM)
+        .await
+        .unwrap();
     let id = handle.id();
     ready.notified().await;
 
@@ -224,7 +233,10 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     registry.register(probe);
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let handle = tasks.spawn::<Probe>(Empty {}).await.unwrap();
+    let handle = tasks
+        .spawn::<Probe>(Empty {}, ActorId::SYSTEM)
+        .await
+        .unwrap();
     let id = handle.id();
     ready.notified().await;
 
@@ -249,7 +261,10 @@ async fn child_inherits_parent_cancellation() {
     registry.register(parent);
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let handle = tasks.spawn::<Parent>(Empty {}).await.unwrap();
+    let handle = tasks
+        .spawn::<Parent>(Empty {}, ActorId::SYSTEM)
+        .await
+        .unwrap();
     let parent_id = handle.id();
     spawned.notified().await;
     child_ready.notified().await;
@@ -274,7 +289,10 @@ async fn panicking_task_settles_as_failed() {
     registry.register(Boom);
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let handle = tasks.spawn::<Boom>(Empty {}).await.unwrap();
+    let handle = tasks
+        .spawn::<Boom>(Empty {}, ActorId::SYSTEM)
+        .await
+        .unwrap();
     let id = handle.id();
 
     // The body panics, but wait() must still return rather than hang forever.
@@ -297,7 +315,10 @@ async fn failed_task_records_full_error_chain() {
     registry.register(Fail);
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
-    let handle = tasks.spawn::<Fail>(Empty {}).await.unwrap();
+    let handle = tasks
+        .spawn::<Fail>(Empty {}, ActorId::SYSTEM)
+        .await
+        .unwrap();
     let id = handle.id();
     assert!(matches!(
         handle.wait().await,
@@ -325,7 +346,10 @@ async fn cancel_distinguishes_unknown_from_settled() {
     ));
 
     // A task that already finished is reported as settled, not unknown.
-    let handle = tasks.spawn::<Double>(DoubleIn { n: 1 }).await.unwrap();
+    let handle = tasks
+        .spawn::<Double>(DoubleIn { n: 1 }, ActorId::SYSTEM)
+        .await
+        .unwrap();
     let id = handle.id();
     handle.wait().await.unwrap();
     assert!(
@@ -339,7 +363,13 @@ async fn reconcile_marks_orphaned_invocations() {
     let id = storage
         .tasks()
         .unwrap()
-        .create("double", None, &serde_json::json!({}), at(1_000))
+        .create(
+            "double",
+            None,
+            ActorId::SYSTEM,
+            &serde_json::json!({}),
+            at(1_000),
+        )
         .await
         .unwrap();
     storage

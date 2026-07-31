@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "aperture",
     "aperture-artifacts",
+    "aperture-auth",
     "aperture-http",
     "aperture-runtime",
     "aperture-storage",
@@ -20,6 +21,7 @@ version = "0.1.0"
 
 [workspace.dependencies]
 aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
+aperture-auth = { version = "0.1.0", path = "aperture-auth" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
 aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
@@ -27,10 +29,14 @@ aperture-tasks = { version = "0.1.0", path = "aperture-tasks" }
 
 anyhow = { version = "1", default-features = false }
 arc-swap = { version = "1", default-features = false }
+argon2 = { version = "0.5", default-features = false }
+async-trait = { version = "0.1", default-features = false }
 axum = { version = "0.8", default-features = false }
 backhand = { version = "0.25", default-features = false }
 bytes = { version = "1", default-features = false }
+casbin = { version = "2.20", default-features = false }
 clap = { version = "4", default-features = false }
+cookie = { version = "0.18", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 hex = { version = "0.4", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
@@ -38,12 +44,16 @@ httpdate = { version = "1", default-features = false }
 jiff = { version = "0.2", default-features = false }
 mime_guess = { version = "2", default-features = false }
 oci-client = { version = "0.17", default-features = false }
+password-hash = { version = "0.5", default-features = false }
 percent-encoding = { version = "2", default-features = false }
+rand = { version = "0.9", default-features = false }
 rcgen = { version = "0.14", default-features = false }
 rustls = { version = "0.23", default-features = false }
+rustls-pemfile = { version = "2", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 sha2 = { version = "0.11", default-features = false }
+subtle = { version = "2", default-features = false }
 thiserror = { version = "2", default-features = false }
 # rcgen exposes cert validity via `time::OffsetDateTime`; jiff covers the rest.
 time = { version = "0.3", default-features = false }

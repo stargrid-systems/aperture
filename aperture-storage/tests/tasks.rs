@@ -1,6 +1,6 @@
 use aperture_storage::{
-    JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage, TaskId,
-    TaskStatus,
+    ActorId, JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage,
+    TaskId, TaskStatus,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -15,7 +15,13 @@ async fn create_then_finish_records_lifecycle() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create("download", None, &json!({"key": "spectra"}), at(1_000))
+        .create(
+            "download",
+            None,
+            ActorId::SYSTEM,
+            &json!({"key": "spectra"}),
+            at(1_000),
+        )
         .await
         .unwrap();
 
@@ -50,7 +56,13 @@ async fn create_running_starts_in_running_state() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create_running("download", None, &json!({"key": "spectra"}), at(1_000))
+        .create_running(
+            "download",
+            None,
+            ActorId::SYSTEM,
+            &json!({"key": "spectra"}),
+            at(1_000),
+        )
         .await
         .unwrap();
 
@@ -66,7 +78,7 @@ async fn finish_does_not_overwrite_a_finished_row() {
     let repo = storage.tasks().unwrap();
 
     let id = repo
-        .create_running("download", None, &json!({}), at(1_000))
+        .create_running("download", None, ActorId::SYSTEM, &json!({}), at(1_000))
         .await
         .unwrap();
     repo.finish(
@@ -104,15 +116,27 @@ async fn list_filters_by_status_kind_and_parent() {
     let repo = storage.tasks().unwrap();
 
     let parent = repo
-        .create("update", None, &json!({}), at(1_000))
+        .create("update", None, ActorId::SYSTEM, &json!({}), at(1_000))
         .await
         .unwrap();
     let download = repo
-        .create("download", Some(parent), &json!({}), at(1_100))
+        .create(
+            "download",
+            Some(parent),
+            ActorId::SYSTEM,
+            &json!({}),
+            at(1_100),
+        )
         .await
         .unwrap();
     let install = repo
-        .create("install", Some(parent), &json!({}), at(1_200))
+        .create(
+            "install",
+            Some(parent),
+            ActorId::SYSTEM,
+            &json!({}),
+            at(1_200),
+        )
         .await
         .unwrap();
     repo.finish(install, TaskStatus::Failed, at(1_300), None, Some("boom"))
@@ -179,6 +203,7 @@ async fn list_filters_by_json_input_and_output() {
         .create_running(
             "download",
             None,
+            ActorId::SYSTEM,
             &json!({"key": "spectra", "source": {"reference": "ghcr.io/x/spectra:1"}}),
             at(1_000),
         )
@@ -194,7 +219,13 @@ async fn list_filters_by_json_input_and_output() {
     .await
     .unwrap();
     let other = repo
-        .create_running("download", None, &json!({"key": "other"}), at(1_100))
+        .create_running(
+            "download",
+            None,
+            ActorId::SYSTEM,
+            &json!({"key": "other"}),
+            at(1_100),
+        )
         .await
         .unwrap();
     repo.finish(
@@ -287,16 +318,16 @@ async fn list_active_finds_unfinished_invocations() {
     let repo = storage.tasks().unwrap();
 
     let pending = repo
-        .create("download", None, &json!({}), at(1_000))
+        .create("download", None, ActorId::SYSTEM, &json!({}), at(1_000))
         .await
         .unwrap();
     let running = repo
-        .create("download", None, &json!({}), at(1_100))
+        .create("download", None, ActorId::SYSTEM, &json!({}), at(1_100))
         .await
         .unwrap();
     repo.mark_running(running, at(1_150)).await.unwrap();
     let done = repo
-        .create("download", None, &json!({}), at(1_200))
+        .create("download", None, ActorId::SYSTEM, &json!({}), at(1_200))
         .await
         .unwrap();
     repo.finish(done, TaskStatus::Succeeded, at(1_300), None, None)

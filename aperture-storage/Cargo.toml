@@ -16,8 +16,10 @@ workspace = true
 anyhow = { workspace = true, features = ["std"] }
 hex = { workspace = true, features = ["alloc"] }
 jiff = { workspace = true, features = ["std", "serde"] }
+password-hash = { workspace = true, features = ["alloc", "std"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
+subtle = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 turso = { workspace = true, features = ["fts"] }

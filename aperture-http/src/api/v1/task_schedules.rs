@@ -1,3 +1,4 @@
+use aperture_auth::{Action, AuthenticatedActor, Object};
 use aperture_storage::TaskScheduleId;
 use aperture_tasks::NewTaskSchedule;
 use axum::Json;
@@ -34,9 +35,14 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
     responses((status = 200, description = "Task schedules", body = Page<TaskScheduleResponse>)),
 )]
 async fn list_task_schedules(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Query(params): Query<TaskScheduleListParams>,
 ) -> Result<Json<Page<TaskScheduleResponse>>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::TaskSchedule, Action::Read)
+        .await?;
     let repo = state.storage().task_schedules()?;
     let page = repo.list(&params.to_query()).await?;
     Ok(Json(TaskScheduleResponse::page(page)))
@@ -54,9 +60,14 @@ async fn list_task_schedules(
     ),
 )]
 async fn create_task_schedule(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Json(request): Json<CreateTaskScheduleRequest>,
 ) -> Result<(StatusCode, Json<TaskScheduleResponse>), ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::TaskSchedule, Action::Create)
+        .await?;
     let now = Timestamp::now();
     let repo = state.storage().task_schedules()?;
     let id = repo
@@ -84,9 +95,14 @@ async fn create_task_schedule(
     ),
 )]
 async fn get_task_schedule(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(id): Path<TaskScheduleId>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::TaskSchedule, Action::Read)
+        .await?;
     let schedule = state
         .storage()
         .task_schedules()?
@@ -109,10 +125,15 @@ async fn get_task_schedule(
     ),
 )]
 async fn update_task_schedule(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(id): Path<TaskScheduleId>,
     Json(request): Json<UpdateTaskScheduleRequest>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::TaskSchedule, Action::Update)
+        .await?;
     let schedule = state
         .storage()
         .task_schedules()?
@@ -134,9 +155,14 @@ async fn update_task_schedule(
     ),
 )]
 async fn delete_task_schedule(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(id): Path<TaskScheduleId>,
 ) -> Result<StatusCode, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::TaskSchedule, Action::Delete)
+        .await?;
     let removed = state.storage().task_schedules()?.delete(id).await?;
     if removed {
         Ok(StatusCode::NO_CONTENT)

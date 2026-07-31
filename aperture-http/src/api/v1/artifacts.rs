@@ -3,6 +3,7 @@
 use std::io;
 
 use aperture_artifacts::ArtifactError;
+use aperture_auth::{Action, AuthenticatedActor, Object};
 use aperture_storage::{ArtifactKey, Digest, MediaType};
 use axum::Json;
 use axum::body::Body;
@@ -58,9 +59,14 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
     responses((status = 200, description = "Artifacts", body = Page<ArtifactSummaryResponse>)),
 )]
 async fn list_artifacts(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Query(params): Query<ArtifactListParams>,
 ) -> Result<Json<Page<ArtifactSummaryResponse>>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Artifact, Action::Read)
+        .await?;
     let page = state
         .spectra()
         .artifacts()
@@ -81,9 +87,14 @@ async fn list_artifacts(
     ),
 )]
 async fn get_artifact(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
 ) -> Result<Json<ArtifactSummaryResponse>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Artifact, Action::Read)
+        .await?;
     let artifact = state.spectra().artifacts().artifact(&key).await?;
     artifact
         .map(|key| Json(key.into()))
@@ -102,10 +113,15 @@ async fn get_artifact(
     responses((status = 200, description = "Versions", body = Page<ArtifactVersionResponse>)),
 )]
 async fn list_versions(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
     Query(params): Query<VersionListParams>,
 ) -> Result<Json<Page<ArtifactVersionResponse>>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Artifact, Action::Read)
+        .await?;
     let page = state
         .spectra()
         .artifacts()
@@ -135,9 +151,14 @@ async fn list_versions(
     ),
 )]
 async fn get_version(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<Json<ArtifactVersionResponse>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Artifact, Action::Read)
+        .await?;
     let version = state.spectra().artifacts().version(&key, &digest).await?;
     version
         .map(|version| Json(version.into()))
@@ -159,9 +180,14 @@ async fn get_version(
     ),
 )]
 async fn delete_version(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<StatusCode, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Artifact, Action::Evict)
+        .await?;
     let evicted = state
         .spectra()
         .artifacts()
@@ -200,6 +226,7 @@ async fn delete_version(
     ),
 )]
 async fn upload_artifact(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
     headers: HeaderMap,
@@ -212,6 +239,10 @@ async fn upload_artifact(
     ),
     ApiError,
 > {
+    state
+        .auth()
+        .require(&auth.subject, Object::Artifact, Action::Write)
+        .await?;
     // Parse Content-Type as a MediaType at the boundary. An unparseable
     // value is treated as absent, so the store records no media type rather
     // than garbage.
@@ -261,10 +292,15 @@ async fn upload_artifact(
     ),
 )]
 async fn download_artifact_blob(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, Digest)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Artifact, Action::Download)
+        .await?;
     let artifacts = state.spectra().artifacts();
     let artifact = artifacts
         .version(&key, &digest)

@@ -22,6 +22,8 @@ enum Command {
     Run(RunArgs),
     /// Print the OpenAPI specification as JSON.
     Openapi,
+    /// Reset the password for a user. Prints the new password to stdout.
+    ResetPassword(ResetPasswordArgs),
 }
 
 #[derive(Debug, Args)]
@@ -36,6 +38,16 @@ struct RunArgs {
     #[arg(long, env = "APERTURE_HTTP_ADDR", default_value = "[::1]:8080")]
     http_addr: BindAddr,
     /// Directory for runtime data and cached components.
+    #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
+    data_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ResetPasswordArgs {
+    /// Username whose password to reset. Defaults to "admin".
+    #[arg(long, default_value = "admin")]
+    user: String,
+    /// Directory for runtime data.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
 }
@@ -78,6 +90,9 @@ fn main() -> anyhow::Result<()> {
             args.http_addr.0,
             args.data_dir,
         )),
+        Command::ResetPassword(args) => {
+            block_on(aperture::reset_password(&args.user, &args.data_dir))
+        }
     }
 }
 

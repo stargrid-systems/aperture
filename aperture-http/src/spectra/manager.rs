@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition, DownloadInput, DownloadSource};
 use aperture_runtime::{Stop, Worker};
+use aperture_storage::ActorId;
 use aperture_tasks::Tasks;
 use tokio::task::JoinHandle;
 use tokio::time;
@@ -31,6 +32,7 @@ struct SpectraInner {
     artifacts: Artifacts,
     tasks: Tasks,
     config: SpectraConfig,
+    system_actor: ActorId,
     current: RwLock<Option<Arc<SpectraImage>>>,
     preparing: Arc<AtomicBool>,
     /// Cancels the in-flight prepare task, if any. Cloned into the task so
@@ -43,13 +45,20 @@ struct SpectraInner {
 
 impl Spectra {
     /// Creates a frontend backed by `artifacts`, fetched via `tasks`, pulling
-    /// from `config`.
-    pub fn new(artifacts: Artifacts, tasks: Tasks, config: SpectraConfig) -> Self {
+    /// from `config`. `system_actor` is the actor used for internally spawned
+    /// download tasks.
+    pub fn new(
+        artifacts: Artifacts,
+        tasks: Tasks,
+        config: SpectraConfig,
+        system_actor: ActorId,
+    ) -> Self {
         Self {
             inner: Arc::new(SpectraInner {
                 artifacts,
                 tasks,
                 config,
+                system_actor,
                 current: RwLock::new(None),
                 preparing: Arc::new(AtomicBool::new(false)),
                 cancel: CancellationToken::new(),
@@ -131,7 +140,7 @@ impl Spectra {
         };
         self.inner
             .tasks
-            .spawn::<DownloadDefinition>(input)
+            .spawn::<DownloadDefinition>(input, self.inner.system_actor)
             .await?
             .wait()
             .await?;

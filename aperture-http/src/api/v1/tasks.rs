@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use aperture_auth::{Action, AuthenticatedActor, Object};
 use aperture_storage::TaskId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -33,9 +34,14 @@ pub(crate) fn definitions_router() -> OpenApiRouter<AppState> {
     responses((status = 200, description = "Tasks", body = Page<TaskResponse>)),
 )]
 async fn list_tasks(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Task, Action::Read)
+        .await?;
     let tasks = state.tasks();
     let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
     let parent = params.parent_filter();
@@ -72,10 +78,18 @@ async fn list_tasks(
     ),
 )]
 async fn create_task(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Json(request): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
-    let task = state.tasks().create(&request.kind, request.input).await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Task, Action::Create)
+        .await?;
+    let task = state
+        .tasks()
+        .create(&request.kind, request.input, auth.actor.id)
+        .await?;
     Ok((StatusCode::ACCEPTED, Json(TaskResponse::new(task, None))))
 }
 
@@ -91,9 +105,14 @@ async fn create_task(
     ),
 )]
 async fn get_task(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Task, Action::Read)
+        .await?;
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     let progress = state.tasks().progress(id);
     Ok(Json(TaskResponse::new(task, progress)))
@@ -113,9 +132,14 @@ async fn get_task(
     ),
 )]
 async fn cancel_task(
+    auth: AuthenticatedActor,
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<StatusCode, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::Task, Action::Cancel)
+        .await?;
     if state.tasks().cancel(id).await? {
         Ok(StatusCode::ACCEPTED)
     } else {
@@ -130,7 +154,14 @@ async fn cancel_task(
     operation_id = operation_ids::LIST_TASK_DEFINITIONS,
     responses((status = 200, description = "Task definitions", body = Vec<TaskDefinitionResponse>)),
 )]
-async fn list_definitions(State(state): State<AppState>) -> Json<Vec<TaskDefinitionResponse>> {
+async fn list_definitions(
+    auth: AuthenticatedActor,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
+    state
+        .auth()
+        .require(&auth.subject, Object::TaskDefinition, Action::Read)
+        .await?;
     let definitions = state
         .tasks()
         .registry()
@@ -138,5 +169,5 @@ async fn list_definitions(State(state): State<AppState>) -> Json<Vec<TaskDefinit
         .into_iter()
         .map(TaskDefinitionResponse::from)
         .collect();
-    Json(definitions)
+    Ok(Json(definitions))
 }
