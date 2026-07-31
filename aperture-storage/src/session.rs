@@ -157,6 +157,36 @@ impl SessionRepository {
         Ok(affected as usize)
     }
 
+    /// Deletes all sessions for `actor_id` except the one whose token hash
+    /// matches `keep`. When `keep` is `None`, every session is deleted. Used on
+    /// password change to revoke other sessions while keeping the caller in.
+    #[tracing::instrument(level = "info", skip(self, keep))]
+    pub async fn delete_for_actor_except(
+        &self,
+        actor_id: ActorId,
+        keep: Option<&TokenHash>,
+    ) -> Result<usize> {
+        let affected = match keep {
+            Some(hash) => self
+                .connection
+                .execute(
+                    sql!(DELETE FROM sessions WHERE actor_id = ?1 AND token_hash != ?2),
+                    params_from_iter([actor_id.to_sql(), hash.to_sql()]),
+                )
+                .await
+                .map_err(StorageError::from_turso)?,
+            None => self
+                .connection
+                .execute(
+                    sql!(DELETE FROM sessions WHERE actor_id = ?1),
+                    params_from_iter([actor_id.to_sql()]),
+                )
+                .await
+                .map_err(StorageError::from_turso)?,
+        };
+        Ok(affected as usize)
+    }
+
     /// Lists sessions for `actor_id`, ordered by creation time descending.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_for_actor(&self, actor_id: ActorId) -> Result<Vec<Session>> {

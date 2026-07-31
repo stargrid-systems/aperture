@@ -54,11 +54,10 @@ const TABLES: &str = sql!(
         actor_id INTEGER NOT NULL REFERENCES actors (id),
         name TEXT NOT NULL,
         key_hash BLOB NOT NULL,
-        prefix TEXT NOT NULL,
+        prefix TEXT NOT NULL UNIQUE,
         last_used_at timestamp_us,
         created_at timestamp_us NOT NULL
     ) STRICT;
-    CREATE INDEX idx_api_keys_prefix ON api_keys (prefix);
     CREATE INDEX idx_api_keys_actor ON api_keys (actor_id);
 
     CREATE TABLE sessions (

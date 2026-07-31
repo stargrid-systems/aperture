@@ -1,5 +1,7 @@
 //! API keys: long-lived tokens for headless clients, with per-key scoping.
 
+use std::time::Duration;
+
 use jiff::Timestamp;
 use turso::{Connection, Row, params_from_iter};
 
@@ -8,6 +10,10 @@ use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
 use crate::secret::ApiKeyHash;
 use crate::sql::{Columns, ToSql};
+
+/// Minimum spacing between `last_used_at` updates. See
+/// [`ApiKeyRepository::touch_last_used_if_stale`].
+const STALE_THRESHOLD: Duration = Duration::from_secs(60);
 
 db_id! {
     /// Primary key of a row in the `api_keys` table.
@@ -165,6 +171,25 @@ impl ApiKeyRepository {
             .execute(
                 sql!(UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2),
                 params_from_iter([at.to_sql(), id.to_sql()]),
+            )
+            .await
+            .map_err(StorageError::from_turso)?;
+        Ok(())
+    }
+
+    /// Updates the last-used timestamp only if it is unset or older than the
+    /// stale threshold (60 seconds) from `at`. This bounds the per-request
+    /// write load from API-key authentication to at most one write per window.
+    #[tracing::instrument(level = "info", skip(self))]
+    pub async fn touch_last_used_if_stale(&self, id: ApiKeyId, at: Timestamp) -> Result<()> {
+        let cutoff = at - STALE_THRESHOLD;
+        self.connection
+            .execute(
+                sql!(
+                    UPDATE api_keys SET last_used_at = ?1
+                    WHERE id = ?2 AND (last_used_at IS NULL OR last_used_at < ?3)
+                ),
+                params_from_iter([at.to_sql(), id.to_sql(), cutoff.to_sql()]),
             )
             .await
             .map_err(StorageError::from_turso)?;
