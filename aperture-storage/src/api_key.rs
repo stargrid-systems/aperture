@@ -122,7 +122,7 @@ impl ApiKeyRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_api_key(&row)?)),
+            Some(row) => Ok(Some(ApiKey::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -140,7 +140,7 @@ impl ApiKeyRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_api_key(&row)?)),
+            Some(row) => Ok(Some(ApiKey::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -159,7 +159,7 @@ impl ApiKeyRepository {
             .map_err(StorageError::from_turso)?;
         let mut keys = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            keys.push(row_to_api_key(&row)?);
+            keys.push(ApiKey::try_from(&row)?);
         }
         Ok(keys)
     }
@@ -197,14 +197,18 @@ impl ApiKeyRepository {
     }
 }
 
-fn row_to_api_key(row: &Row) -> Result<ApiKey> {
-    Ok(ApiKey {
-        id: API_KEY_COLUMNS.extract(row, col::ID)?,
-        actor_id: API_KEY_COLUMNS.extract(row, col::ACTOR_ID)?,
-        name: API_KEY_COLUMNS.extract(row, col::NAME)?,
-        key_hash: API_KEY_COLUMNS.extract(row, col::KEY_HASH)?,
-        prefix: API_KEY_COLUMNS.extract(row, col::PREFIX)?,
-        last_used_at: API_KEY_COLUMNS.extract(row, col::LAST_USED_AT)?,
-        created_at: API_KEY_COLUMNS.extract(row, col::CREATED_AT)?,
-    })
+impl TryFrom<&Row> for ApiKey {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(ApiKey {
+            id: API_KEY_COLUMNS.extract(row, col::ID)?,
+            actor_id: API_KEY_COLUMNS.extract(row, col::ACTOR_ID)?,
+            name: API_KEY_COLUMNS.extract(row, col::NAME)?,
+            key_hash: API_KEY_COLUMNS.extract(row, col::KEY_HASH)?,
+            prefix: API_KEY_COLUMNS.extract(row, col::PREFIX)?,
+            last_used_at: API_KEY_COLUMNS.extract(row, col::LAST_USED_AT)?,
+            created_at: API_KEY_COLUMNS.extract(row, col::CREATED_AT)?,
+        })
+    }
 }

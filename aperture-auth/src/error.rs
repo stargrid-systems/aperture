@@ -3,8 +3,6 @@
 use std::error::Error as StdError;
 use std::result::Result as StdResult;
 
-use argon2::password_hash;
-
 /// Errors from the auth layer.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -14,8 +12,8 @@ pub enum AuthError {
     #[error("policy error: {0}")]
     Policy(#[source] anyhow::Error),
 
-    #[error("password hash error: {0}")]
-    PasswordHash(#[from] password_hash::Error),
+    #[error("internal error")]
+    Internal(#[source] anyhow::Error),
 
     #[error("invalid credentials")]
     InvalidCredentials,

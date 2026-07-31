@@ -110,7 +110,7 @@ impl UserRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_user(&row)?)),
+            Some(row) => Ok(Some(User::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -128,7 +128,7 @@ impl UserRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_user(&row)?)),
+            Some(row) => Ok(Some(User::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -146,7 +146,7 @@ impl UserRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_user(&row)?)),
+            Some(row) => Ok(Some(User::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -165,7 +165,7 @@ impl UserRepository {
             .map_err(StorageError::from_turso)?;
         let mut users = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            users.push(row_to_user(&row)?);
+            users.push(User::try_from(&row)?);
         }
         Ok(users)
     }
@@ -224,13 +224,18 @@ impl UserRepository {
     }
 }
 
-fn row_to_user(row: &Row) -> Result<User> {
-    Ok(User {
-        id: USER_COLUMNS.extract(row, col::ID)?,
-        actor_id: USER_COLUMNS.extract(row, col::ACTOR_ID)?,
-        username: USER_COLUMNS.extract(row, col::USERNAME)?,
-        password_hash: USER_COLUMNS.extract(row, col::PASSWORD_HASH)?,
-        password_change_required_at: USER_COLUMNS.extract(row, col::PASSWORD_CHANGE_REQUIRED_AT)?,
-        created_at: USER_COLUMNS.extract(row, col::CREATED_AT)?,
-    })
+impl TryFrom<&Row> for User {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(User {
+            id: USER_COLUMNS.extract(row, col::ID)?,
+            actor_id: USER_COLUMNS.extract(row, col::ACTOR_ID)?,
+            username: USER_COLUMNS.extract(row, col::USERNAME)?,
+            password_hash: USER_COLUMNS.extract(row, col::PASSWORD_HASH)?,
+            password_change_required_at: USER_COLUMNS
+                .extract(row, col::PASSWORD_CHANGE_REQUIRED_AT)?,
+            created_at: USER_COLUMNS.extract(row, col::CREATED_AT)?,
+        })
+    }
 }

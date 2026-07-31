@@ -138,7 +138,7 @@ impl ActorRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_actor(&row)?)),
+            Some(row) => Ok(Some(Actor::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -185,18 +185,22 @@ impl ActorRepository {
             .map_err(StorageError::from_turso)?;
         let mut actors = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            actors.push(row_to_actor(&row)?);
+            actors.push(Actor::try_from(&row)?);
         }
         Ok(actors)
     }
 }
 
-fn row_to_actor(row: &Row) -> Result<Actor> {
-    Ok(Actor {
-        id: ACTOR_COLUMNS.extract(row, col::ID)?,
-        kind: ACTOR_COLUMNS.extract(row, col::KIND)?,
-        display_name: ACTOR_COLUMNS.extract(row, col::DISPLAY_NAME)?,
-        created_at: ACTOR_COLUMNS.extract(row, col::CREATED_AT)?,
-        disabled_at: ACTOR_COLUMNS.extract(row, col::DISABLED_AT)?,
-    })
+impl TryFrom<&Row> for Actor {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(Actor {
+            id: ACTOR_COLUMNS.extract(row, col::ID)?,
+            kind: ACTOR_COLUMNS.extract(row, col::KIND)?,
+            display_name: ACTOR_COLUMNS.extract(row, col::DISPLAY_NAME)?,
+            created_at: ACTOR_COLUMNS.extract(row, col::CREATED_AT)?,
+            disabled_at: ACTOR_COLUMNS.extract(row, col::DISABLED_AT)?,
+        })
+    }
 }

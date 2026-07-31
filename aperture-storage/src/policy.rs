@@ -11,6 +11,7 @@ use turso::{Connection, Value, params_from_iter};
 
 use crate::error::{Result, StorageError};
 use crate::macros::sql;
+use crate::query::Filters;
 use crate::sql::{ToSql, get};
 
 /// Whether a rule is a policy (`p`) or a grouping (`g`) rule.
@@ -105,14 +106,7 @@ impl PolicyRuleRepository {
     /// Inserts a single rule.
     #[tracing::instrument(level = "info", skip(self, values))]
     pub async fn insert(&self, ptype: PolicyType, values: &[String]) -> Result<()> {
-        let mut params: Vec<Value> = vec![ptype.to_sql()];
-        for i in 0..6 {
-            if i < values.len() {
-                params.push(values[i].to_sql());
-            } else {
-                params.push("".to_sql());
-            }
-        }
+        let params = padded_params(ptype, values);
         self.connection
             .execute(
                 sql!(
@@ -130,14 +124,7 @@ impl PolicyRuleRepository {
     /// many were removed.
     #[tracing::instrument(level = "info", skip(self, values))]
     pub async fn delete(&self, ptype: PolicyType, values: &[String]) -> Result<usize> {
-        let mut params: Vec<Value> = vec![ptype.to_sql()];
-        for i in 0..6 {
-            if i < values.len() {
-                params.push(values[i].to_sql());
-            } else {
-                params.push("".to_sql());
-            }
-        }
+        let params = padded_params(ptype, values);
         let affected = self
             .connection
             .execute(
@@ -164,22 +151,19 @@ impl PolicyRuleRepository {
         field_values: &[String],
     ) -> Result<usize> {
         let cols = ["v0", "v1", "v2", "v3", "v4", "v5"];
-        let mut where_parts: Vec<String> = vec!["ptype = ?1".to_owned()];
-        let mut params: Vec<Value> = vec![ptype.to_sql()];
+        let mut filters = Filters::new();
+        filters.eq_text("ptype", ptype.as_db());
         for (i, value) in field_values.iter().enumerate() {
             let col_idx = field_index + i;
             if col_idx >= cols.len() {
                 break;
             }
-            let param_idx = i + 2;
-            where_parts.push(format!("{} = ?{param_idx}", cols[col_idx]));
-            params.push(value.to_sql());
+            filters.eq_text(cols[col_idx], value);
         }
-        let where_clause = where_parts.join(" AND ");
-        let sql_str = format!("DELETE FROM casbin_rule WHERE {where_clause}");
+        let sql_str = format!("DELETE FROM casbin_rule {}", filters.where_clause());
         let affected = self
             .connection
-            .execute(&sql_str, params_from_iter(params))
+            .execute(&sql_str, params_from_iter(filters.into_params()))
             .await
             .map_err(StorageError::from_turso)?;
         Ok(affected as usize)
@@ -257,4 +241,16 @@ impl PolicyRuleRepository {
         tx.commit().await.map_err(StorageError::from_turso)?;
         Ok(total)
     }
+}
+
+fn padded_params(ptype: PolicyType, values: &[String]) -> Vec<Value> {
+    let mut params: Vec<Value> = vec![ptype.to_sql()];
+    for i in 0..6 {
+        if i < values.len() {
+            params.push(values[i].to_sql());
+        } else {
+            params.push("".to_sql());
+        }
+    }
+    params
 }

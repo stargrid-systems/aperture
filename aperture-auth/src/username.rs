@@ -20,7 +20,7 @@ const MAX_LEN: usize = 64;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(try_from = "String", into = "String")]
 #[schema(value_type = String)]
-pub struct Username(String);
+pub struct Username(Box<str>);
 
 impl Username {
     /// Returns the underlying string.
@@ -57,7 +57,7 @@ impl TryFrom<&str> for Username {
         {
             return Err(AuthError::InvalidUsername);
         }
-        Ok(Self(value.to_owned()))
+        Ok(Self(value.into()))
     }
 }
 
@@ -71,7 +71,7 @@ impl TryFrom<String> for Username {
 
 impl From<Username> for String {
     fn from(username: Username) -> Self {
-        username.0
+        username.0.into_string()
     }
 }
 

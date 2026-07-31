@@ -96,7 +96,7 @@ impl SessionRepository {
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
-            Some(row) => Ok(Some(row_to_session(&row)?)),
+            Some(row) => Ok(Some(Session::try_from(&row)?)),
             None => Ok(None),
         }
     }
@@ -194,18 +194,22 @@ impl SessionRepository {
             .map_err(StorageError::from_turso)?;
         let mut sessions = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            sessions.push(row_to_session(&row)?);
+            sessions.push(Session::try_from(&row)?);
         }
         Ok(sessions)
     }
 }
 
-fn row_to_session(row: &Row) -> Result<Session> {
-    Ok(Session {
-        id: SESSION_COLUMNS.extract(row, col::ID)?,
-        actor_id: SESSION_COLUMNS.extract(row, col::ACTOR_ID)?,
-        token_hash: SESSION_COLUMNS.extract(row, col::TOKEN_HASH)?,
-        expires_at: SESSION_COLUMNS.extract(row, col::EXPIRES_AT)?,
-        created_at: SESSION_COLUMNS.extract(row, col::CREATED_AT)?,
-    })
+impl TryFrom<&Row> for Session {
+    type Error = StorageError;
+
+    fn try_from(row: &Row) -> Result<Self> {
+        Ok(Session {
+            id: SESSION_COLUMNS.extract(row, col::ID)?,
+            actor_id: SESSION_COLUMNS.extract(row, col::ACTOR_ID)?,
+            token_hash: SESSION_COLUMNS.extract(row, col::TOKEN_HASH)?,
+            expires_at: SESSION_COLUMNS.extract(row, col::EXPIRES_AT)?,
+            created_at: SESSION_COLUMNS.extract(row, col::CREATED_AT)?,
+        })
+    }
 }

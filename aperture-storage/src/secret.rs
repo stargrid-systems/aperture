@@ -61,11 +61,11 @@ impl FromSql for PasswordHash {
 
 /// SHA-256 hash of a session token.
 #[derive(Clone, PartialEq, Eq)]
-pub struct TokenHash(Vec<u8>);
+pub struct TokenHash(Box<[u8]>);
 
 impl TokenHash {
     pub fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+        Self(bytes.into_boxed_slice())
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -81,14 +81,14 @@ impl fmt::Debug for TokenHash {
 
 impl ToSql for TokenHash {
     fn to_sql(&self) -> Value {
-        Value::Blob(self.0.clone())
+        Value::Blob(self.0.to_vec())
     }
 }
 
 impl FromSql for TokenHash {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
-            Value::Blob(bytes) => Ok(Self(bytes)),
+            Value::Blob(bytes) => Ok(Self(bytes.into_boxed_slice())),
             actual => Err(StorageError::ColumnTypeMismatch {
                 column: idx,
                 expected: "blob",
@@ -100,11 +100,11 @@ impl FromSql for TokenHash {
 
 /// SHA-256 hash of an API key.
 #[derive(Clone, PartialEq, Eq)]
-pub struct ApiKeyHash(Vec<u8>);
+pub struct ApiKeyHash(Box<[u8]>);
 
 impl ApiKeyHash {
     pub fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+        Self(bytes.into_boxed_slice())
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -125,14 +125,14 @@ impl fmt::Debug for ApiKeyHash {
 
 impl ToSql for ApiKeyHash {
     fn to_sql(&self) -> Value {
-        Value::Blob(self.0.clone())
+        Value::Blob(self.0.to_vec())
     }
 }
 
 impl FromSql for ApiKeyHash {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
-            Value::Blob(bytes) => Ok(Self(bytes)),
+            Value::Blob(bytes) => Ok(Self(bytes.into_boxed_slice())),
             actual => Err(StorageError::ColumnTypeMismatch {
                 column: idx,
                 expected: "blob",

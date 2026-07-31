@@ -37,12 +37,12 @@ fn argon2() -> Argon2<'static> {
 #[derive(Clone, Deserialize, utoipa::ToSchema)]
 #[serde(transparent)]
 #[schema(value_type = String)]
-pub struct Password(String);
+pub struct Password(Box<str>);
 
 impl Password {
     /// Wraps an existing plaintext string.
     pub fn new(s: String) -> Self {
-        Self(s)
+        Self(s.into_boxed_str())
     }
 
     /// Returns the underlying plaintext.
@@ -52,7 +52,7 @@ impl Password {
 
     /// Generates a random 32-byte hex password.
     pub fn generate() -> Self {
-        Self(random_hex(32))
+        Self(random_hex(32).into_boxed_str())
     }
 
     /// Validates the password against the length policy.
@@ -70,18 +70,20 @@ impl Password {
     /// Hashes this password with Argon2id and a random salt.
     pub fn hash(&self) -> Result<PasswordHash, AuthError> {
         let salt = SaltString::generate(&mut OsRng);
-        let hash = argon2().hash_password(self.0.as_bytes(), &salt)?;
+        let hash = argon2()
+            .hash_password(self.0.as_bytes(), &salt)
+            .map_err(|e| AuthError::Internal(e.into()))?;
         Ok(PasswordHash::new(hash.into()))
     }
 
     /// Verifies this password against a stored hash.
     /// Returns `Ok(true)` on match, `Ok(false)` on mismatch.
     pub fn verify_against(&self, hash: &PasswordHash) -> Result<bool, AuthError> {
-        let parsed = PhcHash::new(hash.as_str())?;
+        let parsed = PhcHash::new(hash.as_str()).map_err(|e| AuthError::Internal(e.into()))?;
         match argon2().verify_password(self.0.as_bytes(), &parsed) {
             Ok(()) => Ok(true),
             Err(Error::Password) => Ok(false),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(AuthError::Internal(err.into())),
         }
     }
 }

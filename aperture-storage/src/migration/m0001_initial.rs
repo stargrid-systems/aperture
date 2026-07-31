@@ -189,8 +189,10 @@ const TABLES: &str = sql!(
 /// Seeds the reserved system actor (id 1) and reserves the first 1000 ids.
 /// Kept out of [`TABLES`] because single-quoted SQL strings inside the `sql!`
 /// macro are parsed as Rust char literals.
-const ACTOR_SEED: &str = "\
-INSERT INTO actors (id, kind, display_name, created_at) VALUES (1, 'system', 'system', 0);\nUPDATE \
-                          sqlite_sequence SET seq = 1000 WHERE name = 'actors';\n";
+const ACTOR_SEED: &str = concat!(
+    "INSERT INTO actors (id, kind, display_name, created_at) ",
+    "VALUES (1, 'system', 'system', 0); ",
+    "UPDATE sqlite_sequence SET seq = 1000 WHERE name = 'actors';",
+);
 
 pub(super) const STATEMENTS: &[&str] = &[CUSTOM_TYPES, TABLES, ACTOR_SEED];

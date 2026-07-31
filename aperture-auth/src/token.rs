@@ -15,18 +15,18 @@ const API_KEY_LOOKUP_LEN: usize = 12;
 
 /// A raw session token. Redacts in Debug output.
 #[derive(Clone)]
-pub struct SessionToken(String);
+pub struct SessionToken(Box<str>);
 
 impl SessionToken {
     /// Wraps an existing token string.
     pub fn new(s: String) -> Self {
-        Self(s)
+        Self(s.into_boxed_str())
     }
 
     /// Generates a cryptographically random session token (64 hex chars = 32
     /// bytes of entropy).
     pub fn generate() -> Self {
-        Self(random_hex(32))
+        Self(random_hex(32).into_boxed_str())
     }
 
     /// Returns the underlying token string.
@@ -50,17 +50,17 @@ impl fmt::Debug for SessionToken {
 #[derive(Clone, Serialize, utoipa::ToSchema)]
 #[serde(transparent)]
 #[schema(value_type = String)]
-pub struct RawApiKey(String);
+pub struct RawApiKey(Box<str>);
 
 impl RawApiKey {
     /// Wraps an existing key string.
     pub fn new(s: String) -> Self {
-        Self(s)
+        Self(s.into_boxed_str())
     }
 
     /// Generates a full API key string (`apkey_` + 48 random hex chars).
     pub fn generate() -> Self {
-        Self(format!("{API_KEY_PREFIX}{}", random_hex(24)))
+        Self(format!("{API_KEY_PREFIX}{}", random_hex(24)).into_boxed_str())
     }
 
     /// Returns the underlying key string.
