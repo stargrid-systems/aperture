@@ -103,10 +103,6 @@ mod tests {
         let password = Password::generate();
         let hash = password.hash().unwrap();
         assert!(password.verify_against(&hash).unwrap());
-        assert!(
-            !Password::new("wrong".to_owned())
-                .verify_against(&hash)
-                .unwrap()
-        );
+        assert!(!Password::generate().verify_against(&hash).unwrap());
     }
 }

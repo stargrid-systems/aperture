@@ -805,11 +805,12 @@ async fn viewer_is_forbidden_from_user_management() {
     let (status, _) = get_json(&app, &token, "/api/v1/users").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    let pw = test_password();
     let (status, _) = post_json(
         &app,
         &token,
         "/api/v1/users",
-        json!({"username": "new-user", "password": "hunter2hunter2"}),
+        json!({"username": "new-user", "password": &pw}),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -819,17 +820,23 @@ async fn viewer_is_forbidden_from_user_management() {
 async fn admin_can_create_users() {
     let (app, token) = app_with_role(Role::Admin).await;
 
+    let pw = test_password();
     let (status, _) = post_json(
         &app,
         &token,
         "/api/v1/users",
-        json!({"username": "new-user", "password": "hunter2hunter2"}),
+        json!({"username": "new-user", "password": &pw}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
 }
 
 // --- helpers for the security tests ---
+
+/// Generates a random valid password for tests.
+fn test_password() -> String {
+    Password::generate().as_str().to_owned()
+}
 
 /// Builds a fresh app with no pre-seeded data and returns it alongside the
 /// auth handle and storage so tests can create users and keys directly.
@@ -869,14 +876,13 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
     (app(state), auth, storage)
 }
 
-/// Creates a user with `password` and returns an API key carrying `role`.
+/// Creates a user and returns an API key carrying `role`.
 async fn key_for_role(
     auth: &aperture_auth::AuthHandle,
     username: &str,
-    password: &str,
     role: Role,
 ) -> (aperture_storage::ActorId, String) {
-    let pw = Password::new(password.to_owned());
+    let pw = Password::generate();
     let actor = auth
         .create_user(&username.parse::<Username>().unwrap(), &pw, None)
         .await
@@ -893,7 +899,7 @@ async fn no_role_key(
     auth: &aperture_auth::AuthHandle,
     username: &str,
 ) -> (aperture_storage::ActorId, String) {
-    let pw = Password::new("nobody-password12".to_owned());
+    let pw = Password::generate();
     let actor = auth
         .create_user(&username.parse::<Username>().unwrap(), &pw, None)
         .await
@@ -989,6 +995,7 @@ async fn no_role_token_is_denied_on_all_mutations() {
     let (_id, token) = no_role_key(&auth, "nobody").await;
 
     // (method, uri, json body)
+    let pw = test_password();
     let matrix: [(&str, &str, Value); 10] = [
         ("PUT", "/api/v1/artifacts/firmware", Value::Null),
         (
@@ -1007,7 +1014,7 @@ async fn no_role_token_is_denied_on_all_mutations() {
         (
             "POST",
             "/api/v1/users",
-            json!({"username": "x", "password": "goodpassword12"}),
+            json!({"username": "x", "password": &pw}),
         ),
         ("DELETE", "/api/v1/users/1", Value::Null),
         ("POST", "/api/v1/api-keys", json!({"name": "k"})),
@@ -1049,10 +1056,8 @@ async fn no_role_token_is_denied_on_all_mutations() {
 #[tokio::test]
 async fn viewer_cannot_download_artifact_blob() {
     let (app, auth, _storage) = fresh_app().await;
-    let (_admin_actor, admin_key) =
-        key_for_role(&auth, "admin", "admin-password12", Role::Admin).await;
-    let (_viewer_actor, viewer_key) =
-        key_for_role(&auth, "viewer", "viewer-password12", Role::Viewer).await;
+    let (_admin_actor, admin_key) = key_for_role(&auth, "admin", Role::Admin).await;
+    let (_viewer_actor, viewer_key) = key_for_role(&auth, "viewer", Role::Viewer).await;
 
     // Admin stores an artifact (e.g. a secret key).
     let put = app
@@ -1105,17 +1110,14 @@ async fn viewer_cannot_download_artifact_blob() {
 #[tokio::test]
 async fn change_password_revokes_other_sessions() {
     let (app, auth, _storage) = fresh_app().await;
-    let pw = "initial-password12";
-    auth.create_user(
-        &"alice".parse().unwrap(),
-        &Password::new(pw.to_owned()),
-        None,
-    )
-    .await
-    .unwrap();
+    let pw = test_password();
+    let new_pw = test_password();
+    auth.create_user(&"alice".parse().unwrap(), &Password::new(pw.clone()), None)
+        .await
+        .unwrap();
 
-    let cookie_a = login(&app, "alice", pw).await.expect("login a");
-    let cookie_b = login(&app, "alice", pw).await.expect("login b");
+    let cookie_a = login(&app, "alice", &pw).await.expect("login a");
+    let cookie_b = login(&app, "alice", &pw).await.expect("login b");
     // Sanity: both sessions work before the change.
     assert_eq!(
         get_with_cookie(&app, &cookie_a, "/api/v1/version").await,
@@ -1130,7 +1132,7 @@ async fn change_password_revokes_other_sessions() {
         &app,
         &cookie_a,
         "/api/v1/auth/change-password",
-        json!({"current_password": pw, "new_password": "brand-new-password"}),
+        json!({"current_password": &pw, "new_password": &new_pw}),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -1149,21 +1151,17 @@ async fn change_password_revokes_other_sessions() {
 #[tokio::test]
 async fn change_password_rejects_reuse() {
     let (app, auth, _storage) = fresh_app().await;
-    let pw = "initial-password12";
-    auth.create_user(
-        &"alice".parse().unwrap(),
-        &Password::new(pw.to_owned()),
-        None,
-    )
-    .await
-    .unwrap();
-    let cookie = login(&app, "alice", pw).await.expect("login");
+    let pw = test_password();
+    auth.create_user(&"alice".parse().unwrap(), &Password::new(pw.clone()), None)
+        .await
+        .unwrap();
+    let cookie = login(&app, "alice", &pw).await.expect("login");
 
     let status = post_with_cookie(
         &app,
         &cookie,
         "/api/v1/auth/change-password",
-        json!({"current_password": pw, "new_password": pw}),
+        json!({"current_password": &pw, "new_password": &pw}),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1172,22 +1170,24 @@ async fn change_password_rejects_reuse() {
 #[tokio::test]
 async fn login_rate_limited_after_burst() {
     let (app, auth, _storage) = fresh_app().await;
+    let correct_pw = test_password();
+    let wrong_pw = test_password();
     auth.create_user(
         &"alice".parse().unwrap(),
-        &Password::new("correct-password12".to_owned()),
+        &Password::new(correct_pw.clone()),
         None,
     )
     .await
     .unwrap();
 
     for _ in 0..5 {
-        assert!(login(&app, "alice", "wrong-password-x").await.is_none());
+        assert!(login(&app, "alice", &wrong_pw).await.is_none());
     }
     // The next attempt is rejected by the limiter before credentials are checked.
     let status = post_no_auth(
         &app,
         "/api/v1/auth/login",
-        json!({"username": "alice", "password": "wrong-password-x"}),
+        json!({"username": "alice", "password": &wrong_pw}),
     )
     .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
@@ -1197,10 +1197,11 @@ async fn login_rate_limited_after_burst() {
 async fn setup_rejects_invalid_username_and_short_password() {
     let (app, _auth, _storage) = fresh_app().await;
 
+    let pw = test_password();
     let bad_user = post_no_auth(
         &app,
         "/api/v1/auth/setup",
-        json!({"username": "bad name", "password": "good-password12"}),
+        json!({"username": "bad name", "password": &pw}),
     )
     .await;
     assert!(
@@ -1208,10 +1209,11 @@ async fn setup_rejects_invalid_username_and_short_password() {
         "invalid username should be rejected: {bad_user}"
     );
 
+    let short = "x".repeat(5);
     let short_pw = post_no_auth(
         &app,
         "/api/v1/auth/setup",
-        json!({"username": "admin", "password": "short"}),
+        json!({"username": "admin", "password": &short}),
     )
     .await;
     assert!(
@@ -1223,8 +1225,7 @@ async fn setup_rejects_invalid_username_and_short_password() {
 #[tokio::test]
 async fn admin_cannot_delete_self() {
     let (app, auth, storage) = fresh_app().await;
-    let (alice_actor, alice_key) =
-        key_for_role(&auth, "alice", "alice-password12", Role::Admin).await;
+    let (alice_actor, alice_key) = key_for_role(&auth, "alice", Role::Admin).await;
     let user_id = storage
         .users()
         .unwrap()
@@ -1241,8 +1242,7 @@ async fn admin_cannot_delete_self() {
 #[tokio::test]
 async fn no_role_token_cannot_delete_others_api_key() {
     let (app, auth, _storage) = fresh_app().await;
-    let (_admin_actor, admin_key) =
-        key_for_role(&auth, "admin", "admin-password12", Role::Admin).await;
+    let (_admin_actor, admin_key) = key_for_role(&auth, "admin", Role::Admin).await;
     let (_, api_key_json) =
         post_json(&app, &admin_key, "/api/v1/api-keys", json!({"name": "k"})).await;
     let key_id = api_key_json["id"].as_str().unwrap();
@@ -1255,13 +1255,15 @@ async fn no_role_token_cannot_delete_others_api_key() {
 #[tokio::test]
 async fn change_password_rejected_for_api_key_auth() {
     let (app, auth, _storage) = fresh_app().await;
-    let (_actor, api_key) = key_for_role(&auth, "alice", "alice-password12", Role::Admin).await;
+    let (_actor, api_key) = key_for_role(&auth, "alice", Role::Admin).await;
 
+    let pw = test_password();
+    let new_pw = test_password();
     let (status, _) = post_json(
         &app,
         &api_key,
         "/api/v1/auth/change-password",
-        json!({"current_password": "alice-password12", "new_password": "new-password34"}),
+        json!({"current_password": &pw, "new_password": &new_pw}),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
