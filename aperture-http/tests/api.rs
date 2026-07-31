@@ -1237,3 +1237,32 @@ async fn admin_cannot_delete_self() {
     let status = delete(&app, &alice_key, &format!("/api/v1/users/{user_id}")).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn no_role_token_cannot_delete_others_api_key() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_admin_actor, admin_key) =
+        key_for_role(&auth, "admin", "admin-password12", Role::Admin).await;
+    let (_, api_key_json) =
+        post_json(&app, &admin_key, "/api/v1/api-keys", json!({"name": "k"})).await;
+    let key_id = api_key_json["id"].as_str().unwrap();
+
+    let (_nobody_actor, nobody_key) = no_role_key(&auth, "nobody").await;
+    let status = delete(&app, &nobody_key, &format!("/api/v1/api-keys/{key_id}")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn change_password_rejected_for_api_key_auth() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_actor, api_key) = key_for_role(&auth, "alice", "alice-password12", Role::Admin).await;
+
+    let (status, _) = post_json(
+        &app,
+        &api_key,
+        "/api/v1/auth/change-password",
+        json!({"current_password": "alice-password12", "new_password": "new-password34"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

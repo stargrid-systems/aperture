@@ -8,7 +8,6 @@
 //! update, which keeps the vocabulary and the granted permissions in sync.
 
 use std::fmt;
-use std::str::FromStr;
 
 use aperture_storage::Storage;
 use casbin::{CoreApi, DefaultModel, Enforcer};
@@ -135,24 +134,6 @@ impl fmt::Display for Role {
     }
 }
 
-impl FromStr for Role {
-    type Err = UnknownRole;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "admin" => Ok(Self::Admin),
-            "operator" => Ok(Self::Operator),
-            "viewer" => Ok(Self::Viewer),
-            other => Err(UnknownRole(other.to_owned())),
-        }
-    }
-}
-
-/// Error returned when a string is not a known built-in role.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown role: {0}")]
-pub struct UnknownRole(pub String);
-
 /// Creates and returns the enforcer with the turso adapter, loading existing
 /// policies from the database.
 pub(crate) async fn create_enforcer(storage: &Storage) -> casbin::Result<Enforcer> {
@@ -186,62 +167,25 @@ pub(crate) async fn seed_builtin_policies(
 
     use casbin::MgmtApi;
 
-    let star = || "*".to_owned();
+    fn policy(role: Role, obj: impl fmt::Display, act: impl fmt::Display) -> Vec<String> {
+        vec![role.to_string(), obj.to_string(), act.to_string()]
+    }
+
     let policies = vec![
         // Admin: superuser.
-        vec![Role::Admin.as_str().to_owned(), star(), star()],
+        policy(Role::Admin, "*", "*"),
         // Operator: full operational access, no user or api-key management.
-        vec![
-            Role::Operator.as_str().to_owned(),
-            Object::Artifact.as_str().to_owned(),
-            star(),
-        ],
-        vec![
-            Role::Operator.as_str().to_owned(),
-            Object::Task.as_str().to_owned(),
-            star(),
-        ],
-        vec![
-            Role::Operator.as_str().to_owned(),
-            Object::TaskDefinition.as_str().to_owned(),
-            Action::Read.as_str().to_owned(),
-        ],
-        vec![
-            Role::Operator.as_str().to_owned(),
-            Object::TaskSchedule.as_str().to_owned(),
-            star(),
-        ],
-        vec![
-            Role::Operator.as_str().to_owned(),
-            Object::Log.as_str().to_owned(),
-            Action::Read.as_str().to_owned(),
-        ],
+        policy(Role::Operator, Object::Artifact, "*"),
+        policy(Role::Operator, Object::Task, "*"),
+        policy(Role::Operator, Object::TaskDefinition, Action::Read),
+        policy(Role::Operator, Object::TaskSchedule, "*"),
+        policy(Role::Operator, Object::Log, Action::Read),
         // Viewer: read-only on non-sensitive data. No artifact downloads.
-        vec![
-            Role::Viewer.as_str().to_owned(),
-            Object::Artifact.as_str().to_owned(),
-            Action::Read.as_str().to_owned(),
-        ],
-        vec![
-            Role::Viewer.as_str().to_owned(),
-            Object::Task.as_str().to_owned(),
-            Action::Read.as_str().to_owned(),
-        ],
-        vec![
-            Role::Viewer.as_str().to_owned(),
-            Object::TaskDefinition.as_str().to_owned(),
-            Action::Read.as_str().to_owned(),
-        ],
-        vec![
-            Role::Viewer.as_str().to_owned(),
-            Object::TaskSchedule.as_str().to_owned(),
-            Action::Read.as_str().to_owned(),
-        ],
-        vec![
-            Role::Viewer.as_str().to_owned(),
-            Object::Log.as_str().to_owned(),
-            Action::Read.as_str().to_owned(),
-        ],
+        policy(Role::Viewer, Object::Artifact, Action::Read),
+        policy(Role::Viewer, Object::Task, Action::Read),
+        policy(Role::Viewer, Object::TaskDefinition, Action::Read),
+        policy(Role::Viewer, Object::TaskSchedule, Action::Read),
+        policy(Role::Viewer, Object::Log, Action::Read),
     ];
     e.add_policies(policies).await?;
 

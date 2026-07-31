@@ -175,14 +175,7 @@ impl SessionRepository {
                 )
                 .await
                 .map_err(StorageError::from_turso)?,
-            None => self
-                .connection
-                .execute(
-                    sql!(DELETE FROM sessions WHERE actor_id = ?1),
-                    params_from_iter([actor_id.to_sql()]),
-                )
-                .await
-                .map_err(StorageError::from_turso)?,
+            None => return self.delete_for_actor(actor_id).await,
         };
         Ok(affected as usize)
     }

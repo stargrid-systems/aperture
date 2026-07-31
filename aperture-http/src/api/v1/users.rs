@@ -90,7 +90,11 @@ async fn create_user(
         .await?;
     if let Some(role) = &request.role {
         let subject = aperture_auth::actor_subject(actor.id);
-        state.auth().assign_role(&subject, *role).await?;
+        if let Err(err) = state.auth().assign_role(&subject, *role).await {
+            let now = jiff::Timestamp::now();
+            let _ = state.storage().actors()?.disable(actor.id, now).await;
+            return Err(err.into());
+        }
     }
     let user = state
         .storage()

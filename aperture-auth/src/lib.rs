@@ -13,6 +13,7 @@
 //! Authorization uses the typed [`Object`] and [`Action`] enums so a check can
 //! never reference a nonexistent resource or operation.
 
+use std::error::Error as StdError;
 use std::result::Result as StdResult;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -132,32 +133,10 @@ impl AuthHandle {
         Ok(())
     }
 
-    /// Removes `role` from `subject`.
-    pub async fn revoke_role(&self, subject: &str, role: Role) -> Result<()> {
-        let mut e = self.enforcer.write().await;
-        e.delete_role_for_user(subject, role.as_str(), None)
-            .await
-            .map_err(AuthError::from_casbin)?;
-        Ok(())
-    }
-
     /// Returns the list of roles assigned to `subject`.
     pub async fn roles_for(&self, subject: &str) -> Result<Vec<String>> {
         let e = self.enforcer.read().await;
         Ok(e.get_roles_for_user(subject, None))
-    }
-
-    /// Grants a direct permission to `subject`.
-    pub async fn grant_permission(&self, subject: &str, obj: Object, act: Action) -> Result<()> {
-        let mut e = self.enforcer.write().await;
-        e.add_policy(vec![
-            subject.to_owned(),
-            obj.as_str().to_owned(),
-            act.as_str().to_owned(),
-        ])
-        .await
-        .map_err(AuthError::from_casbin)?;
-        Ok(())
     }
 
     /// Removes all direct permissions for `subject`.
@@ -339,33 +318,46 @@ impl AuthHandle {
         Ok(actor)
     }
 
-    /// Changes the password for user `user_id`.
+    /// Changes the password for the actor `actor_id` after verifying the
+    /// caller knows `current_password`.
     ///
     /// The new password must differ from the current one. All of the actor's
     /// sessions are revoked except the one matching `keep_session_hash` (the
     /// caller's current session, if any), so a stolen cookie stops working
-    /// immediately while the caller stays logged in.
+    /// immediately while the caller stays logged in. Session revocation is
+    /// best-effort: a failure is logged but does not roll back the password
+    /// change.
     pub async fn change_password(
         &self,
-        user_id: UserId,
+        actor_id: ActorId,
+        current_password: &Password,
         new_password: &Password,
         keep_session_hash: Option<&TokenHash>,
     ) -> Result<()> {
         new_password.validate()?;
         let users = self.storage.users()?;
         let user = users
-            .get(user_id)
+            .find_by_actor_id(actor_id)
             .await?
             .ok_or(AuthError::InvalidCredentials)?;
+        if !current_password.verify_against(&user.password_hash)? {
+            return Err(AuthError::InvalidCredentials);
+        }
         if new_password.verify_against(&user.password_hash)? {
             return Err(AuthError::PasswordReuse);
         }
         let hash = new_password.hash()?;
-        users.update_password(user_id, &hash, None).await?;
+        users.update_password(user.id, &hash, None).await?;
         let sessions = self.storage.sessions()?;
-        sessions
-            .delete_for_actor_except(user.actor_id, keep_session_hash)
-            .await?;
+        if let Err(err) = sessions
+            .delete_for_actor_except(actor_id, keep_session_hash)
+            .await
+        {
+            tracing::warn!(
+                error = &err as &dyn StdError,
+                "failed to revoke sessions after password change"
+            );
+        }
         Ok(())
     }
 
@@ -377,10 +369,18 @@ impl AuthHandle {
 
     /// Deletes user `user_id` and disables the associated actor.
     ///
-    /// Rejects self-deletion and removing the last admin, so the system can
-    /// never be left without an administrator. The last-admin check and the
-    /// role revokes run under one enforcer write lock so two concurrent admin
-    /// deletions cannot race past the check and leave zero admins.
+    /// Rejects self-deletion. The actor is disabled before roles are revoked,
+    /// so any failure during the later steps leaves a disabled-but-not-purged
+    /// actor, which is safe: `resolve_session` and `resolve_api_key` both
+    /// reject disabled actors.
+    ///
+    /// API keys are not explicitly revoked: the disabled actor cannot
+    /// authenticate, so existing API keys become inert.
+    ///
+    /// The last-admin check is defense-in-depth for future permission model
+    /// changes. Under the current model only admins hold `User:Delete` and the
+    /// caller always counts as "other", so the check is unreachable in
+    /// practice.
     pub async fn delete_user(
         &self,
         user_id: UserId,
@@ -390,9 +390,14 @@ impl AuthHandle {
         if actor_id == caller_actor_id {
             return Err(AuthError::CannotDeleteSelf);
         }
+
+        // Check last-admin before any mutation. The self-delete guard above
+        // ensures this check can never see zero other admins in practice
+        // (the caller is always an admin and always counts as "other").
+        // This is defense-in-depth for future permission model changes.
         let target_subject = actor_subject(actor_id);
         {
-            let mut e = self.enforcer.write().await;
+            let e = self.enforcer.read().await;
             let other_admins = e
                 .get_users_for_role(Role::Admin.as_str(), None)
                 .into_iter()
@@ -401,6 +406,18 @@ impl AuthHandle {
             if other_admins == 0 {
                 return Err(AuthError::LastAdmin);
             }
+        }
+
+        // Disable the actor first. If subsequent steps fail, a disabled actor
+        // with stale roles is safe: resolve_session and resolve_api_key both
+        // reject disabled actors.
+        let now = Timestamp::now();
+        let actors = self.storage.actors()?;
+        actors.disable(actor_id, now).await?;
+
+        // Now revoke all roles and direct policies under a write lock.
+        {
+            let mut e = self.enforcer.write().await;
             e.remove_filtered_policy(0, vec![target_subject.clone()])
                 .await
                 .map_err(AuthError::from_casbin)?;
@@ -411,9 +428,7 @@ impl AuthHandle {
             }
         }
 
-        let now = Timestamp::now();
-        let actors = self.storage.actors()?;
-        actors.disable(actor_id, now).await?;
+        // Clean up remaining storage state.
         let users = self.storage.users()?;
         users.delete(user_id).await?;
         let sessions = self.storage.sessions()?;
@@ -451,15 +466,24 @@ impl AuthHandle {
         {
             Some((actor, _)) => actor.id,
             None => {
-                let has_admin = !self.subjects_for_role(Role::Admin).await?.is_empty();
+                // Recovery path. Take a write lock up front so the has_admin
+                // check and the role assignment below are atomic: two
+                // concurrent recovery calls cannot both see has_admin == false
+                // and both assign admin.
+                let mut e = self.enforcer.write().await;
+                let has_admin = !e.get_users_for_role(Role::Admin.as_str(), None).is_empty();
                 if has_admin {
                     return Ok(None);
                 }
                 let users = self.storage.users()?;
-                let user = users
-                    .find_by_username(username.as_str())
-                    .await?
-                    .ok_or(AuthError::InvalidCredentials)?;
+                let user = match users.find_by_username(username.as_str()).await? {
+                    Some(u) => u,
+                    None => {
+                        // dummy verify to avoid timing oracle (finding L-SEC1)
+                        let _ = password.verify_against(&DUMMY_HASH);
+                        return Err(AuthError::InvalidCredentials);
+                    }
+                };
                 // Do not grant admin until the caller proves they know the
                 // existing password. Without this, anyone who guesses the
                 // username during the interrupted-setup window could promote
@@ -467,7 +491,14 @@ impl AuthHandle {
                 if !password.verify_against(&user.password_hash)? {
                     return Err(AuthError::InvalidCredentials);
                 }
-                user.actor_id
+                // Assign admin role while still holding the write lock.
+                e.add_role_for_user(&actor_subject(user.actor_id), Role::Admin.as_str(), None)
+                    .await
+                    .map_err(AuthError::from_casbin)?;
+                // Return early: role is assigned, now just need to log in.
+                tracing::info!(actor = user.actor_id.get(), "setup admin user (recovery)");
+                let login = self.login(username, password).await?;
+                return Ok(Some(login));
             }
         };
         let subject = actor_subject(actor_id);

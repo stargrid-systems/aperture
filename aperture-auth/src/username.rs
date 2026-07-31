@@ -39,7 +39,25 @@ impl FromStr for Username {
     type Err = AuthError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s.to_owned())
+        Self::try_from(s)
+    }
+}
+
+impl TryFrom<&str> for Username {
+    type Error = AuthError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        // Byte length is intentional: only ASCII chars pass below, so bytes == chars.
+        if value.len() < MIN_LEN || value.len() > MAX_LEN {
+            return Err(AuthError::InvalidUsername);
+        }
+        if !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            return Err(AuthError::InvalidUsername);
+        }
+        Ok(Self(value.to_owned()))
     }
 }
 
@@ -47,13 +65,7 @@ impl TryFrom<String> for Username {
     type Error = AuthError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.len() < MIN_LEN || value.len() > MAX_LEN {
-            return Err(AuthError::InvalidUsername);
-        }
-        if !value.chars().all(is_allowed) {
-            return Err(AuthError::InvalidUsername);
-        }
-        Ok(Self(value))
+        Self::try_from(value.as_str())
     }
 }
 
@@ -61,11 +73,6 @@ impl From<Username> for String {
     fn from(username: Username) -> Self {
         username.0
     }
-}
-
-/// `true` for the characters a username may contain.
-fn is_allowed(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
 }
 
 #[cfg(test)]

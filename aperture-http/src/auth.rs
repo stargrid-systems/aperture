@@ -114,6 +114,18 @@ pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
     None
 }
 
+/// Builds a cookie string that sets the session cookie to `token`.
+pub(crate) fn build_session_cookie(token: &str) -> String {
+    Cookie::build((SESSION_COOKIE, token.to_owned()))
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Strict)
+        .path("/")
+        .max_age(CookieDuration::days(7))
+        .build()
+        .to_string()
+}
+
 /// Builds a cookie string that clears the session cookie.
 pub(crate) fn clear_session_cookie() -> String {
     Cookie::build((SESSION_COOKIE, ""))

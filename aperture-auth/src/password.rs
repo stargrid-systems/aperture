@@ -24,6 +24,16 @@ fn argon2() -> Argon2<'static> {
 }
 
 /// A plaintext password. Redacts in Debug output to avoid accidental leakage.
+///
+/// Unlike [`Username`](crate::Username), `Password` does NOT validate on
+/// construction or deserialization. This is deliberate: the login handler must
+/// accept any password string (even one below the minimum length) so the
+/// request reaches the handler body where the rate limiter is consulted.
+/// Validating at deserialization would let an attacker bypass rate limiting
+/// by sending short passwords (they would be rejected with a 400 before the
+/// handler runs). Password validation happens in
+/// [`AuthHandle`](crate::AuthHandle) methods (`create_user`,
+/// `change_password`, `setup_admin`) instead.
 #[derive(Clone, Deserialize, utoipa::ToSchema)]
 #[serde(transparent)]
 #[schema(value_type = String)]

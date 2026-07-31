@@ -164,19 +164,6 @@ impl ApiKeyRepository {
         Ok(keys)
     }
 
-    /// Updates the last-used timestamp for key `id`.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn touch_last_used(&self, id: ApiKeyId, at: Timestamp) -> Result<()> {
-        self.connection
-            .execute(
-                sql!(UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2),
-                params_from_iter([at.to_sql(), id.to_sql()]),
-            )
-            .await
-            .map_err(StorageError::from_turso)?;
-        Ok(())
-    }
-
     /// Updates the last-used timestamp only if it is unset or older than the
     /// stale threshold (60 seconds) from `at`. This bounds the per-request
     /// write load from API-key authentication to at most one write per window.

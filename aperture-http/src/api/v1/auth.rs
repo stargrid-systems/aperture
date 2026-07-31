@@ -1,18 +1,19 @@
+use std::future::Future;
+
 use aperture_auth::{AuthenticatedActor, Password, SessionToken, Username};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use cookie::time::Duration as CookieDuration;
-use cookie::{Cookie, SameSite};
 use serde::{Deserialize, Serialize};
+use tower_http::limit::RequestBodyLimitLayer;
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::auth::{SESSION_COOKIE, clear_session_cookie, extract_session_token};
+use crate::auth::{build_session_cookie, clear_session_cookie, extract_session_token};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -22,6 +23,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(change_password))
         .routes(routes!(setup_status))
         .routes(routes!(setup))
+        .layer(RequestBodyLimitLayer::new(64 * 1024))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -51,40 +53,15 @@ async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    state.login_limiter().check(request.username.as_str())?;
-    let result = match state
-        .auth()
-        .login(&request.username, &request.password)
-        .await
-    {
-        Ok(result) => result,
-        Err(aperture_auth::AuthError::InvalidCredentials) => {
-            state
-                .login_limiter()
-                .record_failure(request.username.as_str());
-            return Err(ApiError::UNAUTHORIZED);
-        }
-        Err(err) => return Err(err.into()),
-    };
-    state
-        .login_limiter()
-        .record_success(request.username.as_str());
-    let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
-        .http_only(true)
-        .secure(true)
-        .same_site(SameSite::Strict)
-        .path("/")
-        .max_age(CookieDuration::days(7))
-        .build();
-    let mut response = Json(LoginResponse {
-        must_change_password: result.must_change_password,
+    let result = throttled_auth(state.login_limiter(), request.username.as_str(), async {
+        state
+            .auth()
+            .login(&request.username, &request.password)
+            .await
+            .map(Some)
     })
-    .into_response();
-    response.headers_mut().append(
-        header::SET_COOKIE,
-        cookie.to_string().parse().expect("valid header value"),
-    );
-    Ok(response)
+    .await?;
+    Ok(build_login_response(result))
 }
 
 /// Destroys the current session.
@@ -124,6 +101,7 @@ pub struct ChangePasswordRequest {
     responses(
         (status = 204, description = "Password changed"),
         (status = 401, description = "Current password is incorrect"),
+        (status = 403, description = "API-key authenticated callers cannot change a password"),
     ),
 )]
 async fn change_password(
@@ -132,23 +110,18 @@ async fn change_password(
     headers: HeaderMap,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let users = state.storage().users()?;
-    let user = users
-        .find_by_actor_id(auth.actor.id)
-        .await?
-        .ok_or(ApiError::FORBIDDEN)?;
-    if !request
-        .current_password
-        .verify_against(&user.password_hash)?
-    {
-        return Err(ApiError::UNAUTHORIZED);
-    }
-    // Keep the caller's current session (if any) and revoke every other
-    // session for the actor so a stolen cookie stops working immediately.
     let keep = extract_session_token(&headers).map(|t| SessionToken::new(t).hash());
+    if keep.is_none() {
+        return Err(ApiError::FORBIDDEN);
+    }
     state
         .auth()
-        .change_password(user.id, &request.new_password, keep.as_ref())
+        .change_password(
+            auth.actor.id,
+            &request.current_password,
+            &request.new_password,
+            keep.as_ref(),
+        )
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -195,39 +168,48 @@ async fn setup(
     State(state): State<AppState>,
     Json(request): Json<SetupRequest>,
 ) -> Result<Response, ApiError> {
-    state.login_limiter().check(request.username.as_str())?;
-    let result = match state
-        .auth()
-        .setup_admin(&request.username, &request.password)
-        .await
-    {
-        Ok(Some(result)) => result,
-        Ok(None) => return Err(ApiError::CONFLICT),
-        Err(aperture_auth::AuthError::InvalidCredentials) => {
-            state
-                .login_limiter()
-                .record_failure(request.username.as_str());
-            return Err(ApiError::UNAUTHORIZED);
-        }
-        Err(err) => return Err(err.into()),
-    };
-    state
-        .login_limiter()
-        .record_success(request.username.as_str());
-    let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
-        .http_only(true)
-        .secure(true)
-        .same_site(SameSite::Strict)
-        .path("/")
-        .max_age(CookieDuration::days(7))
-        .build();
+    let result = throttled_auth(
+        state.login_limiter(),
+        request.username.as_str(),
+        state
+            .auth()
+            .setup_admin(&request.username, &request.password),
+    )
+    .await?;
+    Ok(build_login_response(result))
+}
+
+fn build_login_response(result: aperture_auth::LoginResult) -> Response {
+    let cookie = build_session_cookie(result.token.as_str());
     let mut response = Json(LoginResponse {
         must_change_password: result.must_change_password,
     })
     .into_response();
     response.headers_mut().append(
         header::SET_COOKIE,
-        cookie.to_string().parse().expect("valid header value"),
+        cookie.parse().expect("valid header value"),
     );
-    Ok(response)
+    response
+}
+
+async fn throttled_auth(
+    limiter: &aperture_auth::LoginLimiter,
+    username: &str,
+    auth_call: impl Future<
+        Output = Result<Option<aperture_auth::LoginResult>, aperture_auth::AuthError>,
+    >,
+) -> Result<aperture_auth::LoginResult, ApiError> {
+    limiter.check(username)?;
+    match auth_call.await {
+        Ok(Some(result)) => {
+            limiter.record_success(username);
+            Ok(result)
+        }
+        Ok(None) => Err(ApiError::CONFLICT),
+        Err(aperture_auth::AuthError::InvalidCredentials) => {
+            limiter.record_failure(username);
+            Err(ApiError::UNAUTHORIZED)
+        }
+        Err(err) => Err(err.into()),
+    }
 }

@@ -93,7 +93,11 @@ async fn create_api_key(
         .await?;
     if let Some(role) = &request.role {
         let subject = aperture_auth::apikey_subject(api_key.id);
-        state.auth().assign_role(&subject, *role).await?;
+        if let Err(err) = state.auth().assign_role(&subject, *role).await {
+            let repo = state.storage().api_keys()?;
+            let _ = repo.delete(api_key.id).await;
+            return Err(err.into());
+        }
     }
     Ok((
         StatusCode::CREATED,
