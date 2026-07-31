@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use aperture_auth::AuthenticatedActor;
+use aperture_auth::{Action, AuthenticatedActor, Object};
 use aperture_storage::TaskId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -38,7 +38,10 @@ async fn list_tasks(
     State(state): State<AppState>,
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
-    state.auth().require(&auth.subject, "task", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Task, Action::Read)
+        .await?;
     let tasks = state.tasks();
     let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
     let parent = params.parent_filter();
@@ -81,7 +84,7 @@ async fn create_task(
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
     state
         .auth()
-        .require(&auth.subject, "task", "create")
+        .require(&auth.subject, Object::Task, Action::Create)
         .await?;
     let task = state
         .tasks()
@@ -106,7 +109,10 @@ async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
-    state.auth().require(&auth.subject, "task", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Task, Action::Read)
+        .await?;
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     let progress = state.tasks().progress(id);
     Ok(Json(TaskResponse::new(task, progress)))
@@ -132,7 +138,7 @@ async fn cancel_task(
 ) -> Result<StatusCode, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "task", "cancel")
+        .require(&auth.subject, Object::Task, Action::Cancel)
         .await?;
     if state.tasks().cancel(id).await? {
         Ok(StatusCode::ACCEPTED)
@@ -154,7 +160,7 @@ async fn list_definitions(
 ) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "task-definition", "read")
+        .require(&auth.subject, Object::TaskDefinition, Action::Read)
         .await?;
     let definitions = state
         .tasks()

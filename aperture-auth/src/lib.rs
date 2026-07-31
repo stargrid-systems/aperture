@@ -9,12 +9,15 @@
 //!   session token stored as an httpOnly cookie.
 //! - **API key**: a bearer token for headless clients. Each key has its own
 //!   scoped permissions enforced as a separate casbin subject.
+//!
+//! Authorization uses the typed [`Object`] and [`Action`] enums so a check can
+//! never reference a nonexistent resource or operation.
 
 use std::result::Result as StdResult;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use aperture_storage::{Actor, ActorId, ActorKind, Storage, UserId};
+use aperture_storage::{Actor, ActorId, ActorKind, Storage, TokenHash, UserId};
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
@@ -24,13 +27,17 @@ use tokio::sync::RwLock;
 
 pub use self::error::{AuthError, Result};
 pub use self::password::Password;
-pub use self::policy::{actor_subject, apikey_subject, roles};
+pub use self::policy::{Action, Object, Role, actor_subject, apikey_subject};
+pub use self::ratelimit::LoginLimiter;
 pub use self::token::{RawApiKey, SessionToken};
+pub use self::username::Username;
 
 mod error;
 mod password;
 mod policy;
+mod ratelimit;
 mod token;
+mod username;
 
 /// Sliding session lifetime. A session expires after this duration of
 /// inactivity.
@@ -105,9 +112,9 @@ impl AuthHandle {
 
     /// Requires that `subject` may perform `act` on `obj`. Returns
     /// [`AuthError::Forbidden`] if denied.
-    pub async fn require(&self, subject: &str, obj: &str, act: &str) -> Result<()> {
+    pub async fn require(&self, subject: &str, obj: Object, act: Action) -> Result<()> {
         let e = self.enforcer.read().await;
-        if e.enforce((subject, obj, act))
+        if e.enforce((subject, obj.as_str(), act.as_str()))
             .map_err(AuthError::from_casbin)?
         {
             Ok(())
@@ -116,19 +123,19 @@ impl AuthHandle {
         }
     }
 
-    /// Assigns `role` to `subject` (e.g. `"actor:1"` -> `"admin"`).
-    pub async fn assign_role(&self, subject: &str, role: &str) -> Result<()> {
+    /// Assigns `role` to `subject` (e.g. `"actor:1"` -> [`Role::Admin`]).
+    pub async fn assign_role(&self, subject: &str, role: Role) -> Result<()> {
         let mut e = self.enforcer.write().await;
-        e.add_role_for_user(subject, role, None)
+        e.add_role_for_user(subject, role.as_str(), None)
             .await
             .map_err(AuthError::from_casbin)?;
         Ok(())
     }
 
     /// Removes `role` from `subject`.
-    pub async fn revoke_role(&self, subject: &str, role: &str) -> Result<()> {
+    pub async fn revoke_role(&self, subject: &str, role: Role) -> Result<()> {
         let mut e = self.enforcer.write().await;
-        e.delete_role_for_user(subject, role, None)
+        e.delete_role_for_user(subject, role.as_str(), None)
             .await
             .map_err(AuthError::from_casbin)?;
         Ok(())
@@ -141,11 +148,15 @@ impl AuthHandle {
     }
 
     /// Grants a direct permission to `subject`.
-    pub async fn grant_permission(&self, subject: &str, obj: &str, act: &str) -> Result<()> {
+    pub async fn grant_permission(&self, subject: &str, obj: Object, act: Action) -> Result<()> {
         let mut e = self.enforcer.write().await;
-        e.add_policy(vec![subject.to_owned(), obj.to_owned(), act.to_owned()])
-            .await
-            .map_err(AuthError::from_casbin)?;
+        e.add_policy(vec![
+            subject.to_owned(),
+            obj.as_str().to_owned(),
+            act.as_str().to_owned(),
+        ])
+        .await
+        .map_err(AuthError::from_casbin)?;
         Ok(())
     }
 
@@ -158,11 +169,17 @@ impl AuthHandle {
         Ok(())
     }
 
+    /// Returns the casbin subjects currently holding `role`.
+    async fn subjects_for_role(&self, role: Role) -> Result<Vec<String>> {
+        let e = self.enforcer.read().await;
+        Ok(e.get_users_for_role(role.as_str(), None))
+    }
+
     /// Verifies `username` / `password` and creates a new session.
     /// Returns the session token for the caller to set as a cookie.
-    pub async fn login(&self, username: &str, password: &Password) -> Result<LoginResult> {
+    pub async fn login(&self, username: &Username, password: &Password) -> Result<LoginResult> {
         let users = self.storage.users()?;
-        let user = match users.find_by_username(username).await? {
+        let user = match users.find_by_username(username.as_str()).await? {
             Some(u) => u,
             None => {
                 let _ = password.verify_against(&DUMMY_HASH);
@@ -197,6 +214,8 @@ impl AuthHandle {
 
     /// Resolves a session token to an authenticated actor. Extends the
     /// session expiry (sliding window).
+    // TODO(#153): optionally bind sessions to client attributes so a stolen
+    // cookie is harder to reuse from a different client.
     pub async fn resolve_session(
         &self,
         token: &SessionToken,
@@ -293,7 +312,7 @@ impl AuthHandle {
             _ => return Ok(None),
         };
         let now = Timestamp::now();
-        repo.touch_last_used(api_key.id, now).await?;
+        repo.touch_last_used_if_stale(api_key.id, now).await?;
         Ok(Some(AuthenticatedActor {
             actor,
             subject: apikey_subject(api_key.id),
@@ -306,7 +325,7 @@ impl AuthHandle {
     /// password before accessing any other endpoint.
     pub async fn create_user(
         &self,
-        username: &str,
+        username: &Username,
         password: &Password,
         password_change_required_at: Option<Timestamp>,
     ) -> Result<Actor> {
@@ -315,17 +334,38 @@ impl AuthHandle {
         let hash = password.hash()?;
         let (actor, _user) = self
             .storage
-            .create_user(username, &hash, password_change_required_at, now)
+            .create_user(username.as_str(), &hash, password_change_required_at, now)
             .await?;
         Ok(actor)
     }
 
     /// Changes the password for user `user_id`.
-    pub async fn change_password(&self, user_id: UserId, new_password: &Password) -> Result<()> {
+    ///
+    /// The new password must differ from the current one. All of the actor's
+    /// sessions are revoked except the one matching `keep_session_hash` (the
+    /// caller's current session, if any), so a stolen cookie stops working
+    /// immediately while the caller stays logged in.
+    pub async fn change_password(
+        &self,
+        user_id: UserId,
+        new_password: &Password,
+        keep_session_hash: Option<&TokenHash>,
+    ) -> Result<()> {
         new_password.validate()?;
-        let hash = new_password.hash()?;
         let users = self.storage.users()?;
+        let user = users
+            .get(user_id)
+            .await?
+            .ok_or(AuthError::InvalidCredentials)?;
+        if new_password.verify_against(&user.password_hash)? {
+            return Err(AuthError::PasswordReuse);
+        }
+        let hash = new_password.hash()?;
         users.update_password(user_id, &hash, None).await?;
+        let sessions = self.storage.sessions()?;
+        sessions
+            .delete_for_actor_except(user.actor_id, keep_session_hash)
+            .await?;
         Ok(())
     }
 
@@ -336,7 +376,41 @@ impl AuthHandle {
     }
 
     /// Deletes user `user_id` and disables the associated actor.
-    pub async fn delete_user(&self, user_id: UserId, actor_id: ActorId) -> Result<()> {
+    ///
+    /// Rejects self-deletion and removing the last admin, so the system can
+    /// never be left without an administrator. The last-admin check and the
+    /// role revokes run under one enforcer write lock so two concurrent admin
+    /// deletions cannot race past the check and leave zero admins.
+    pub async fn delete_user(
+        &self,
+        user_id: UserId,
+        actor_id: ActorId,
+        caller_actor_id: ActorId,
+    ) -> Result<()> {
+        if actor_id == caller_actor_id {
+            return Err(AuthError::CannotDeleteSelf);
+        }
+        let target_subject = actor_subject(actor_id);
+        {
+            let mut e = self.enforcer.write().await;
+            let other_admins = e
+                .get_users_for_role(Role::Admin.as_str(), None)
+                .into_iter()
+                .filter(|s| s != &target_subject)
+                .count();
+            if other_admins == 0 {
+                return Err(AuthError::LastAdmin);
+            }
+            e.remove_filtered_policy(0, vec![target_subject.clone()])
+                .await
+                .map_err(AuthError::from_casbin)?;
+            for role in Role::ALL {
+                e.delete_role_for_user(&target_subject, role.as_str(), None)
+                    .await
+                    .map_err(AuthError::from_casbin)?;
+            }
+        }
+
         let now = Timestamp::now();
         let actors = self.storage.actors()?;
         actors.disable(actor_id, now).await?;
@@ -344,20 +418,12 @@ impl AuthHandle {
         users.delete(user_id).await?;
         let sessions = self.storage.sessions()?;
         sessions.delete_for_actor(actor_id).await?;
-        self.revoke_permissions(&actor_subject(actor_id)).await?;
-        self.revoke_role(&actor_subject(actor_id), roles::ADMIN)
-            .await?;
-        self.revoke_role(&actor_subject(actor_id), roles::OPERATOR)
-            .await?;
-        self.revoke_role(&actor_subject(actor_id), roles::VIEWER)
-            .await?;
         Ok(())
     }
 
     /// Returns true when no admin role is assigned (first-run setup needed).
     pub async fn is_setup_required(&self) -> Result<bool> {
-        let e = self.enforcer.read().await;
-        Ok(e.get_users_for_role(roles::ADMIN, None).is_empty())
+        Ok(self.subjects_for_role(Role::Admin).await?.is_empty())
     }
 
     /// Creates the initial admin user when no admin role is assigned. The
@@ -367,10 +433,12 @@ impl AuthHandle {
     ///
     /// If a previous setup was interrupted after user creation but before role
     /// assignment, the recovery path re-assigns the admin role to the existing
-    /// user.
+    /// user. The password is never overwritten, and the caller must prove
+    /// knowledge of the existing password before the role is granted, so only
+    /// the rightful password holder can complete a resumed setup.
     pub async fn setup_admin(
         &self,
-        username: &str,
+        username: &Username,
         password: &Password,
     ) -> Result<Option<LoginResult>> {
         password.validate()?;
@@ -378,29 +446,32 @@ impl AuthHandle {
         let hash = password.hash()?;
         let actor_id = match self
             .storage
-            .create_initial_user(username, &hash, now)
+            .create_initial_user(username.as_str(), &hash, now)
             .await?
         {
             Some((actor, _)) => actor.id,
             None => {
-                let has_admin = {
-                    let e = self.enforcer.read().await;
-                    !e.get_users_for_role(roles::ADMIN, None).is_empty()
-                };
+                let has_admin = !self.subjects_for_role(Role::Admin).await?.is_empty();
                 if has_admin {
                     return Ok(None);
                 }
                 let users = self.storage.users()?;
                 let user = users
-                    .find_by_username(username)
+                    .find_by_username(username.as_str())
                     .await?
                     .ok_or(AuthError::InvalidCredentials)?;
-                users.update_password(user.id, &hash, None).await?;
+                // Do not grant admin until the caller proves they know the
+                // existing password. Without this, anyone who guesses the
+                // username during the interrupted-setup window could promote
+                // the account.
+                if !password.verify_against(&user.password_hash)? {
+                    return Err(AuthError::InvalidCredentials);
+                }
                 user.actor_id
             }
         };
         let subject = actor_subject(actor_id);
-        self.assign_role(&subject, roles::ADMIN).await?;
+        self.assign_role(&subject, Role::Admin).await?;
         tracing::info!(actor = actor_id.get(), "setup admin user");
         let login = self.login(username, password).await?;
         Ok(Some(login))

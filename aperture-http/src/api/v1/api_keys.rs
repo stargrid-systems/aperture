@@ -1,4 +1,4 @@
-use aperture_auth::{AuthenticatedActor, RawApiKey, roles};
+use aperture_auth::{Action, AuthenticatedActor, Object, RawApiKey, Role};
 use aperture_storage::ApiKeyId;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -39,7 +39,7 @@ pub struct CreateApiKeyResponse {
 pub struct CreateApiKeyRequest {
     name: String,
     /// Optional role to assign to this key's casbin subject.
-    role: Option<String>,
+    role: Option<Role>,
 }
 
 /// Lists API keys for the authenticated actor.
@@ -85,18 +85,15 @@ async fn create_api_key(
 ) -> Result<(StatusCode, Json<CreateApiKeyResponse>), ApiError> {
     state
         .auth()
-        .require(&auth.subject, "api-key", "create")
+        .require(&auth.subject, Object::ApiKey, Action::Create)
         .await?;
     let (raw_key, api_key) = state
         .auth()
         .create_api_key(auth.actor.id, &request.name)
         .await?;
     if let Some(role) = &request.role {
-        if !roles::is_valid(role) {
-            return Err(ApiError::BAD_REQUEST);
-        }
         let subject = aperture_auth::apikey_subject(api_key.id);
-        state.auth().assign_role(&subject, role).await?;
+        state.auth().assign_role(&subject, *role).await?;
     }
     Ok((
         StatusCode::CREATED,
@@ -130,7 +127,7 @@ async fn delete_api_key(
     if key.actor_id != auth.actor.id {
         state
             .auth()
-            .require(&auth.subject, "api-key", "delete")
+            .require(&auth.subject, Object::ApiKey, Action::Delete)
             .await?;
     }
     repo.delete(id).await?;

@@ -1,4 +1,4 @@
-use aperture_auth::{AuthenticatedActor, Password, roles};
+use aperture_auth::{Action, AuthenticatedActor, Object, Password, Role, Username};
 use aperture_storage::UserId;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -40,9 +40,9 @@ impl From<aperture_storage::User> for UserResponse {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateUserRequest {
-    username: String,
+    username: Username,
     password: Password,
-    role: Option<String>,
+    role: Option<Role>,
 }
 
 /// Lists all users.
@@ -56,7 +56,10 @@ async fn list_users(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
-    state.auth().require(&auth.subject, "user", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::User, Action::Read)
+        .await?;
     let users = state.auth().list_users().await?;
     Ok(Json(users.into_iter().map(UserResponse::from).collect()))
 }
@@ -79,18 +82,15 @@ async fn create_user(
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     state
         .auth()
-        .require(&auth.subject, "user", "create")
+        .require(&auth.subject, Object::User, Action::Create)
         .await?;
     let actor = state
         .auth()
         .create_user(&request.username, &request.password, None)
         .await?;
     if let Some(role) = &request.role {
-        if !roles::is_valid(role) {
-            return Err(ApiError::BAD_REQUEST);
-        }
         let subject = aperture_auth::actor_subject(actor.id);
-        state.auth().assign_role(&subject, role).await?;
+        state.auth().assign_role(&subject, *role).await?;
     }
     let user = state
         .storage()
@@ -117,7 +117,10 @@ async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<UserId>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    state.auth().require(&auth.subject, "user", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::User, Action::Read)
+        .await?;
     let user = state
         .storage()
         .users()?
@@ -145,7 +148,7 @@ async fn delete_user(
 ) -> Result<StatusCode, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "user", "delete")
+        .require(&auth.subject, Object::User, Action::Delete)
         .await?;
     let user = state
         .storage()
@@ -153,6 +156,9 @@ async fn delete_user(
         .get(id)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
-    state.auth().delete_user(user.id, user.actor_id).await?;
+    state
+        .auth()
+        .delete_user(user.id, user.actor_id, auth.actor.id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

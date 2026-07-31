@@ -1,4 +1,4 @@
-use aperture_auth::{AuthenticatedActor, Password, SessionToken};
+use aperture_auth::{AuthenticatedActor, Password, SessionToken, Username};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -26,7 +26,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginRequest {
-    username: String,
+    username: Username,
     password: Password,
 }
 
@@ -51,10 +51,24 @@ async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    let result = state
+    state.login_limiter().check(request.username.as_str())?;
+    let result = match state
         .auth()
         .login(&request.username, &request.password)
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(aperture_auth::AuthError::InvalidCredentials) => {
+            state
+                .login_limiter()
+                .record_failure(request.username.as_str());
+            return Err(ApiError::UNAUTHORIZED);
+        }
+        Err(err) => return Err(err.into()),
+    };
+    state
+        .login_limiter()
+        .record_success(request.username.as_str());
     let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
         .http_only(true)
         .secure(true)
@@ -115,6 +129,7 @@ pub struct ChangePasswordRequest {
 async fn change_password(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
     let users = state.storage().users()?;
@@ -128,9 +143,12 @@ async fn change_password(
     {
         return Err(ApiError::UNAUTHORIZED);
     }
+    // Keep the caller's current session (if any) and revoke every other
+    // session for the actor so a stolen cookie stops working immediately.
+    let keep = extract_session_token(&headers).map(|t| SessionToken::new(t).hash());
     state
         .auth()
-        .change_password(user.id, &request.new_password)
+        .change_password(user.id, &request.new_password, keep.as_ref())
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -157,7 +175,7 @@ async fn setup_status(
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetupRequest {
-    username: String,
+    username: Username,
     password: Password,
 }
 
@@ -177,13 +195,25 @@ async fn setup(
     State(state): State<AppState>,
     Json(request): Json<SetupRequest>,
 ) -> Result<Response, ApiError> {
-    let Some(result) = state
+    state.login_limiter().check(request.username.as_str())?;
+    let result = match state
         .auth()
         .setup_admin(&request.username, &request.password)
-        .await?
-    else {
-        return Err(ApiError::CONFLICT);
+        .await
+    {
+        Ok(Some(result)) => result,
+        Ok(None) => return Err(ApiError::CONFLICT),
+        Err(aperture_auth::AuthError::InvalidCredentials) => {
+            state
+                .login_limiter()
+                .record_failure(request.username.as_str());
+            return Err(ApiError::UNAUTHORIZED);
+        }
+        Err(err) => return Err(err.into()),
     };
+    state
+        .login_limiter()
+        .record_success(request.username.as_str());
     let cookie = Cookie::build((SESSION_COOKIE, result.token.as_str()))
         .http_only(true)
         .secure(true)

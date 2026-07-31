@@ -42,6 +42,9 @@ pub(crate) fn router() -> OpenApiRouter<AppState> {
     operation_id = operation_ids::GET_GATEWAY_VERSION,
     responses((status = 200, description = "Gateway version", body = VersionResponse)),
 )]
-async fn get_gateway_version(State(state): State<AppState>) -> Json<VersionResponse> {
+async fn get_gateway_version(
+    _auth: aperture_auth::AuthenticatedActor,
+    State(state): State<AppState>,
+) -> Json<VersionResponse> {
     Json(VersionResponse::new(state.version(), state.boot_id()))
 }

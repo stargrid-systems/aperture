@@ -84,10 +84,15 @@ impl From<AuthError> for ApiError {
             AuthError::InvalidCredentials
             | AuthError::SessionNotFound
             | AuthError::ApiKeyNotFound => StatusCode::UNAUTHORIZED,
-            AuthError::PasswordTooShort => StatusCode::BAD_REQUEST,
+            AuthError::PasswordTooShort(_)
+            | AuthError::PasswordTooLong(_)
+            | AuthError::PasswordReuse
+            | AuthError::InvalidUsername => StatusCode::BAD_REQUEST,
             AuthError::ActorDisabled => StatusCode::FORBIDDEN,
             AuthError::MustChangePassword => StatusCode::FORBIDDEN,
             AuthError::Forbidden => StatusCode::FORBIDDEN,
+            AuthError::CannotDeleteSelf | AuthError::LastAdmin => StatusCode::CONFLICT,
+            AuthError::TooManyAttempts => StatusCode::TOO_MANY_REQUESTS,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {

@@ -13,8 +13,10 @@ use serde::Deserialize;
 use crate::error::AuthError;
 use crate::token::random_hex;
 
-/// Minimum password length accepted at setup, creation, and change.
+/// Minimum and maximum password length accepted at setup, creation, and
+/// change. The upper bound prevents feeding oversized inputs to Argon2.
 const MIN_PASSWORD_LEN: usize = 12;
+const MAX_PASSWORD_LEN: usize = 1024;
 
 /// Returns an Argon2id instance with production-safe default parameters.
 fn argon2() -> Argon2<'static> {
@@ -43,10 +45,14 @@ impl Password {
         Self(random_hex(32))
     }
 
-    /// Validates the password against the minimum length policy.
+    /// Validates the password against the length policy.
     pub fn validate(&self) -> Result<(), AuthError> {
-        if self.0.len() < MIN_PASSWORD_LEN {
-            return Err(AuthError::PasswordTooShort);
+        let len = self.0.len();
+        if len < MIN_PASSWORD_LEN {
+            return Err(AuthError::PasswordTooShort(MIN_PASSWORD_LEN));
+        }
+        if len > MAX_PASSWORD_LEN {
+            return Err(AuthError::PasswordTooLong(MAX_PASSWORD_LEN));
         }
         Ok(())
     }

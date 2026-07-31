@@ -3,7 +3,7 @@
 use std::io;
 
 use aperture_artifacts::ArtifactError;
-use aperture_auth::AuthenticatedActor;
+use aperture_auth::{Action, AuthenticatedActor, Object};
 use aperture_storage::{ArtifactKey, Digest, MediaType};
 use axum::Json;
 use axum::body::Body;
@@ -65,7 +65,7 @@ async fn list_artifacts(
 ) -> Result<Json<Page<ArtifactSummaryResponse>>, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "artifact", "read")
+        .require(&auth.subject, Object::Artifact, Action::Read)
         .await?;
     let page = state
         .spectra()
@@ -93,7 +93,7 @@ async fn get_artifact(
 ) -> Result<Json<ArtifactSummaryResponse>, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "artifact", "read")
+        .require(&auth.subject, Object::Artifact, Action::Read)
         .await?;
     let artifact = state.spectra().artifacts().artifact(&key).await?;
     artifact
@@ -120,7 +120,7 @@ async fn list_versions(
 ) -> Result<Json<Page<ArtifactVersionResponse>>, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "artifact", "read")
+        .require(&auth.subject, Object::Artifact, Action::Read)
         .await?;
     let page = state
         .spectra()
@@ -157,7 +157,7 @@ async fn get_version(
 ) -> Result<Json<ArtifactVersionResponse>, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "artifact", "read")
+        .require(&auth.subject, Object::Artifact, Action::Read)
         .await?;
     let version = state.spectra().artifacts().version(&key, &digest).await?;
     version
@@ -186,7 +186,7 @@ async fn delete_version(
 ) -> Result<StatusCode, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "artifact", "evict")
+        .require(&auth.subject, Object::Artifact, Action::Evict)
         .await?;
     let evicted = state
         .spectra()
@@ -241,7 +241,7 @@ async fn upload_artifact(
 > {
     state
         .auth()
-        .require(&auth.subject, "artifact", "write")
+        .require(&auth.subject, Object::Artifact, Action::Write)
         .await?;
     // Parse Content-Type as a MediaType at the boundary. An unparseable
     // value is treated as absent, so the store records no media type rather
@@ -299,7 +299,7 @@ async fn download_artifact_blob(
 ) -> Result<Response, ApiError> {
     state
         .auth()
-        .require(&auth.subject, "artifact", "read")
+        .require(&auth.subject, Object::Artifact, Action::Download)
         .await?;
     let artifacts = state.spectra().artifacts();
     let artifact = artifacts

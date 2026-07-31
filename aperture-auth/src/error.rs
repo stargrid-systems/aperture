@@ -20,8 +20,17 @@ pub enum AuthError {
     #[error("invalid credentials")]
     InvalidCredentials,
 
-    #[error("password must be at least 12 characters")]
-    PasswordTooShort,
+    #[error("password must be at least {0} characters")]
+    PasswordTooShort(usize),
+
+    #[error("password must be at most {0} characters")]
+    PasswordTooLong(usize),
+
+    #[error("new password must differ from the current password")]
+    PasswordReuse,
+
+    #[error("invalid username")]
+    InvalidUsername,
 
     #[error("session not found")]
     SessionNotFound,
@@ -37,6 +46,15 @@ pub enum AuthError {
 
     #[error("permission denied")]
     Forbidden,
+
+    #[error("cannot delete yourself")]
+    CannotDeleteSelf,
+
+    #[error("cannot remove the last admin")]
+    LastAdmin,
+
+    #[error("too many login attempts, try again later")]
+    TooManyAttempts,
 }
 
 impl AuthError {

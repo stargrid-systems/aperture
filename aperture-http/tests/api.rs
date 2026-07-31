@@ -1,13 +1,13 @@
 use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
-use aperture_auth::{Password, roles};
+use aperture_auth::{Password, Role, Username};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
 use aperture_storage::{ActorId, ArtifactId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION};
+use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION, SET_COOKIE};
 use axum::http::{HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use jiff::Timestamp;
@@ -72,10 +72,13 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     );
 
     let password = Password::generate();
-    let actor = auth.create_user("test", &password, None).await.unwrap();
+    let actor = auth
+        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
+        .await
+        .unwrap();
     let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
     let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, roles::ADMIN).await.unwrap();
+    auth.assign_role(&subject, Role::Admin).await.unwrap();
 
     let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks, auth);
     (app(state), artifacts, storage, raw_key.as_str().to_owned())
@@ -757,7 +760,7 @@ async fn blob_404_when_digest_unknown() {
 
 /// Builds an app whose single API key carries `role`, with no pre-seeded
 /// artifacts. Used by the authorization tests.
-async fn app_with_role(role: &str) -> (Router, String) {
+async fn app_with_role(role: Role) -> (Router, String) {
     let root = env::temp_dir().join(format!(
         "aperture-api-{}-{}",
         process::id(),
@@ -783,7 +786,10 @@ async fn app_with_role(role: &str) -> (Router, String) {
     );
 
     let password = Password::generate();
-    let actor = auth.create_user(role, &password, None).await.unwrap();
+    let actor = auth
+        .create_user(&role.as_str().parse::<Username>().unwrap(), &password, None)
+        .await
+        .unwrap();
     let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, role).await.unwrap();
@@ -794,10 +800,10 @@ async fn app_with_role(role: &str) -> (Router, String) {
 
 #[tokio::test]
 async fn viewer_is_forbidden_from_user_management() {
-    let (app, token) = app_with_role(roles::VIEWER).await;
+    let (app, token) = app_with_role(Role::Viewer).await;
 
     let (status, _) = get_json(&app, &token, "/api/v1/users").await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     let (status, _) = post_json(
         &app,
@@ -811,7 +817,7 @@ async fn viewer_is_forbidden_from_user_management() {
 
 #[tokio::test]
 async fn admin_can_create_users() {
-    let (app, token) = app_with_role(roles::ADMIN).await;
+    let (app, token) = app_with_role(Role::Admin).await;
 
     let (status, _) = post_json(
         &app,
@@ -821,4 +827,413 @@ async fn admin_can_create_users() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
+}
+
+// --- helpers for the security tests ---
+
+/// Builds a fresh app with no pre-seeded data and returns it alongside the
+/// auth handle and storage so tests can create users and keys directly.
+async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
+    let root = env::temp_dir().join(format!(
+        "aperture-api-{}-{}",
+        process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let storage = Storage::open(":memory:").await.unwrap();
+    let artifacts = Artifacts::new(storage.clone(), root);
+
+    let mut registry = TaskRegistry::new();
+    registry.register(DownloadDefinition::new(artifacts.clone()));
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+
+    let auth = aperture_auth::AuthHandle::new(storage.clone())
+        .await
+        .unwrap();
+
+    let spectra = Spectra::new(
+        artifacts.clone(),
+        tasks.clone(),
+        SpectraConfig::default(),
+        ActorId::SYSTEM,
+    );
+
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        spectra,
+        tasks,
+        auth.clone(),
+    );
+    (app(state), auth, storage)
+}
+
+/// Creates a user with `password` and returns an API key carrying `role`.
+async fn key_for_role(
+    auth: &aperture_auth::AuthHandle,
+    username: &str,
+    password: &str,
+    role: Role,
+) -> (aperture_storage::ActorId, String) {
+    let pw = Password::new(password.to_owned());
+    let actor = auth
+        .create_user(&username.parse::<Username>().unwrap(), &pw, None)
+        .await
+        .unwrap();
+    let (raw, api_key) = auth.create_api_key(actor.id, "k").await.unwrap();
+    auth.assign_role(&aperture_auth::apikey_subject(api_key.id), role)
+        .await
+        .unwrap();
+    (actor.id, raw.as_str().to_owned())
+}
+
+/// Creates an API key with no role assigned (authenticated but unprivileged).
+async fn no_role_key(
+    auth: &aperture_auth::AuthHandle,
+    username: &str,
+) -> (aperture_storage::ActorId, String) {
+    let pw = Password::new("nobody-password12".to_owned());
+    let actor = auth
+        .create_user(&username.parse::<Username>().unwrap(), &pw, None)
+        .await
+        .unwrap();
+    let (raw, _) = auth.create_api_key(actor.id, "k").await.unwrap();
+    (actor.id, raw.as_str().to_owned())
+}
+
+/// Logs in and returns the session cookie value, or `None` on non-200.
+async fn login(app: &Router, username: &str, password: &str) -> Option<String> {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"username": username, "password": password}))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if response.status() != StatusCode::OK {
+        return None;
+    }
+    let cookie = response.headers().get(SET_COOKIE)?.to_str().ok()?;
+    cookie
+        .split(';')
+        .next()?
+        .strip_prefix("aperture_session=")
+        .map(|s| s.to_owned())
+}
+
+/// Status of a GET authenticated by a session cookie.
+async fn get_with_cookie(app: &Router, cookie: &str, uri: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("cookie", format!("aperture_session={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn post_with_cookie(app: &Router, cookie: &str, uri: &str, body: Value) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", format!("aperture_session={cookie}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn post_no_auth(app: &Router, uri: &str, body: Value) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+// --- security tests ---
+
+/// Regression net for the task-schedules class of bug: an authenticated but
+/// unprivileged token must be denied on every mutating endpoint. Adding a new
+/// resource without a `require()` call makes its mutation succeed here, failing
+/// the test. Bodies are kept valid enough to pass JSON extraction so the
+/// request reaches the authorization check.
+#[tokio::test]
+async fn no_role_token_is_denied_on_all_mutations() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_id, token) = no_role_key(&auth, "nobody").await;
+
+    // (method, uri, json body)
+    let matrix: [(&str, &str, Value); 10] = [
+        ("PUT", "/api/v1/artifacts/firmware", Value::Null),
+        (
+            "POST",
+            "/api/v1/tasks",
+            json!({"kind": "download", "input": {}}),
+        ),
+        ("POST", "/api/v1/tasks/1/cancel", Value::Null),
+        (
+            "POST",
+            "/api/v1/task-schedules",
+            json!({"kind": "download", "input": {}, "interval": "PT5M"}),
+        ),
+        ("PATCH", "/api/v1/task-schedules/1", json!({})),
+        ("DELETE", "/api/v1/task-schedules/1", Value::Null),
+        (
+            "POST",
+            "/api/v1/users",
+            json!({"username": "x", "password": "goodpassword12"}),
+        ),
+        ("DELETE", "/api/v1/users/1", Value::Null),
+        ("POST", "/api/v1/api-keys", json!({"name": "k"})),
+        (
+            "DELETE",
+            "/api/v1/artifacts/firmware/versions/sha256:\
+             0000000000000000000000000000000000000000000000000000000000000000",
+            Value::Null,
+        ),
+    ];
+
+    for (method, uri, body) in matrix {
+        let bytes = if body.is_null() {
+            b"{}".to_vec()
+        } else {
+            serde_json::to_vec(&body).unwrap()
+        };
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {uri}: expected 403 for no-role token"
+        );
+    }
+}
+
+#[tokio::test]
+async fn viewer_cannot_download_artifact_blob() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_admin_actor, admin_key) =
+        key_for_role(&auth, "admin", "admin-password12", Role::Admin).await;
+    let (_viewer_actor, viewer_key) =
+        key_for_role(&auth, "viewer", "viewer-password12", Role::Viewer).await;
+
+    // Admin stores an artifact (e.g. a secret key).
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .header("authorization", format!("Bearer {admin_key}"))
+                .uri("/api/v1/artifacts/server-key")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(&b"top-secret-key-bytes"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::CREATED);
+    let body = to_bytes(put.into_body(), usize::MAX).await.unwrap();
+    let digest = serde_json::from_slice::<Value>(&body).unwrap()["digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Viewer can read the catalog metadata...
+    let (status, _) = get_json(
+        &app,
+        &viewer_key,
+        &format!("/api/v1/artifacts/server-key/versions/{digest}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // ...but cannot download the blob content.
+    let blob_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/artifacts/server-key/versions/{digest}/blob"
+                ))
+                .header("authorization", format!("Bearer {viewer_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(blob_status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn change_password_revokes_other_sessions() {
+    let (app, auth, _storage) = fresh_app().await;
+    let pw = "initial-password12";
+    auth.create_user(
+        &"alice".parse().unwrap(),
+        &Password::new(pw.to_owned()),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let cookie_a = login(&app, "alice", pw).await.expect("login a");
+    let cookie_b = login(&app, "alice", pw).await.expect("login b");
+    // Sanity: both sessions work before the change.
+    assert_eq!(
+        get_with_cookie(&app, &cookie_a, "/api/v1/version").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_with_cookie(&app, &cookie_b, "/api/v1/version").await,
+        StatusCode::OK
+    );
+
+    let status = post_with_cookie(
+        &app,
+        &cookie_a,
+        "/api/v1/auth/change-password",
+        json!({"current_password": pw, "new_password": "brand-new-password"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The caller's session survives; the other session is revoked.
+    assert_eq!(
+        get_with_cookie(&app, &cookie_a, "/api/v1/version").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_with_cookie(&app, &cookie_b, "/api/v1/version").await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn change_password_rejects_reuse() {
+    let (app, auth, _storage) = fresh_app().await;
+    let pw = "initial-password12";
+    auth.create_user(
+        &"alice".parse().unwrap(),
+        &Password::new(pw.to_owned()),
+        None,
+    )
+    .await
+    .unwrap();
+    let cookie = login(&app, "alice", pw).await.expect("login");
+
+    let status = post_with_cookie(
+        &app,
+        &cookie,
+        "/api/v1/auth/change-password",
+        json!({"current_password": pw, "new_password": pw}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn login_rate_limited_after_burst() {
+    let (app, auth, _storage) = fresh_app().await;
+    auth.create_user(
+        &"alice".parse().unwrap(),
+        &Password::new("correct-password12".to_owned()),
+        None,
+    )
+    .await
+    .unwrap();
+
+    for _ in 0..5 {
+        assert!(login(&app, "alice", "wrong-password-x").await.is_none());
+    }
+    // The next attempt is rejected by the limiter before credentials are checked.
+    let status = post_no_auth(
+        &app,
+        "/api/v1/auth/login",
+        json!({"username": "alice", "password": "wrong-password-x"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn setup_rejects_invalid_username_and_short_password() {
+    let (app, _auth, _storage) = fresh_app().await;
+
+    let bad_user = post_no_auth(
+        &app,
+        "/api/v1/auth/setup",
+        json!({"username": "bad name", "password": "good-password12"}),
+    )
+    .await;
+    assert!(
+        bad_user.is_client_error(),
+        "invalid username should be rejected: {bad_user}"
+    );
+
+    let short_pw = post_no_auth(
+        &app,
+        "/api/v1/auth/setup",
+        json!({"username": "admin", "password": "short"}),
+    )
+    .await;
+    assert!(
+        short_pw.is_client_error(),
+        "short password should be rejected: {short_pw}"
+    );
+}
+
+#[tokio::test]
+async fn admin_cannot_delete_self() {
+    let (app, auth, storage) = fresh_app().await;
+    let (alice_actor, alice_key) =
+        key_for_role(&auth, "alice", "alice-password12", Role::Admin).await;
+    let user_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(alice_actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+
+    let status = delete(&app, &alice_key, &format!("/api/v1/users/{user_id}")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }

@@ -41,6 +41,7 @@ pub struct AppState {
     spectra: Spectra,
     tasks: Tasks,
     auth: aperture_auth::AuthHandle,
+    login_limiter: aperture_auth::LoginLimiter,
 }
 
 impl AppState {
@@ -59,6 +60,7 @@ impl AppState {
             spectra,
             tasks,
             auth,
+            login_limiter: aperture_auth::LoginLimiter::default(),
         }
     }
 
@@ -84,6 +86,10 @@ impl AppState {
 
     pub(crate) fn auth(&self) -> &aperture_auth::AuthHandle {
         &self.auth
+    }
+
+    pub(crate) fn login_limiter(&self) -> &aperture_auth::LoginLimiter {
+        &self.login_limiter
     }
 }
 

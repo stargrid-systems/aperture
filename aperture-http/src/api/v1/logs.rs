@@ -1,4 +1,4 @@
-use aperture_auth::AuthenticatedActor;
+use aperture_auth::{Action, AuthenticatedActor, Object};
 use aperture_storage::{EventFilter, SpanFilter, SpanId, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -35,7 +35,10 @@ async fn list_logs(
     State(state): State<AppState>,
     Query(params): Query<LogListParams>,
 ) -> Result<Json<Page<LogEventResponse>>, ApiError> {
-    state.auth().require(&auth.subject, "log", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Log, Action::Read)
+        .await?;
     let query = params.to_query();
     let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
     let filter = EventFilter {
@@ -66,7 +69,10 @@ async fn list_log_targets(
     State(state): State<AppState>,
     Query(params): Query<LogTargetListParams>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    state.auth().require(&auth.subject, "log", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Log, Action::Read)
+        .await?;
     let logs = state.storage().logs()?;
     let targets = logs.list_targets(params.q.as_deref()).await?;
     Ok(Json(targets))
@@ -83,7 +89,10 @@ async fn list_log_boots(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BootResponse>>, ApiError> {
-    state.auth().require(&auth.subject, "log", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Log, Action::Read)
+        .await?;
     let logs = state.storage().logs()?;
     let boots = logs.list_boots().await?;
     Ok(Json(BootResponse::from_boots(boots, state.boot_id())))
@@ -102,7 +111,10 @@ async fn list_spans(
     State(state): State<AppState>,
     Query(params): Query<LogSpanListParams>,
 ) -> Result<Json<Page<LogSpanResponse>>, ApiError> {
-    state.auth().require(&auth.subject, "log", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Log, Action::Read)
+        .await?;
     let query = params.to_query();
     let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
     let parent = match (params.parent_id, params.parent_null) {
@@ -140,7 +152,10 @@ async fn get_span(
     State(state): State<AppState>,
     Path(id): Path<SpanId>,
 ) -> Result<Json<LogSpanDetailResponse>, ApiError> {
-    state.auth().require(&auth.subject, "log", "read").await?;
+    state
+        .auth()
+        .require(&auth.subject, Object::Log, Action::Read)
+        .await?;
     let logs = state.storage().logs()?;
     let span = logs.get_span(id).await?;
     let span = span.ok_or(ApiError::NOT_FOUND)?;

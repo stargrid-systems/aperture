@@ -1,7 +1,18 @@
-//! Casbin model definition and built-in policy seeding.
+//! Casbin model definition, the typed permission vocabulary, and built-in
+//! policy seeding.
+//!
+//! Authorization is expressed with the typed [`Object`] and [`Action`] enums so
+//! that [`AuthHandle::require`](crate::AuthHandle::require) cannot be called
+//! with an arbitrary string. Roles are the closed [`Role`] enum. Adding a new
+//! object or action is a deliberate change that also forces a policy-seed
+//! update, which keeps the vocabulary and the granted permissions in sync.
+
+use std::fmt;
+use std::str::FromStr;
 
 use aperture_storage::Storage;
 use casbin::{CoreApi, DefaultModel, Enforcer};
+use serde::{Deserialize, Serialize};
 
 use self::adapter::{TursoAdapter, map_storage_err};
 
@@ -25,17 +36,122 @@ e = some(where (p.eft == allow))
 m = g(r.sub, p.sub) && globMatch(r.obj, p.obj) && globMatch(r.act, p.act)
 "#;
 
-/// Built-in role names.
-pub mod roles {
-    pub const ADMIN: &str = "admin";
-    pub const OPERATOR: &str = "operator";
-    pub const VIEWER: &str = "viewer";
+/// The protected resource a permission targets. A closed vocabulary so every
+/// authorization check names a real resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Object {
+    Artifact,
+    Task,
+    TaskDefinition,
+    TaskSchedule,
+    Log,
+    User,
+    ApiKey,
+}
 
-    /// Returns true when `role` is a known built-in role name.
-    pub fn is_valid(role: &str) -> bool {
-        role == ADMIN || role == OPERATOR || role == VIEWER
+impl Object {
+    /// The casbin policy string for this object.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Artifact => "artifact",
+            Self::Task => "task",
+            Self::TaskDefinition => "task-definition",
+            Self::TaskSchedule => "task-schedule",
+            Self::Log => "log",
+            Self::User => "user",
+            Self::ApiKey => "api-key",
+        }
     }
 }
+
+impl fmt::Display for Object {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The operation a permission allows on an [`Object`]. A closed vocabulary so
+/// every authorization check names a real action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Read,
+    Download,
+    Write,
+    Evict,
+    Create,
+    Update,
+    Delete,
+    Cancel,
+}
+
+impl Action {
+    /// The casbin policy string for this action.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Download => "download",
+            Self::Write => "write",
+            Self::Evict => "evict",
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Delete => "delete",
+            Self::Cancel => "cancel",
+        }
+    }
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A built-in role. Stored as its lowercase name in casbin grouping rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Admin,
+    Operator,
+    Viewer,
+}
+
+impl Role {
+    /// The casbin policy string for this role.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Operator => "operator",
+            Self::Viewer => "viewer",
+        }
+    }
+
+    /// Every built-in role, in display order.
+    pub const ALL: [Self; 3] = [Self::Admin, Self::Operator, Self::Viewer];
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Role {
+    type Err = UnknownRole;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "admin" => Ok(Self::Admin),
+            "operator" => Ok(Self::Operator),
+            "viewer" => Ok(Self::Viewer),
+            other => Err(UnknownRole(other.to_owned())),
+        }
+    }
+}
+
+/// Error returned when a string is not a known built-in role.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown role: {0}")]
+pub struct UnknownRole(pub String);
 
 /// Creates and returns the enforcer with the turso adapter, loading existing
 /// policies from the database.
@@ -49,6 +165,11 @@ pub(crate) async fn create_enforcer(storage: &Storage) -> casbin::Result<Enforce
 }
 
 /// Seeds the built-in roles and permissions if the policy table is empty.
+///
+/// Admin is the superuser (`*:*`). Operator and viewer get explicit per-object
+/// grants rather than wildcards, so adding a new object never silently becomes
+/// accessible. Notably, a viewer can read artifact catalog metadata but cannot
+/// download artifact blobs (which include secrets such as TLS private keys).
 pub(crate) async fn seed_builtin_policies(
     e: &mut Enforcer,
     storage: &Storage,
@@ -65,25 +186,62 @@ pub(crate) async fn seed_builtin_policies(
 
     use casbin::MgmtApi;
 
+    let star = || "*".to_owned();
     let policies = vec![
-        vec![roles::ADMIN.to_owned(), "*".to_owned(), "*".to_owned()],
+        // Admin: superuser.
+        vec![Role::Admin.as_str().to_owned(), star(), star()],
+        // Operator: full operational access, no user or api-key management.
         vec![
-            roles::OPERATOR.to_owned(),
-            "artifact".to_owned(),
-            "*".to_owned(),
+            Role::Operator.as_str().to_owned(),
+            Object::Artifact.as_str().to_owned(),
+            star(),
         ],
         vec![
-            roles::OPERATOR.to_owned(),
-            "task".to_owned(),
-            "*".to_owned(),
+            Role::Operator.as_str().to_owned(),
+            Object::Task.as_str().to_owned(),
+            star(),
         ],
         vec![
-            roles::OPERATOR.to_owned(),
-            "task-definition".to_owned(),
-            "*".to_owned(),
+            Role::Operator.as_str().to_owned(),
+            Object::TaskDefinition.as_str().to_owned(),
+            Action::Read.as_str().to_owned(),
         ],
-        vec![roles::OPERATOR.to_owned(), "log".to_owned(), "*".to_owned()],
-        vec![roles::VIEWER.to_owned(), "*".to_owned(), "read".to_owned()],
+        vec![
+            Role::Operator.as_str().to_owned(),
+            Object::TaskSchedule.as_str().to_owned(),
+            star(),
+        ],
+        vec![
+            Role::Operator.as_str().to_owned(),
+            Object::Log.as_str().to_owned(),
+            Action::Read.as_str().to_owned(),
+        ],
+        // Viewer: read-only on non-sensitive data. No artifact downloads.
+        vec![
+            Role::Viewer.as_str().to_owned(),
+            Object::Artifact.as_str().to_owned(),
+            Action::Read.as_str().to_owned(),
+        ],
+        vec![
+            Role::Viewer.as_str().to_owned(),
+            Object::Task.as_str().to_owned(),
+            Action::Read.as_str().to_owned(),
+        ],
+        vec![
+            Role::Viewer.as_str().to_owned(),
+            Object::TaskDefinition.as_str().to_owned(),
+            Action::Read.as_str().to_owned(),
+        ],
+        vec![
+            Role::Viewer.as_str().to_owned(),
+            Object::TaskSchedule.as_str().to_owned(),
+            Action::Read.as_str().to_owned(),
+        ],
+        vec![
+            Role::Viewer.as_str().to_owned(),
+            Object::Log.as_str().to_owned(),
+            Action::Read.as_str().to_owned(),
+        ],
     ];
     e.add_policies(policies).await?;
 
