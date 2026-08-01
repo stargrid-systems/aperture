@@ -3,7 +3,7 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
-use aperture_storage::Storage;
+use aperture_storage::{ApiKeyId, Storage, UserId};
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
@@ -18,7 +18,6 @@ use uuid::Uuid;
 
 use self::api::router as api_routes;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
-use aperture_storage::{ApiKeyId, UserId};
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
