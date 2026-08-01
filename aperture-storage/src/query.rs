@@ -10,13 +10,13 @@ use crate::sql::ToSql;
 /// Builds the `WHERE` body of a listing, keeping conditions and their bind
 /// params in lockstep so placeholder numbers can never drift. Column names come
 /// from the calling query, never user input, since they are written verbatim.
-pub(crate) struct Filters {
+pub struct Filters {
     sql: String,
     params: Vec<Value>,
 }
 
 impl Filters {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             sql: String::new(),
             params: Vec::new(),
@@ -201,7 +201,7 @@ impl Filters {
 /// formatting, so a user-supplied substring matches literally. Escaping into
 /// the formatter avoids an intermediate allocation when used in a `format!`.
 /// Pair with `ESCAPE '\'` in the SQL.
-pub(crate) struct EscapeLike<'a>(pub(crate) &'a str);
+pub struct EscapeLike<'a>(pub(crate) &'a str);
 
 impl fmt::Display for EscapeLike<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -215,20 +215,20 @@ impl fmt::Display for EscapeLike<'_> {
     }
 }
 
-pub(crate) struct Assignments {
+pub struct Assignments {
     sql: String,
     params: Vec<Value>,
 }
 
 impl Assignments {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             sql: String::new(),
             params: Vec::new(),
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(crate) const fn is_empty(&self) -> bool {
         self.params.is_empty()
     }
 

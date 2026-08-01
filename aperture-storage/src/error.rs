@@ -88,13 +88,13 @@ pub enum StorageError {
 impl StorageError {
     /// Wraps a turso engine error as a [`StorageError::Database`].
     pub(crate) fn from_turso(error: turso::Error) -> Self {
-        StorageError::Database(error.into())
+        Self::Database(error.into())
     }
 }
 
 impl From<InvalidDigest> for StorageError {
     fn from(err: InvalidDigest) -> Self {
-        StorageError::InvalidDigest { raw: err.0 }
+        Self::InvalidDigest { raw: err.0 }
     }
 }
 

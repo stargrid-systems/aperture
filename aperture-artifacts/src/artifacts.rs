@@ -583,7 +583,7 @@ fn build_artifact(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
     use std::{env, fs, process};
 
@@ -619,8 +619,8 @@ mod tests {
     }
 
     /// Removes the temp dir created by [`fresh_store`]. Best-effort.
-    fn cleanup(dir: PathBuf) {
-        let _ = fs::remove_dir_all(&dir);
+    fn cleanup(dir: &Path) {
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
@@ -644,7 +644,7 @@ mod tests {
             Some(artifact.digest.to_string()),
             "Written events must carry the new digest",
         );
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[tokio::test]
@@ -663,11 +663,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            artifact.media_type.as_ref().map(|mt| mt.as_str()),
+            artifact
+                .media_type
+                .as_ref()
+                .map(aperture_storage::MediaType::as_str),
             Some("application/octet-stream")
         );
 
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[tokio::test]
@@ -688,7 +691,7 @@ mod tests {
             change.digest.is_none(),
             "Removed events do not carry a digest"
         );
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[tokio::test]
@@ -704,7 +707,7 @@ mod tests {
             outcome.is_err(),
             "late subscriber should not see prior events"
         );
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[test]

@@ -20,7 +20,7 @@ enum Command {
     Version,
     /// Run the gateway HTTP server.
     Run(RunArgs),
-    /// Print the OpenAPI specification as JSON.
+    /// Print the `OpenAPI` specification as JSON.
     Openapi,
     /// Reset the password for a user. Prints the new password to stdout.
     ResetPassword(ResetPasswordArgs),
@@ -66,7 +66,7 @@ impl FromStr for BindAddr {
 
     fn from_str(s: &str) -> anyhow::Result<Self> {
         if s.is_empty() {
-            return Ok(BindAddr(None));
+            return Ok(Self(None));
         }
         s.parse::<SocketAddr>()
             .map(Some)

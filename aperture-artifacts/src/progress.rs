@@ -8,13 +8,13 @@ use aperture_tasks::ProgressHandle;
 use tokio::io::AsyncWrite;
 
 /// An [`AsyncWrite`] that forwards to `inner` and counts bytes into `progress`.
-pub(crate) struct ProgressWriter<W> {
+pub struct ProgressWriter<W> {
     inner: W,
     progress: ProgressHandle,
 }
 
 impl<W> ProgressWriter<W> {
-    pub(crate) fn new(inner: W, progress: ProgressHandle) -> Self {
+    pub(crate) const fn new(inner: W, progress: ProgressHandle) -> Self {
         Self { inner, progress }
     }
 }

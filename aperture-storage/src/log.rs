@@ -110,7 +110,7 @@ pub enum Level {
 
 impl Level {
     /// Numeric severity rank stored in the database. Higher is more severe.
-    pub(crate) fn as_db(self) -> i64 {
+    pub(crate) const fn as_db(self) -> i64 {
         match self {
             Self::Trace => 0,
             Self::Debug => 1,
@@ -120,7 +120,7 @@ impl Level {
         }
     }
 
-    pub(crate) fn from_db(value: i64) -> Result<Self> {
+    pub(crate) const fn from_db(value: i64) -> Result<Self> {
         match value {
             0 => Ok(Self::Trace),
             1 => Ok(Self::Debug),
@@ -202,7 +202,7 @@ pub enum SpanParentFilter {
     /// No parent filtering.
     #[default]
     Any,
-    /// Only root spans (parent_id IS NULL).
+    /// Only root spans (`parent_id` IS NULL).
     RootOnly,
     /// Only direct children of the given span id.
     ChildrenOf(SpanId),
@@ -254,7 +254,7 @@ pub struct LogRepository {
 }
 
 impl LogRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -320,8 +320,14 @@ impl LogRepository {
             col::BOOT_ID,
             filter.boot_id.as_ref().map(Uuid::to_string).as_deref(),
         );
-        filters.gte_int_opt(col::TIMESTAMP, filter.since.map(|ts| ts.as_microsecond()));
-        filters.lte_int_opt(col::TIMESTAMP, filter.until.map(|ts| ts.as_microsecond()));
+        filters.gte_int_opt(
+            col::TIMESTAMP,
+            filter.since.map(jiff::Timestamp::as_microsecond),
+        );
+        filters.lte_int_opt(
+            col::TIMESTAMP,
+            filter.until.map(jiff::Timestamp::as_microsecond),
+        );
 
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
@@ -363,12 +369,12 @@ impl LogRepository {
         let sql = match q {
             Some(_) => {
                 // Raw string because sql!() cannot handle SQL single-quoted literals.
-                r#"
+                r"
                 SELECT target FROM log_events WHERE target LIKE ?1 ESCAPE '\'
                 UNION
                 SELECT target FROM log_spans WHERE target LIKE ?1 ESCAPE '\'
                 ORDER BY target
-            "#
+            "
             }
             None => sql!(
                 SELECT target FROM log_events
@@ -377,10 +383,9 @@ impl LogRepository {
                 ORDER BY target
             ),
         };
-        let params: Vec<Value> = match q {
-            Some(prefix) => vec![Value::Text(format!("{}%", EscapeLike(prefix)))],
-            None => vec![],
-        };
+        let params: Vec<Value> = q
+            .map(|prefix| vec![Value::Text(format!("{}%", EscapeLike(prefix)))])
+            .unwrap_or_default();
         let mut rows = self
             .connection
             .query(sql, params_from_iter(params))
@@ -393,8 +398,8 @@ impl LogRepository {
         Ok(targets)
     }
 
-    /// Lists spans matching the given filters, ordered by started_at descending
-    /// by default.
+    /// Lists spans matching the given filters, ordered by `started_at`
+    /// descending by default.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn list_spans(&self, filter: &SpanFilter, query: &ListQuery) -> Result<Page<Span>> {
         let paginator = Paginator::new(query, Order::Desc)?;
@@ -417,8 +422,14 @@ impl LogRepository {
             col::BOOT_ID,
             filter.boot_id.as_ref().map(Uuid::to_string).as_deref(),
         );
-        filters.gte_int_opt(col::STARTED_AT, filter.since.map(|ts| ts.as_microsecond()));
-        filters.lte_int_opt(col::STARTED_AT, filter.until.map(|ts| ts.as_microsecond()));
+        filters.gte_int_opt(
+            col::STARTED_AT,
+            filter.since.map(jiff::Timestamp::as_microsecond),
+        );
+        filters.lte_int_opt(
+            col::STARTED_AT,
+            filter.until.map(jiff::Timestamp::as_microsecond),
+        );
         for (key, value) in &filter.fields {
             filters.json_path_eq(col::FIELDS, key, value);
         }
@@ -565,7 +576,7 @@ pub struct LogBatch<'conn> {
     update_span_fields: Statement,
 }
 
-impl<'conn> LogBatch<'conn> {
+impl LogBatch<'_> {
     /// Inserts a span.
     pub async fn insert_span(&mut self, record: SpanRecord<'_>) -> Result<()> {
         let params = params_from_iter([
@@ -607,7 +618,7 @@ impl<'conn> LogBatch<'conn> {
         Ok(())
     }
 
-    /// Records the end time of a span identified by its tracing_id.
+    /// Records the end time of a span identified by its `tracing_id`.
     pub async fn close_span(
         &mut self,
         tracing_id: u64,
@@ -680,7 +691,7 @@ impl TryFrom<&turso::Row> for Event {
     type Error = StorageError;
 
     fn try_from(row: &turso::Row) -> Result<Self> {
-        Ok(Event {
+        Ok(Self {
             id: EVENT_COLUMNS.extract(row, col::ID)?,
             span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
             level: EVENT_COLUMNS.extract(row, col::LEVEL)?,
@@ -699,7 +710,7 @@ impl TryFrom<&turso::Row> for Span {
     type Error = StorageError;
 
     fn try_from(row: &turso::Row) -> Result<Self> {
-        Ok(Span {
+        Ok(Self {
             id: SPAN_COLUMNS.extract(row, col::ID)?,
             parent_id: SPAN_COLUMNS.extract(row, col::PARENT_ID)?,
             name: SPAN_COLUMNS.extract(row, col::NAME)?,

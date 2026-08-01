@@ -49,7 +49,7 @@ const ARTIFACT_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A stored version of an artifact. Every row maps to a materialized blob.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
     pub id: ArtifactId,
@@ -72,7 +72,7 @@ pub struct Artifact {
 }
 
 /// A distinct key with its newest version and how many versions are stored.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactKeyEntry {
     /// The newest stored version for this key.
     pub latest: Artifact,
@@ -95,7 +95,7 @@ pub struct ArtifactRepository {
 }
 
 impl ArtifactRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -273,7 +273,10 @@ impl ArtifactRepository {
 
         let mut filters = Filters::new();
         filters.eq_text(col::KEY, key.as_str());
-        filters.eq_text_opt(col::MEDIA_TYPE, media_type.map(|mt| mt.as_str()));
+        filters.eq_text_opt(
+            col::MEDIA_TYPE,
+            media_type.map(super::media_type::MediaType::as_str),
+        );
         filters.eq_text_opt(col::VERSION, version);
         filters.keyset(&keyset, &paginator);
 
@@ -297,7 +300,7 @@ impl ArtifactRepository {
         Ok(paginator.finish(items, |artifact| {
             let value = match sort {
                 VersionSort::DownloadedAt => artifact.downloaded_at.as_microsecond(),
-                VersionSort::SizeBytes => artifact.size_bytes as i64,
+                VersionSort::SizeBytes => i64::try_from(artifact.size_bytes).unwrap_or(i64::MAX),
             };
             (CursorValue::Int(value), artifact.id.get())
         }))
@@ -340,7 +343,7 @@ impl TryFrom<&Row> for Artifact {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(Artifact {
+        Ok(Self {
             id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
             key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
             source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
@@ -358,7 +361,7 @@ impl ArtifactKeyEntry {
     /// Builds an [`ArtifactKeyEntry`] from a row in `ARTIFACT_COLUMNS` order
     /// followed by the version count column.
     fn from_row(row: &Row) -> Result<Self> {
-        Ok(ArtifactKeyEntry {
+        Ok(Self {
             latest: Artifact::try_from(row)?,
             version_count: get(row, ARTIFACT_COLUMNS.len())?,
         })

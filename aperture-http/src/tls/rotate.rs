@@ -27,7 +27,7 @@ pub struct RotateCertificateDefinition {
 }
 
 impl RotateCertificateDefinition {
-    pub fn new(artifacts: Artifacts) -> Self {
+    pub const fn new(artifacts: Artifacts) -> Self {
         Self { artifacts }
     }
 }

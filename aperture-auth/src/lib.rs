@@ -42,7 +42,7 @@ mod username;
 
 /// Sliding session lifetime. A session expires after this duration of
 /// inactivity.
-const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const SESSION_TTL: Duration = Duration::from_hours(168);
 
 /// A dummy hash used to keep login timing constant when the username does not
 /// exist. The password it hashes is irrelevant; verification always fails.
@@ -79,10 +79,11 @@ pub struct AuthenticatedActor {
 impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedActor {
     type Rejection = StatusCode;
 
+    #[allow(clippy::unused_async_trait_impl)]
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> StdResult<Self, Self::Rejection> {
         parts
             .extensions
-            .get::<AuthenticatedActor>()
+            .get::<Self>()
             .cloned()
             .ok_or(StatusCode::UNAUTHORIZED)
     }
@@ -158,12 +159,9 @@ impl AuthHandle {
     /// Returns the session token for the caller to set as a cookie.
     pub async fn login(&self, username: &Username, password: &Password) -> Result<LoginResult> {
         let users = self.storage.users()?;
-        let user = match users.find_by_username(username.as_str()).await? {
-            Some(u) => u,
-            None => {
-                let _ = password.verify_against(&DUMMY_HASH);
-                return Err(AuthError::InvalidCredentials);
-            }
+        let Some(user) = users.find_by_username(username.as_str()).await? else {
+            let _ = password.verify_against(&DUMMY_HASH);
+            return Err(AuthError::InvalidCredentials);
         };
         if !password.verify_against(&user.password_hash)? {
             return Err(AuthError::InvalidCredentials);
@@ -201,9 +199,8 @@ impl AuthHandle {
     ) -> Result<Option<AuthenticatedActor>> {
         let token_hash = token.hash();
         let sessions = self.storage.sessions()?;
-        let session = match sessions.find_by_token_hash(&token_hash).await? {
-            Some(s) => s,
-            None => return Ok(None),
+        let Some(session) = sessions.find_by_token_hash(&token_hash).await? else {
+            return Ok(None);
         };
         let now = Timestamp::now();
         if session.expires_at < now {
@@ -219,8 +216,7 @@ impl AuthHandle {
             users
                 .find_by_actor_id(actor.id)
                 .await?
-                .map(|u| u.password_change_required_at.is_some())
-                .unwrap_or(false)
+                .is_some_and(|u| u.password_change_required_at.is_some())
         } else {
             false
         };
@@ -272,14 +268,12 @@ impl AuthHandle {
 
     /// Resolves an API key to an authenticated actor.
     pub async fn resolve_api_key(&self, key: &RawApiKey) -> Result<Option<AuthenticatedActor>> {
-        let prefix = match key.lookup_prefix() {
-            Some(p) => p,
-            None => return Ok(None),
+        let Some(prefix) = key.lookup_prefix() else {
+            return Ok(None);
         };
         let repo = self.storage.api_keys()?;
-        let api_key = match repo.find_by_prefix(&prefix).await? {
-            Some(k) => k,
-            None => return Ok(None),
+        let Some(api_key) = repo.find_by_prefix(&prefix).await? else {
+            return Ok(None);
         };
         let key_hash = key.hash();
         if !key_hash.matches(&api_key.key_hash) {
@@ -459,47 +453,43 @@ impl AuthHandle {
         password.validate()?;
         let now = Timestamp::now();
         let hash = password.hash()?;
-        let actor_id = match self
+        let actor_id = if let Some((actor, _)) = self
             .storage
             .create_initial_user(username.as_str(), &hash, now)
             .await?
         {
-            Some((actor, _)) => actor.id,
-            None => {
-                // Recovery path. Take a write lock up front so the has_admin
-                // check and the role assignment below are atomic: two
-                // concurrent recovery calls cannot both see has_admin == false
-                // and both assign admin.
-                let mut e = self.enforcer.write().await;
-                let has_admin = !e.get_users_for_role(Role::Admin.as_str(), None).is_empty();
-                if has_admin {
-                    return Ok(None);
-                }
-                let users = self.storage.users()?;
-                let user = match users.find_by_username(username.as_str()).await? {
-                    Some(u) => u,
-                    None => {
-                        // dummy verify to avoid timing oracle (finding L-SEC1)
-                        let _ = password.verify_against(&DUMMY_HASH);
-                        return Err(AuthError::InvalidCredentials);
-                    }
-                };
-                // Do not grant admin until the caller proves they know the
-                // existing password. Without this, anyone who guesses the
-                // username during the interrupted-setup window could promote
-                // the account.
-                if !password.verify_against(&user.password_hash)? {
-                    return Err(AuthError::InvalidCredentials);
-                }
-                // Assign admin role while still holding the write lock.
-                e.add_role_for_user(&actor_subject(user.actor_id), Role::Admin.as_str(), None)
-                    .await
-                    .map_err(AuthError::from_casbin)?;
-                // Return early: role is assigned, now just need to log in.
-                tracing::info!(actor = user.actor_id.get(), "setup admin user (recovery)");
-                let login = self.login(username, password).await?;
-                return Ok(Some(login));
+            actor.id
+        } else {
+            // Recovery path. Take a write lock up front so the has_admin
+            // check and the role assignment below are atomic: two
+            // concurrent recovery calls cannot both see has_admin == false
+            // and both assign admin.
+            let mut e = self.enforcer.write().await;
+            let has_admin = !e.get_users_for_role(Role::Admin.as_str(), None).is_empty();
+            if has_admin {
+                return Ok(None);
             }
+            let users = self.storage.users()?;
+            let Some(user) = users.find_by_username(username.as_str()).await? else {
+                // dummy verify to avoid timing oracle (finding L-SEC1)
+                let _ = password.verify_against(&DUMMY_HASH);
+                return Err(AuthError::InvalidCredentials);
+            };
+            // Do not grant admin until the caller proves they know the
+            // existing password. Without this, anyone who guesses the
+            // username during the interrupted-setup window could promote
+            // the account.
+            if !password.verify_against(&user.password_hash)? {
+                return Err(AuthError::InvalidCredentials);
+            }
+            // Assign admin role while still holding the write lock.
+            e.add_role_for_user(&actor_subject(user.actor_id), Role::Admin.as_str(), None)
+                .await
+                .map_err(AuthError::from_casbin)?;
+            // Return early: role is assigned, now just need to log in.
+            tracing::info!(actor = user.actor_id.get(), "setup admin user (recovery)");
+            let login = self.login(username, password).await?;
+            return Ok(Some(login));
         };
         let subject = actor_subject(actor_id);
         self.assign_role(&subject, Role::Admin).await?;

@@ -110,6 +110,8 @@ impl Scheduler {
 
 #[cfg(test)]
 mod tests {
+    use std::future::{Future, ready};
+
     use aperture_storage::{Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch};
     use serde_json::{Value, json};
 
@@ -129,12 +131,12 @@ mod tests {
             }
         }
 
-        async fn run(
+        fn run(
             &self,
             _input: Self::Input,
             _ctx: crate::TaskContext,
-        ) -> Result<Self::Output, crate::RunError> {
-            Ok(())
+        ) -> impl Future<Output = Result<Self::Output, crate::RunError>> + Send {
+            ready(Ok(()))
         }
     }
 

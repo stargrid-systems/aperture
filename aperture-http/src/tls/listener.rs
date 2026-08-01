@@ -29,7 +29,7 @@ pub struct TlsListener {
 }
 
 impl TlsListener {
-    pub fn new(inner: TcpListener, config: SharedConfig) -> Self {
+    pub const fn new(inner: TcpListener, config: SharedConfig) -> Self {
         Self { inner, config }
     }
 }
@@ -86,6 +86,6 @@ impl Listener for TlsListener {
 }
 
 /// Logs the first failure then every `interval`-th.
-fn should_log(consecutive: u32) -> bool {
+const fn should_log(consecutive: u32) -> bool {
     consecutive == 1 || consecutive.is_multiple_of(ACCEPT_FAILURES_PER_LOG)
 }

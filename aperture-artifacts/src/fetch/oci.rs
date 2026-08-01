@@ -23,6 +23,7 @@ impl OciFetcher {
 
     /// Resolves the layer matching `media_type` in `reference` against the
     /// registry, without transferring it. This is a manifest lookup only.
+    #[expect(clippy::cast_sign_loss, reason = "clamped to >= 0 by max(0)")]
     pub async fn resolve(&self, reference: &Reference, media_type: &MediaType) -> Result<Resolved> {
         let layer = self.resolve_layer(reference, media_type).await?;
         let digest: Digest = layer.digest.parse()?;
@@ -41,6 +42,7 @@ impl OciFetcher {
     /// `media_type` is the validated media type of the layer to pull. The
     /// returned [`FetchMeta`] echoes it back so the caller can record it
     /// without re-parsing.
+    #[expect(clippy::cast_sign_loss, reason = "clamped to >= 0 by max(0)")]
     pub async fn fetch(
         &self,
         reference: &Reference,

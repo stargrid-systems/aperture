@@ -8,12 +8,12 @@ use utoipa_axum::routes;
 use super::operation_ids;
 use crate::AppState;
 use crate::dto::{
-    BootResponse, LogEventResponse, LogListParams, LogSpanDetailResponse, LogSpanListParams,
-    LogSpanResponse, LogTargetListParams, Page,
+    BootResponse, JsonQueryString, LogEventResponse, LogListParams, LogSpanDetailResponse,
+    LogSpanListParams, LogSpanResponse, LogTargetListParams, Page,
 };
 use crate::error::ApiError;
 
-pub(crate) fn router() -> OpenApiRouter<AppState> {
+pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_logs))
         .routes(routes!(list_log_targets))
@@ -40,7 +40,10 @@ async fn list_logs(
         .require(&auth.subject, Object::Log, Action::Read)
         .await?;
     let query = params.to_query();
-    let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
+    let fields = params
+        .fields
+        .map(JsonQueryString::into_pairs)
+        .unwrap_or_default();
     let filter = EventFilter {
         min_level: params.min_level.map(Into::into),
         target: params.target,
@@ -116,7 +119,10 @@ async fn list_spans(
         .require(&auth.subject, Object::Log, Action::Read)
         .await?;
     let query = params.to_query();
-    let fields = params.fields.map(|f| f.into_pairs()).unwrap_or_default();
+    let fields = params
+        .fields
+        .map(JsonQueryString::into_pairs)
+        .unwrap_or_default();
     let parent = match (params.parent_id, params.parent_null) {
         (Some(id), _) => SpanParentFilter::ChildrenOf(id),
         (None, Some(true)) => SpanParentFilter::RootOnly,

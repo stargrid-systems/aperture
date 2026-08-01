@@ -24,7 +24,7 @@ pub struct TaskContext {
 }
 
 impl TaskContext {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         id: TaskId,
         initiator: ActorId,
         inner: Arc<TasksInner>,
@@ -41,12 +41,12 @@ impl TaskContext {
     }
 
     /// The id of the invocation this body is running.
-    pub fn id(&self) -> TaskId {
+    pub const fn id(&self) -> TaskId {
         self.id
     }
 
     /// The actor that initiated this task. Child tasks inherit the parent's.
-    pub fn initiator(&self) -> ActorId {
+    pub const fn initiator(&self) -> ActorId {
         self.initiator
     }
 
@@ -56,7 +56,7 @@ impl TaskContext {
     }
 
     /// The cancellation token, for use in `tokio::select!` against long awaits.
-    pub fn cancellation_token(&self) -> &CancellationToken {
+    pub const fn cancellation_token(&self) -> &CancellationToken {
         &self.cancel
     }
 

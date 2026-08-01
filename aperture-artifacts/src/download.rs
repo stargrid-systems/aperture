@@ -35,7 +35,7 @@ impl From<DownloadSource> for FetchSource {
             DownloadSource::Oci {
                 reference,
                 media_type,
-            } => FetchSource::Oci {
+            } => Self::Oci {
                 reference,
                 media_type,
             },
@@ -62,7 +62,7 @@ pub struct DownloadDefinition {
 
 impl DownloadDefinition {
     /// Creates the definition over `artifacts`.
-    pub fn new(artifacts: Artifacts) -> Self {
+    pub const fn new(artifacts: Artifacts) -> Self {
         Self { artifacts }
     }
 }

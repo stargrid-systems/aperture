@@ -20,7 +20,7 @@
 // exposes peer addressing.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::error::{AuthError, Result};
@@ -79,19 +79,19 @@ impl LoginLimiter {
     /// Records a failed attempt, engaging backoff once the threshold is
     /// reached.
     pub fn record_failure(&self, username: &str) {
-        self.record_failure_at(username, Instant::now())
+        self.record_failure_at(username, Instant::now());
     }
 
     /// Records a successful attempt, clearing per-username backoff for
     /// `username`.
     pub fn record_success(&self, username: &str) {
-        self.record_success_at(username, Instant::now())
+        self.record_success_at(username, Instant::now());
     }
 
     /// Time-injectable variant of [`check`](Self::check). Read-only: it never
     /// mutates `last_seen`.
     fn check_at(&self, username: &str, now: Instant) -> Result<()> {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(entry) = inner.per_user.get(username)
             && matches!(entry.locked_until, Some(until) if now < until)
         {
@@ -105,7 +105,7 @@ impl LoginLimiter {
 
     /// Time-injectable variant of [`record_failure`](Self::record_failure).
     fn record_failure_at(&self, username: &str, now: Instant) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         Self::evict_stale(&mut inner, now);
         let entry = inner.per_user.entry(username.to_owned()).or_insert(Entry {
             failures: 0,
@@ -127,7 +127,7 @@ impl LoginLimiter {
 
     /// Time-injectable variant of [`record_success`](Self::record_success).
     fn record_success_at(&self, username: &str, now: Instant) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(entry) = inner.per_user.get_mut(username) {
             entry.last_seen = now;
         }

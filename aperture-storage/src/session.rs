@@ -31,7 +31,7 @@ const SESSION_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A login session associated with an actor.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     /// Store-assigned id.
     pub id: SessionId,
@@ -51,7 +51,7 @@ pub struct SessionRepository {
 }
 
 impl SessionRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -139,7 +139,7 @@ impl SessionRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes all sessions for `actor_id`. Used when disabling an actor or
@@ -154,7 +154,7 @@ impl SessionRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes all sessions for `actor_id` except the one whose token hash
@@ -177,7 +177,7 @@ impl SessionRepository {
                 .map_err(StorageError::from_turso)?,
             None => return self.delete_for_actor(actor_id).await,
         };
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Lists sessions for `actor_id`, ordered by creation time descending.
@@ -204,7 +204,7 @@ impl TryFrom<&Row> for Session {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(Session {
+        Ok(Self {
             id: SESSION_COLUMNS.extract(row, col::ID)?,
             actor_id: SESSION_COLUMNS.extract(row, col::ACTOR_ID)?,
             token_hash: SESSION_COLUMNS.extract(row, col::TOKEN_HASH)?,

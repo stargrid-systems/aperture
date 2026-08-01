@@ -32,7 +32,7 @@ use crate::registry::TaskRegistry;
 
 /// Whether a tracked task is still running or has settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Phase {
+pub enum Phase {
     Running,
     Settled,
 }
@@ -72,7 +72,7 @@ pub struct ActiveTask {
     pub started_at: Timestamp,
 }
 
-pub(crate) struct TasksInner {
+pub struct TasksInner {
     tasks: TaskRepository,
     registry: TaskRegistry,
     running: Mutex<HashMap<TaskId, RunningTask>>,
@@ -296,10 +296,9 @@ impl TasksInner {
             .create_running(kind, parent_id, initiator, &input, now)
             .await?;
 
-        let cancel = match parent_id.and_then(|parent| self.parent_token(parent)) {
-            Some(parent) => parent.child_token(),
-            None => CancellationToken::new(),
-        };
+        let cancel = parent_id
+            .and_then(|parent| self.parent_token(parent))
+            .map_or_else(CancellationToken::new, |parent| parent.child_token());
         let (phase_tx, phase_rx) = watch::channel(Phase::Running);
         let shared = Arc::new(TaskShared {
             cancel: cancel.clone(),
@@ -407,11 +406,12 @@ impl TasksInner {
 
     /// Removes `id` from the live registry and signals its completion.
     ///
-    /// Also reaps any completed entries from the JoinSet. Tokio's JoinSet
+    /// Also reaps any completed entries from the `JoinSet`. Tokio's `JoinSet`
     /// retains finished entries until they are joined, so without this the
     /// set would grow without bound over the process lifetime.
     fn settle(&self, id: TaskId) {
-        if let Some(task) = self.running.lock().expect("running poisoned").remove(&id) {
+        let removed = self.running.lock().expect("running poisoned").remove(&id);
+        if let Some(task) = removed {
             let _ = task.shared.phase.send(Phase::Settled);
         }
         // Reap completed JoinSet entries. Tokio's JoinSet retains finished
@@ -420,12 +420,12 @@ impl TasksInner {
         // `settle` runs from within that task's body; it is collected on a
         // later call.
         loop {
-            match self
+            let next = self
                 .joinset
                 .lock()
                 .expect("joinset poisoned")
-                .try_join_next()
-            {
+                .try_join_next();
+            match next {
                 Some(Ok(())) => {}
                 Some(Err(err)) => {
                     tracing::error!(error = &err as &dyn Error, "task panicked");
@@ -447,7 +447,7 @@ pub struct TaskHandle<O> {
 
 impl<O> TaskHandle<O> {
     /// The invocation id.
-    pub fn id(&self) -> TaskId {
+    pub const fn id(&self) -> TaskId {
         self.id
     }
 

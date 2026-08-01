@@ -17,12 +17,12 @@ mod api_keys;
 mod artifacts;
 mod auth;
 mod logs;
-pub(crate) mod operation_ids;
+pub mod operation_ids;
 mod task_schedules;
 mod tasks;
 mod users;
 
-pub(crate) fn router() -> OpenApiRouter<AppState> {
+pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_gateway_version))
         .nest("/auth", auth_routes())

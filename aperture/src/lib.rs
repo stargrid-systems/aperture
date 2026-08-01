@@ -40,6 +40,7 @@ fn init_crypto_provider() {
 /// `https_addr` and `http_addr` are independently optional. When both are
 /// set, HTTP redirects to HTTPS. The TLS PKI and rotation schedule are only
 /// touched when `https_addr` is set. At least one listener must be set.
+#[allow(clippy::similar_names)]
 pub async fn serve(
     https_addr: Option<SocketAddr>,
     http_addr: Option<SocketAddr>,
@@ -127,13 +128,13 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = interrupt => {},
-        _ = terminate => {},
+        () = interrupt => {},
+        () = terminate => {},
     }
     tracing::info!("shutdown signal received");
 }
 
-/// Returns the OpenAPI specification, with the task kinds projected in.
+/// Returns the `OpenAPI` specification, with the task kinds projected in.
 pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
     let storage = Storage::open(":memory:").await?;
     let artifacts = Artifacts::new(storage, PathBuf::from("."));

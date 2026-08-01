@@ -33,28 +33,28 @@ const OCTET_STREAM: HeaderValue = HeaderValue::from_static("application/octet-st
 
 /// Serves the current frontend, or a self-refreshing placeholder while it is
 /// still being installed.
-pub(crate) async fn fallback(State(state): State<AppState>, request: Request) -> Response {
+pub async fn fallback(State(state): State<AppState>, request: Request) -> Response {
     let spectra = state.spectra();
-    match spectra.current() {
-        Some(image) => serve(image, request),
-        None => {
+    spectra.current().map_or_else(
+        || {
             spectra.ensure_started();
             placeholder()
-        }
-    }
+        },
+        |image| serve(&image, &request),
+    )
 }
 
-fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
+fn serve(image: &Arc<SpectraImage>, request: &Request) -> Response {
     if image.etag.matches_if_none_match(request.headers()) {
         return (
             StatusCode::NOT_MODIFIED,
             [
                 (ETAG, image.etag.clone().into()),
-                (CACHE_CONTROL, CACHE_NO_CACHE.clone()),
+                (CACHE_CONTROL, CACHE_NO_CACHE),
                 // The 200 response varies by Accept-Encoding, so the 304 must
                 // advertise the same Vary per RFC 9110 section 15.4.5. The
                 // ETag alone does not distinguish encodings.
-                (VARY, VARY_ACCEPT_ENCODING.clone()),
+                (VARY, VARY_ACCEPT_ENCODING),
             ],
         )
             .into_response();
@@ -66,15 +66,15 @@ fn serve(image: Arc<SpectraImage>, request: Request) -> Response {
     };
 
     let stream = SquashfsFileStream::new(Arc::clone(&image.fs), resolved.file);
-    let content_type = HeaderValue::from_str(resolved.content_type.as_ref())
-        .unwrap_or_else(|_| OCTET_STREAM.clone());
+    let content_type =
+        HeaderValue::from_str(resolved.content_type.as_ref()).unwrap_or(OCTET_STREAM);
     let mut response = Response::new(Body::from_stream(stream));
     let headers = response.headers_mut();
     headers.insert(CONTENT_TYPE, content_type);
     headers.insert(ETAG, image.etag.clone().into());
-    headers.insert(CACHE_CONTROL, CACHE_NO_CACHE.clone());
-    headers.insert(VARY, VARY_ACCEPT_ENCODING.clone());
-    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF.clone());
+    headers.insert(CACHE_CONTROL, CACHE_NO_CACHE);
+    headers.insert(VARY, VARY_ACCEPT_ENCODING);
+    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF);
     if let Some(encoding) = resolved.encoding {
         headers.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
     }
@@ -175,8 +175,8 @@ fn placeholder() -> Response {
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     headers.insert(RETRY_AFTER, HeaderValue::from_static("2"));
-    headers.insert(CACHE_CONTROL, CACHE_NO_STORE.clone());
-    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF.clone());
+    headers.insert(CACHE_CONTROL, CACHE_NO_STORE);
+    headers.insert(X_CONTENT_TYPE_OPTIONS, NOSNIFF);
     response
 }
 
@@ -250,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn serves_index_with_digest_etag() {
-        let response = serve(image(), request("/", &[]));
+        let response = serve(&image(), &request("/", &[]));
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers().get(ETAG).unwrap(), "\"sha256:abcd\"");
         assert!(
@@ -271,15 +271,18 @@ mod tests {
 
     #[tokio::test]
     async fn revalidates_with_matching_etag() {
-        let response = serve(image(), request("/", &[(IF_NONE_MATCH, "\"sha256:abcd\"")]));
+        let response = serve(
+            &image(),
+            &request("/", &[(IF_NONE_MATCH, "\"sha256:abcd\"")]),
+        );
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     }
 
     #[tokio::test]
     async fn negotiates_brotli_variant() {
         let response = serve(
-            image(),
-            request("/_nuxt/app.js", &[(ACCEPT_ENCODING, "br, gzip")]),
+            &image(),
+            &request("/_nuxt/app.js", &[(ACCEPT_ENCODING, "br, gzip")]),
         );
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers().get(CONTENT_ENCODING).unwrap(), "br");
@@ -297,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn serves_identity_when_no_encoding_accepted() {
-        let response = serve(image(), request("/_nuxt/app.js", &[]));
+        let response = serve(&image(), &request("/_nuxt/app.js", &[]));
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().get(CONTENT_ENCODING).is_none());
         assert_eq!(body_of(response).await, b"console.log(\"plain app\")");
@@ -305,7 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_to_spa_shell_for_unknown_route() {
-        let response = serve(image(), request("/deep/link", &[]));
+        let response = serve(&image(), &request("/deep/link", &[]));
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             body_of(response).await,

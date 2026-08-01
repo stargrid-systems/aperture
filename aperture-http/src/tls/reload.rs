@@ -52,11 +52,11 @@ impl TlsReload {
                 tokio::pin!(sleep);
                 tokio::select! {
                     biased;
-                    _ = token.cancelled() => return,
+                    () = token.cancelled() => return,
                     recv = self.rx.recv() => {
                         if !apply_change(recv, &mut deadline, &mut retries) { return; }
                     }
-                    _ = &mut sleep => {
+                    () = &mut sleep => {
                         match reload_certificates(&self.artifacts, &self.config).await {
                             Ok(()) => {
                                 retries = 0;
@@ -69,7 +69,7 @@ impl TlsReload {
             } else {
                 tokio::select! {
                     biased;
-                    _ = token.cancelled() => return,
+                    () = token.cancelled() => return,
                     recv = self.rx.recv() => {
                         if !apply_change(recv, &mut deadline, &mut retries) { return; }
                     }
@@ -112,6 +112,7 @@ fn apply_change(
 
 /// Schedules another reload attempt after a failure, or gives up and waits
 /// for the next change. The previous config keeps serving throughout.
+#[allow(clippy::needless_pass_by_value)]
 fn retry_after_failure(err: TlsError, deadline: &mut Option<Instant>, retries: &mut u32) {
     if *retries < MAX_RELOAD_RETRIES {
         *retries += 1;

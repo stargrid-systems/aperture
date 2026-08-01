@@ -129,7 +129,7 @@ fn is_valid(s: &str) -> bool {
     is_token(ty) && is_token(sub)
 }
 
-/// RFC 9110 token rule: one or more ASCII alphanumeric or `!#$%&'*+-.^_`|~`.
+/// RFC 9110 token rule: one or more ASCII alphanumeric or ``!#$%&'*+-.^_`|~``.
 fn is_token(s: &str) -> bool {
     if s.is_empty() {
         return false;

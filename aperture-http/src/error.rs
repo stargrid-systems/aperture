@@ -14,7 +14,7 @@ use http_body_util::LengthLimitError;
 /// An error turned into an HTTP response.
 ///
 /// Server faults are logged.
-pub(crate) struct ApiError(StatusCode);
+pub struct ApiError(StatusCode);
 
 impl ApiError {
     /// The request was malformed.
@@ -65,8 +65,9 @@ impl From<StorageError> for ApiError {
 impl From<TaskError> for ApiError {
     fn from(err: TaskError) -> Self {
         let status = match &err {
-            TaskError::NotRegistered(_) | TaskError::DecodeInput(_) => StatusCode::BAD_REQUEST,
-            TaskError::Storage(StorageError::InvalidCursor(_)) => StatusCode::BAD_REQUEST,
+            TaskError::NotRegistered(_)
+            | TaskError::DecodeInput(_)
+            | TaskError::Storage(StorageError::InvalidCursor(_)) => StatusCode::BAD_REQUEST,
             TaskError::NotFound(_) => StatusCode::NOT_FOUND,
             TaskError::AlreadySettled(_) => StatusCode::GONE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -88,9 +89,9 @@ impl From<AuthError> for ApiError {
             | AuthError::PasswordTooLong(_)
             | AuthError::PasswordReuse
             | AuthError::InvalidUsername => StatusCode::BAD_REQUEST,
-            AuthError::ActorDisabled => StatusCode::FORBIDDEN,
-            AuthError::MustChangePassword => StatusCode::FORBIDDEN,
-            AuthError::Forbidden => StatusCode::FORBIDDEN,
+            AuthError::ActorDisabled | AuthError::MustChangePassword | AuthError::Forbidden => {
+                StatusCode::FORBIDDEN
+            }
             AuthError::CannotDeleteSelf | AuthError::LastAdmin => StatusCode::CONFLICT,
             AuthError::TooManyAttempts => StatusCode::TOO_MANY_REQUESTS,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

@@ -82,7 +82,7 @@ impl TaskStatus {
         Self::Interrupted,
     ];
 
-    pub(crate) fn as_db(self) -> &'static str {
+    pub(crate) const fn as_db(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Running => "running",
@@ -107,7 +107,7 @@ impl TaskStatus {
 }
 
 /// One recorded task invocation, including its assigned id.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskInvocation {
     /// Store-assigned id.
     pub id: TaskId,
@@ -156,7 +156,7 @@ pub enum JsonField {
 impl JsonField {
     /// The column holding this payload. A fixed identifier, safe to
     /// interpolate.
-    fn column(self) -> &'static str {
+    const fn column(self) -> &'static str {
         match self {
             Self::Input => col::INPUT,
             Self::Output => col::OUTPUT,
@@ -180,7 +180,7 @@ pub struct JsonPath<'a>(&'a str);
 impl<'a> JsonPath<'a> {
     /// Validates `path` as a JSON path body. Returns [`InvalidJsonPath`] if it
     /// is empty, too long, or not the accepted key-and-index grammar.
-    pub fn new(path: &'a str) -> StdResult<Self, InvalidJsonPath> {
+    pub const fn new(path: &'a str) -> StdResult<Self, InvalidJsonPath> {
         if is_valid_json_path(path) {
             Ok(Self(path))
         } else {
@@ -189,7 +189,7 @@ impl<'a> JsonPath<'a> {
     }
 
     /// The validated path body.
-    pub fn as_str(&self) -> &'a str {
+    pub const fn as_str(&self) -> &'a str {
         self.0
     }
 }
@@ -199,12 +199,12 @@ impl<'a> JsonPath<'a> {
 #[error("invalid JSON path")]
 pub struct InvalidJsonPath;
 
-fn is_key_byte(b: u8) -> bool {
+const fn is_key_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')
 }
 
 /// Checks the `key ('.' key | '[' digits ']')*` grammar.
-fn is_valid_json_path(path: &str) -> bool {
+const fn is_valid_json_path(path: &str) -> bool {
     if path.is_empty() || path.len() > MAX_JSON_PATH_LEN {
         return false;
     }
@@ -266,7 +266,7 @@ pub struct TaskRepository {
 }
 
 impl TaskRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -426,7 +426,7 @@ impl TaskRepository {
         match status {
             Some(StatusFilter::Exact(status)) => filters.eq_text(col::STATUS, status.as_db()),
             Some(StatusFilter::Active) => {
-                filters.one_of(col::STATUS, db_values(&TaskStatus::ACTIVE).iter().copied())
+                filters.one_of(col::STATUS, db_values(&TaskStatus::ACTIVE).iter().copied());
             }
             Some(StatusFilter::Finished) => {
                 filters.one_of(
@@ -520,7 +520,7 @@ impl TryFrom<&Row> for TaskInvocation {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(TaskInvocation {
+        Ok(Self {
             id: TASK_COLUMNS.extract(row, col::ID)?,
             kind: TASK_COLUMNS.extract(row, col::KIND)?,
             parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,

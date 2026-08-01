@@ -24,7 +24,7 @@ pub enum PolicyType {
 }
 
 impl PolicyType {
-    pub fn as_db(self) -> &'static str {
+    pub const fn as_db(self) -> &'static str {
         match self {
             Self::Policy => "p",
             Self::Grouping => "g",
@@ -69,13 +69,13 @@ pub struct PolicyRule {
     pub values: Vec<String>,
 }
 
-/// Repository over the casbin_rule table.
+/// Repository over the `casbin_rule` table.
 pub struct PolicyRuleRepository {
     connection: Connection,
 }
 
 impl PolicyRuleRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -137,7 +137,7 @@ impl PolicyRuleRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes all rules matching `ptype` where the fields starting at
@@ -166,7 +166,7 @@ impl PolicyRuleRepository {
             .execute(&sql_str, params_from_iter(filters.into_params()))
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes every rule. Used by `save_policy` to replace all rules.

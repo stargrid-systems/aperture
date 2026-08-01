@@ -24,21 +24,21 @@ pub enum Order {
 }
 
 impl Order {
-    fn flip(self) -> Self {
+    const fn flip(self) -> Self {
         match self {
             Self::Asc => Self::Desc,
             Self::Desc => Self::Asc,
         }
     }
 
-    fn keyword(self) -> &'static str {
+    const fn keyword(self) -> &'static str {
         match self {
             Self::Asc => "ASC",
             Self::Desc => "DESC",
         }
     }
 
-    fn comparison(self) -> &'static str {
+    const fn comparison(self) -> &'static str {
         match self {
             Self::Asc => ">",
             Self::Desc => "<",
@@ -79,7 +79,7 @@ pub struct ListQuery {
 
 /// The sort key value carried by a cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CursorValue {
+pub enum CursorValue {
     Int(i64),
     Text(String),
 }
@@ -96,7 +96,7 @@ impl CursorValue {
 /// A decoded keyset position: a row's sort value, its id, and the travel
 /// direction baked in when the cursor was issued.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Cursor {
+pub struct Cursor {
     value: CursorValue,
     id: i64,
     step: Step,
@@ -149,7 +149,7 @@ impl Cursor {
 ///
 /// `column` must be a fixed identifier from the calling query, never user
 /// input, since it is interpolated into SQL.
-pub(crate) struct Keyset {
+pub struct Keyset {
     column: &'static str,
     order: Order,
     tiebreak: bool,
@@ -158,7 +158,7 @@ pub(crate) struct Keyset {
 impl Keyset {
     /// Sorts by `column` (a real column unique per row) with no extra
     /// tiebreaker.
-    pub(crate) fn unique(column: &'static str, order: Order) -> Self {
+    pub(crate) const fn unique(column: &'static str, order: Order) -> Self {
         Self {
             column,
             order,
@@ -167,7 +167,7 @@ impl Keyset {
     }
 
     /// Sorts by `column`, breaking ties on the unique `id` column.
-    pub(crate) fn with_id(column: &'static str, order: Order) -> Self {
+    pub(crate) const fn with_id(column: &'static str, order: Order) -> Self {
         Self {
             column,
             order,
@@ -225,7 +225,7 @@ impl Keyset {
 /// Drives one paginated query: resolves the limit, base order, and travel
 /// direction, exposes the order to query in, and turns a fetched batch into a
 /// [`Page`].
-pub(crate) struct Paginator {
+pub struct Paginator {
     limit: u32,
     cursor: Option<Cursor>,
     step: Step,
@@ -248,13 +248,13 @@ impl Paginator {
     }
 
     /// The decoded cursor position, if any.
-    pub(crate) fn cursor(&self) -> Option<&Cursor> {
+    pub(crate) const fn cursor(&self) -> Option<&Cursor> {
         self.cursor.as_ref()
     }
 
     /// The order to run the query in. Backward paging queries in the flipped
     /// order, then [`Paginator::finish`] reverses the rows back to base order.
-    pub(crate) fn query_order(&self) -> Order {
+    pub(crate) const fn query_order(&self) -> Order {
         match self.step {
             Step::After => self.base_order,
             Step::Before => self.base_order.flip(),
@@ -262,12 +262,16 @@ impl Paginator {
     }
 
     /// One more than the page size, so an extra row means another page exists.
-    pub(crate) fn fetch_limit(&self) -> u32 {
+    pub(crate) const fn fetch_limit(&self) -> u32 {
         self.limit + 1
     }
 
     /// Trims `rows` to the page size, restores base order, and derives the
     /// neighbouring cursors. `key_of` reads a row's sort value and id.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rows is bounded by the page limit, which is a u32"
+    )]
     pub(crate) fn finish<T>(
         &self,
         mut rows: Vec<T>,

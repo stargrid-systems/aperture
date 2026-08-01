@@ -53,7 +53,7 @@ pub enum ActorKind {
 }
 
 impl ActorKind {
-    pub(crate) fn as_db(self) -> &'static str {
+    pub(crate) const fn as_db(self) -> &'static str {
         match self {
             Self::User => "user",
             Self::ApiKey => "api_key",
@@ -72,7 +72,7 @@ impl ActorKind {
 }
 
 /// An identity that can cause actions in the system.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actor {
     /// Store-assigned id.
     pub id: ActorId,
@@ -92,7 +92,7 @@ pub struct ActorRepository {
 }
 
 impl ActorRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -195,7 +195,7 @@ impl TryFrom<&Row> for Actor {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(Actor {
+        Ok(Self {
             id: ACTOR_COLUMNS.extract(row, col::ID)?,
             kind: ACTOR_COLUMNS.extract(row, col::KIND)?,
             display_name: ACTOR_COLUMNS.extract(row, col::DISPLAY_NAME)?,

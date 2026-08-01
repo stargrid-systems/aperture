@@ -33,7 +33,7 @@ const USER_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A registered user with credentials.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     /// Store-assigned id.
     pub id: UserId,
@@ -55,7 +55,7 @@ pub struct UserRepository {
 }
 
 impl UserRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -228,7 +228,7 @@ impl TryFrom<&Row> for User {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(User {
+        Ok(Self {
             id: USER_COLUMNS.extract(row, col::ID)?,
             actor_id: USER_COLUMNS.extract(row, col::ACTOR_ID)?,
             username: USER_COLUMNS.extract(row, col::USERNAME)?,

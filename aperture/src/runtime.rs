@@ -15,13 +15,13 @@ use aperture_tasks::{Scheduler, Tasks};
 const SCHEDULER_TICK: Duration = Duration::from_secs(60);
 
 /// Runs the periodic scheduler and owns the task runtime for its lifetime.
-pub(crate) struct TasksWorker {
+pub struct TasksWorker {
     scheduler: Scheduler,
     tasks: Tasks,
 }
 
 impl TasksWorker {
-    pub(crate) fn new(scheduler: Scheduler, tasks: Tasks) -> Self {
+    pub(crate) const fn new(scheduler: Scheduler, tasks: Tasks) -> Self {
         Self { scheduler, tasks }
     }
 }

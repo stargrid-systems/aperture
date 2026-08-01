@@ -60,7 +60,7 @@ pub struct UpdateTaskScheduleRequest {
 
 impl From<UpdateTaskScheduleRequest> for aperture_storage::TaskSchedulePatch {
     fn from(request: UpdateTaskScheduleRequest) -> Self {
-        aperture_storage::TaskSchedulePatch {
+        Self {
             interval: request.interval,
             enabled: request.enabled,
         }

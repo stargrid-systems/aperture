@@ -8,7 +8,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::io::{self, AsyncWrite, AsyncWriteExt as _};
 
 /// An [`AsyncWrite`] that hashes bytes as they pass through.
-pub(crate) struct HashWriter<W> {
+pub struct HashWriter<W> {
     inner: W,
     hasher: Sha256,
     total: u64,

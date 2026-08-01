@@ -20,7 +20,7 @@ use crate::context::TaskContext;
 use crate::definition::{Capabilities, TaskDefinition};
 use crate::error::{RunError, TaskError};
 
-pub(crate) trait ErasedDefinition: Send + Sync + 'static {
+pub trait ErasedDefinition: Send + Sync + 'static {
     fn kind(&self) -> &'static str;
     fn capabilities(&self) -> Capabilities;
     fn input_name(&self) -> String;

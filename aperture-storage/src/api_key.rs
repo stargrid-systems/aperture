@@ -41,7 +41,7 @@ const API_KEY_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A stored API key. The raw key is never stored, only its SHA-256 hash.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiKey {
     /// Store-assigned id.
     pub id: ApiKeyId,
@@ -59,13 +59,13 @@ pub struct ApiKey {
     pub created_at: Timestamp,
 }
 
-/// Repository over the api_keys table.
+/// Repository over the `api_keys` table.
 pub struct ApiKeyRepository {
     connection: Connection,
 }
 
 impl ApiKeyRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -201,7 +201,7 @@ impl TryFrom<&Row> for ApiKey {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(ApiKey {
+        Ok(Self {
             id: API_KEY_COLUMNS.extract(row, col::ID)?,
             actor_id: API_KEY_COLUMNS.extract(row, col::ACTOR_ID)?,
             name: API_KEY_COLUMNS.extract(row, col::NAME)?,

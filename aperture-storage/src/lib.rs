@@ -139,7 +139,7 @@ impl Storage {
         Ok(SessionRepository::new(self.connect()?))
     }
 
-    /// Returns the repository over the api_keys table.
+    /// Returns the repository over the `api_keys` table.
     pub fn api_keys(&self) -> Result<ApiKeyRepository> {
         Ok(ApiKeyRepository::new(self.connect()?))
     }

@@ -77,7 +77,7 @@ pub struct TaskScheduleRepository {
 }
 
 impl TaskScheduleRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -261,7 +261,7 @@ impl TryFrom<&Row> for TaskSchedule {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(TaskSchedule {
+        Ok(Self {
             id: SCHEDULE_COLUMNS.extract(row, col::ID)?,
             kind: SCHEDULE_COLUMNS.extract(row, col::KIND)?,
             input: SCHEDULE_COLUMNS.extract(row, col::INPUT)?,

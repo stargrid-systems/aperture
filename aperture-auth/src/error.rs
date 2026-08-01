@@ -65,11 +65,11 @@ impl AuthError {
         if let casbin::Error::AdapterError(adapter_err) = err {
             let boxed: Box<dyn StdError + Send + Sync> = adapter_err.0;
             return match boxed.downcast::<aperture_storage::StorageError>() {
-                Ok(storage_err) => AuthError::Storage(*storage_err),
-                Err(other) => AuthError::Policy(anyhow::Error::from_boxed(other)),
+                Ok(storage_err) => Self::Storage(*storage_err),
+                Err(other) => Self::Policy(anyhow::Error::from_boxed(other)),
             };
         }
-        AuthError::Policy(err.into())
+        Self::Policy(err.into())
     }
 }
 

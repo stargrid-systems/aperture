@@ -1,6 +1,7 @@
 //! Session token and API key generation and hashing.
 
 use std::fmt;
+use std::fmt::Write;
 
 use aperture_storage::{ApiKeyHash, TokenHash};
 use rand::rngs::OsRng;
@@ -91,7 +92,7 @@ fn sha256(input: &str) -> Vec<u8> {
     Sha256::digest(input.as_bytes()).to_vec()
 }
 
-pub(crate) fn random_hex(bytes: usize) -> String {
+pub fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     {
         use rand::TryRngCore;
@@ -99,7 +100,7 @@ pub(crate) fn random_hex(bytes: usize) -> String {
     }
     let mut s = String::with_capacity(buf.len() * 2);
     for b in &buf {
-        s.push_str(&format!("{b:02x}"));
+        write!(&mut s, "{b:02x}").expect("writing to String is infallible");
     }
     s
 }

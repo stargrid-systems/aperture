@@ -22,7 +22,11 @@ const BASE_VERSION: i64 = 0;
 const MIGRATIONS: &[&[&str]] = &[m0001_initial::STATEMENTS];
 
 /// Applies all pending migrations to the database.
-pub(crate) async fn run(connection: &Connection) -> Result<()> {
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "migration count and enumerate indices are tiny and fit i64"
+)]
+pub async fn run(connection: &Connection) -> Result<()> {
     let current = current_version(connection).await?;
     let target = BASE_VERSION + MIGRATIONS.len() as i64;
     if current > target {
@@ -78,7 +82,7 @@ async fn apply(connection: &Connection, chunks: &[&str], version: i64) -> Result
     }
     .await;
     match res {
-        Ok(_) => {
+        Ok(()) => {
             tx.commit().await.map_err(StorageError::from_turso)?;
             Ok(())
         }

@@ -61,7 +61,7 @@ async fn login(
             .map(Some)
     })
     .await?;
-    Ok(build_login_response(result))
+    Ok(build_login_response(&result))
 }
 
 /// Destroys the current session.
@@ -176,10 +176,10 @@ async fn setup(
             .setup_admin(&request.username, &request.password),
     )
     .await?;
-    Ok(build_login_response(result))
+    Ok(build_login_response(&result))
 }
 
-fn build_login_response(result: aperture_auth::LoginResult) -> Response {
+fn build_login_response(result: &aperture_auth::LoginResult) -> Response {
     let cookie = build_session_cookie(result.token.as_str());
     let mut response = Json(LoginResponse {
         must_change_password: result.must_change_password,

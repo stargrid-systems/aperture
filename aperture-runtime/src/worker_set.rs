@@ -102,11 +102,12 @@ impl WorkerSet {
     /// dropped mid-iteration) and left for the runtime to clean up at process
     /// exit. Panics are logged at `error` level.
     pub async fn drain(self, time_limit: Duration) {
-        match timeout(time_limit, self.drain_all()).await {
-            Ok(()) => tracing::info!("worker set drain complete"),
-            Err(_) => tracing::warn!(
+        if timeout(time_limit, self.drain_all()).await == Ok(()) {
+            tracing::info!("worker set drain complete");
+        } else {
+            tracing::warn!(
                 "worker set drain timed out after {time_limit:?}, detaching remaining tasks"
-            ),
+            );
         }
     }
 

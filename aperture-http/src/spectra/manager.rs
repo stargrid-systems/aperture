@@ -123,7 +123,7 @@ impl Spectra {
                 tokio::select! {
                     biased;
                     () = cancel.cancelled() => {},
-                    _ = time::sleep(PREPARE_BACKOFF) => {}
+                    () = time::sleep(PREPARE_BACKOFF) => {}
                 }
             }
         });
@@ -193,7 +193,7 @@ pub struct SpectraWorker(Spectra);
 
 impl SpectraWorker {
     /// Wraps a clone of `spectra` for supervisor tracking.
-    pub fn new(spectra: Spectra) -> Self {
+    pub const fn new(spectra: Spectra) -> Self {
         Self(spectra)
     }
 }
