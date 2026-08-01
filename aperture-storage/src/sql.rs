@@ -18,21 +18,21 @@ mod json;
 mod text;
 
 /// Convert a value to a database [`Value`] for binding.
-pub(crate) trait ToSql {
+pub trait ToSql {
     fn to_sql(&self) -> Value;
 }
 
 /// Convert a database [`Value`] back to a domain type.
 ///
 /// `idx` is the column index, used for error messages.
-pub(crate) trait FromSql: Sized {
+pub trait FromSql: Sized {
     fn from_sql(value: Value, idx: usize) -> Result<Self>;
 }
 
 /// Extracts a value at `idx` from `row`.
 ///
 /// Shortcut for `T::from_sql(row.get_value(idx)?, idx)`.
-pub(crate) fn get<T: FromSql>(row: &Row, idx: usize) -> Result<T> {
+pub fn get<T: FromSql>(row: &Row, idx: usize) -> Result<T> {
     let value = row.get_value(idx).map_err(StorageError::from_turso)?;
     T::from_sql(value, idx)
 }
@@ -45,10 +45,7 @@ impl<T: ToSql + ?Sized> ToSql for &T {
 
 impl<T: ToSql> ToSql for Option<T> {
     fn to_sql(&self) -> Value {
-        match self {
-            Some(v) => v.to_sql(),
-            None => Value::Null,
-        }
+        self.as_ref().map_or(Value::Null, ToSql::to_sql)
     }
 }
 

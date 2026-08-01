@@ -64,31 +64,31 @@ impl AppState {
         }
     }
 
-    pub(crate) fn version(&self) -> &'static str {
+    pub(crate) const fn version(&self) -> &'static str {
         self.version
     }
 
-    pub(crate) fn boot_id(&self) -> Uuid {
+    pub(crate) const fn boot_id(&self) -> Uuid {
         self.boot_id
     }
 
-    pub(crate) fn storage(&self) -> &Storage {
+    pub(crate) const fn storage(&self) -> &Storage {
         &self.storage
     }
 
-    pub(crate) fn spectra(&self) -> &Spectra {
+    pub(crate) const fn spectra(&self) -> &Spectra {
         &self.spectra
     }
 
-    pub(crate) fn tasks(&self) -> &Tasks {
+    pub(crate) const fn tasks(&self) -> &Tasks {
         &self.tasks
     }
 
-    pub(crate) fn auth(&self) -> &aperture_auth::AuthHandle {
+    pub(crate) const fn auth(&self) -> &aperture_auth::AuthHandle {
         &self.auth
     }
 
-    pub(crate) fn login_limiter(&self) -> &aperture_auth::LoginLimiter {
+    pub(crate) const fn login_limiter(&self) -> &aperture_auth::LoginLimiter {
         &self.login_limiter
     }
 }
@@ -107,7 +107,7 @@ fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi()).nest("/api", api_routes())
 }
 
-/// Returns the generated OpenAPI specification for the gateway API, with the
+/// Returns the generated `OpenAPI` specification for the gateway API, with the
 /// registered task kinds projected in.
 pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
     let mut spec = self::api_router().split_for_parts().1;
@@ -127,14 +127,20 @@ pub fn app(state: AppState) -> Router {
     project_tasks(&mut doc, &state.tasks().registry().descriptors());
     Router::<AppState>::new()
         .merge(api)
-        .route("/api/openapi.json", get(move || openapi_doc(doc.clone())))
+        .route(
+            "/api/openapi.json",
+            get(move || {
+                let doc = doc.clone();
+                async move { Json(doc) }
+            }),
+        )
         .fallback(spectra_fallback)
         .layer(from_fn_with_state(state.clone(), auth::auth_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
-/// Projects registered task kinds into the OpenAPI spec.
+/// Projects registered task kinds into the `OpenAPI` spec.
 ///
 /// Adds each kind's input/output component schemas, builds a discriminated
 /// `CreateTaskInput` one-of over the per-kind create bodies, and points
@@ -199,8 +205,4 @@ fn set_create_body(spec: &mut OpenApiSpec) {
     {
         content.schema = Some(schema);
     }
-}
-
-async fn openapi_doc(doc: OpenApiSpec) -> Json<OpenApiSpec> {
-    Json(doc)
 }

@@ -29,6 +29,7 @@ impl ProgressMessage {
     }
 
     /// Adds an interpolation argument and returns the message, for chaining.
+    #[must_use]
     pub fn with(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.args.insert(name.into(), value.into());
         self
@@ -49,7 +50,7 @@ pub struct Progress {
 
 /// The shared, mutable progress counters behind a running task.
 #[derive(Debug, Default)]
-pub(crate) struct ProgressState {
+pub struct ProgressState {
     message: Mutex<Option<ProgressMessage>>,
     done: AtomicU64,
     total: AtomicU64,
@@ -95,6 +96,10 @@ impl ProgressHandle {
     }
 
     /// Sets the current step as a localizable [`ProgressMessage`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the progress mutex is poisoned.
     pub fn set_message(&self, message: ProgressMessage) {
         *self.0.message.lock().expect("progress poisoned") = Some(message);
     }

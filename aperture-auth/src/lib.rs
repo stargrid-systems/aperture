@@ -42,7 +42,7 @@ mod username;
 
 /// Sliding session lifetime. A session expires after this duration of
 /// inactivity.
-const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const SESSION_TTL: Duration = Duration::from_hours(168);
 
 /// A dummy hash used to keep login timing constant when the username does not
 /// exist. The password it hashes is irrelevant; verification always fails.
@@ -79,10 +79,11 @@ pub struct AuthenticatedActor {
 impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedActor {
     type Rejection = StatusCode;
 
+    #[expect(clippy::unused_async_trait_impl)]
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> StdResult<Self, Self::Rejection> {
         parts
             .extensions
-            .get::<AuthenticatedActor>()
+            .get::<Self>()
             .cloned()
             .ok_or(StatusCode::UNAUTHORIZED)
     }
@@ -98,6 +99,11 @@ pub struct AuthHandle {
 impl AuthHandle {
     /// Creates the auth handle: builds the enforcer, loads existing policies,
     /// and seeds built-in roles if the policy table is empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the enforcer cannot be created or policies cannot
+    /// be loaded or seeded.
     pub async fn new(storage: Storage) -> Result<Self> {
         let mut enforcer = policy::create_enforcer(&storage)
             .await
@@ -113,6 +119,11 @@ impl AuthHandle {
 
     /// Requires that `subject` may perform `act` on `obj`. Returns
     /// [`AuthError::Forbidden`] if denied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::Forbidden`] if access is denied, or an error if the
+    /// enforcer fails to evaluate the request.
     pub async fn require(&self, subject: &str, obj: Object, act: Action) -> Result<()> {
         let e = self.enforcer.read().await;
         if e.enforce((subject, obj.as_str(), act.as_str()))
@@ -125,6 +136,10 @@ impl AuthHandle {
     }
 
     /// Assigns `role` to `subject` (e.g. `"actor:1"` -> [`Role::Admin`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the casbin enforcer fails to assign the role.
     pub async fn assign_role(&self, subject: &str, role: Role) -> Result<()> {
         let mut e = self.enforcer.write().await;
         e.add_role_for_user(subject, role.as_str(), None)
@@ -134,12 +149,20 @@ impl AuthHandle {
     }
 
     /// Returns the list of roles assigned to `subject`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the casbin enforcer fails to read roles.
     pub async fn roles_for(&self, subject: &str) -> Result<Vec<String>> {
         let e = self.enforcer.read().await;
         Ok(e.get_roles_for_user(subject, None))
     }
 
     /// Removes all direct permissions for `subject`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the casbin enforcer fails to remove policies.
     pub async fn revoke_permissions(&self, subject: &str) -> Result<()> {
         let mut e = self.enforcer.write().await;
         e.remove_filtered_policy(0, vec![subject.to_owned()])
@@ -156,14 +179,16 @@ impl AuthHandle {
 
     /// Verifies `username` / `password` and creates a new session.
     /// Returns the session token for the caller to set as a cookie.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid credentials, a disabled actor, or storage
+    /// failures.
     pub async fn login(&self, username: &Username, password: &Password) -> Result<LoginResult> {
         let users = self.storage.users()?;
-        let user = match users.find_by_username(username.as_str()).await? {
-            Some(u) => u,
-            None => {
-                let _ = password.verify_against(&DUMMY_HASH);
-                return Err(AuthError::InvalidCredentials);
-            }
+        let Some(user) = users.find_by_username(username.as_str()).await? else {
+            let _ = password.verify_against(&DUMMY_HASH);
+            return Err(AuthError::InvalidCredentials);
         };
         if !password.verify_against(&user.password_hash)? {
             return Err(AuthError::InvalidCredentials);
@@ -195,15 +220,18 @@ impl AuthHandle {
     /// session expiry (sliding window).
     // TODO(#153): optionally bind sessions to client attributes so a stolen
     // cookie is harder to reuse from a different client.
+    /// # Errors
+    ///
+    /// Returns an error if the storage layer fails during session or actor
+    /// lookup, or password verification fails.
     pub async fn resolve_session(
         &self,
         token: &SessionToken,
     ) -> Result<Option<AuthenticatedActor>> {
         let token_hash = token.hash();
         let sessions = self.storage.sessions()?;
-        let session = match sessions.find_by_token_hash(&token_hash).await? {
-            Some(s) => s,
-            None => return Ok(None),
+        let Some(session) = sessions.find_by_token_hash(&token_hash).await? else {
+            return Ok(None);
         };
         let now = Timestamp::now();
         if session.expires_at < now {
@@ -219,8 +247,7 @@ impl AuthHandle {
             users
                 .find_by_actor_id(actor.id)
                 .await?
-                .map(|u| u.password_change_required_at.is_some())
-                .unwrap_or(false)
+                .is_some_and(|u| u.password_change_required_at.is_some())
         } else {
             false
         };
@@ -236,6 +263,11 @@ impl AuthHandle {
     }
 
     /// Deletes a session (logout).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage layer fails to find or delete the
+    /// session.
     pub async fn delete_session(&self, session_token: &SessionToken) -> Result<()> {
         let token_hash = session_token.hash();
         let sessions = self.storage.sessions()?;
@@ -246,6 +278,10 @@ impl AuthHandle {
     }
 
     /// Deletes all expired sessions. Returns how many were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage layer fails to delete sessions.
     pub async fn delete_expired_sessions(&self) -> Result<usize> {
         let sessions = self.storage.sessions()?;
         Ok(sessions.delete_expired(Timestamp::now()).await?)
@@ -254,6 +290,11 @@ impl AuthHandle {
     /// Creates a new API key for `actor_id` with `name`. Returns the raw key
     /// (only visible at creation time). The caller should grant permissions or
     /// assign a role for the new key's subject.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key prefix is invalid or storage fails to
+    /// persist the key.
     pub async fn create_api_key(
         &self,
         actor_id: ActorId,
@@ -271,15 +312,18 @@ impl AuthHandle {
     }
 
     /// Resolves an API key to an authenticated actor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage layer fails to look up the key or
+    /// actor.
     pub async fn resolve_api_key(&self, key: &RawApiKey) -> Result<Option<AuthenticatedActor>> {
-        let prefix = match key.lookup_prefix() {
-            Some(p) => p,
-            None => return Ok(None),
+        let Some(prefix) = key.lookup_prefix() else {
+            return Ok(None);
         };
         let repo = self.storage.api_keys()?;
-        let api_key = match repo.find_by_prefix(&prefix).await? {
-            Some(k) => k,
-            None => return Ok(None),
+        let Some(api_key) = repo.find_by_prefix(&prefix).await? else {
+            return Ok(None);
         };
         let key_hash = key.hash();
         if !key_hash.matches(&api_key.key_hash) {
@@ -302,6 +346,11 @@ impl AuthHandle {
     /// Creates a new user actor and user record. Returns the actor.
     /// If `password_change_required_at` is `Some`, the user must change their
     /// password before accessing any other endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the password fails validation, hashing fails, or
+    /// storage fails.
     pub async fn create_user(
         &self,
         username: &Username,
@@ -327,6 +376,11 @@ impl AuthHandle {
     /// immediately while the caller stays logged in. Session revocation is
     /// best-effort: a failure is logged but does not roll back the password
     /// change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid current password, password reuse,
+    /// validation failure, or storage errors.
     pub async fn change_password(
         &self,
         actor_id: ActorId,
@@ -362,6 +416,10 @@ impl AuthHandle {
     }
 
     /// Lists all users.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage layer fails to list users.
     pub async fn list_users(&self) -> Result<Vec<aperture_storage::User>> {
         let users = self.storage.users()?;
         Ok(users.list().await?)
@@ -381,6 +439,11 @@ impl AuthHandle {
     /// changes. Under the current model only admins hold `User:Delete` and the
     /// caller always counts as "other", so the check is unreachable in
     /// practice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for self-deletion, last-admin removal, or storage and
+    /// casbin failures.
     pub async fn delete_user(
         &self,
         user_id: UserId,
@@ -437,6 +500,10 @@ impl AuthHandle {
     }
 
     /// Returns true when no admin role is assigned (first-run setup needed).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the casbin enforcer fails to read roles.
     pub async fn is_setup_required(&self) -> Result<bool> {
         Ok(self.subjects_for_role(Role::Admin).await?.is_empty())
     }
@@ -451,6 +518,11 @@ impl AuthHandle {
     /// user. The password is never overwritten, and the caller must prove
     /// knowledge of the existing password before the role is granted, so only
     /// the rightful password holder can complete a resumed setup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid credentials, password validation failure,
+    /// or storage and casbin failures.
     pub async fn setup_admin(
         &self,
         username: &Username,
@@ -459,47 +531,43 @@ impl AuthHandle {
         password.validate()?;
         let now = Timestamp::now();
         let hash = password.hash()?;
-        let actor_id = match self
+        let actor_id = if let Some((actor, _)) = self
             .storage
             .create_initial_user(username.as_str(), &hash, now)
             .await?
         {
-            Some((actor, _)) => actor.id,
-            None => {
-                // Recovery path. Take a write lock up front so the has_admin
-                // check and the role assignment below are atomic: two
-                // concurrent recovery calls cannot both see has_admin == false
-                // and both assign admin.
-                let mut e = self.enforcer.write().await;
-                let has_admin = !e.get_users_for_role(Role::Admin.as_str(), None).is_empty();
-                if has_admin {
-                    return Ok(None);
-                }
-                let users = self.storage.users()?;
-                let user = match users.find_by_username(username.as_str()).await? {
-                    Some(u) => u,
-                    None => {
-                        // dummy verify to avoid timing oracle (finding L-SEC1)
-                        let _ = password.verify_against(&DUMMY_HASH);
-                        return Err(AuthError::InvalidCredentials);
-                    }
-                };
-                // Do not grant admin until the caller proves they know the
-                // existing password. Without this, anyone who guesses the
-                // username during the interrupted-setup window could promote
-                // the account.
-                if !password.verify_against(&user.password_hash)? {
-                    return Err(AuthError::InvalidCredentials);
-                }
-                // Assign admin role while still holding the write lock.
-                e.add_role_for_user(&actor_subject(user.actor_id), Role::Admin.as_str(), None)
-                    .await
-                    .map_err(AuthError::from_casbin)?;
-                // Return early: role is assigned, now just need to log in.
-                tracing::info!(actor = user.actor_id.get(), "setup admin user (recovery)");
-                let login = self.login(username, password).await?;
-                return Ok(Some(login));
+            actor.id
+        } else {
+            // Recovery path. Take a write lock up front so the has_admin
+            // check and the role assignment below are atomic: two
+            // concurrent recovery calls cannot both see has_admin == false
+            // and both assign admin.
+            let mut e = self.enforcer.write().await;
+            let has_admin = !e.get_users_for_role(Role::Admin.as_str(), None).is_empty();
+            if has_admin {
+                return Ok(None);
             }
+            let users = self.storage.users()?;
+            let Some(user) = users.find_by_username(username.as_str()).await? else {
+                // dummy verify to avoid timing oracle (finding L-SEC1)
+                let _ = password.verify_against(&DUMMY_HASH);
+                return Err(AuthError::InvalidCredentials);
+            };
+            // Do not grant admin until the caller proves they know the
+            // existing password. Without this, anyone who guesses the
+            // username during the interrupted-setup window could promote
+            // the account.
+            if !password.verify_against(&user.password_hash)? {
+                return Err(AuthError::InvalidCredentials);
+            }
+            // Assign admin role while still holding the write lock.
+            e.add_role_for_user(&actor_subject(user.actor_id), Role::Admin.as_str(), None)
+                .await
+                .map_err(AuthError::from_casbin)?;
+            // Return early: role is assigned, now just need to log in.
+            tracing::info!(actor = user.actor_id.get(), "setup admin user (recovery)");
+            let login = self.login(username, password).await?;
+            return Ok(Some(login));
         };
         let subject = actor_subject(actor_id);
         self.assign_role(&subject, Role::Admin).await?;

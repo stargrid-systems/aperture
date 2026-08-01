@@ -933,7 +933,7 @@ async fn login(app: &Router, username: &str, password: &str) -> Option<String> {
         .split(';')
         .next()?
         .strip_prefix("aperture_session=")
-        .map(|s| s.to_owned())
+        .map(str::to_owned)
 }
 
 /// Status of a GET authenticated by a session cookie.

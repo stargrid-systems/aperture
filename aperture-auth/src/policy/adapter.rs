@@ -14,7 +14,7 @@ pub struct TursoAdapter {
 }
 
 impl TursoAdapter {
-    pub(crate) fn new(repo: PolicyRuleRepository) -> Self {
+    pub(crate) const fn new(repo: PolicyRuleRepository) -> Self {
         Self { repo }
     }
 }

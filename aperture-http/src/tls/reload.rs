@@ -14,7 +14,6 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
-use super::error::TlsError;
 use super::pki::reload_certificates;
 use super::{SERVER_CERT, SERVER_KEY, SharedConfig};
 
@@ -52,24 +51,42 @@ impl TlsReload {
                 tokio::pin!(sleep);
                 tokio::select! {
                     biased;
-                    _ = token.cancelled() => return,
+                    () = token.cancelled() => return,
                     recv = self.rx.recv() => {
                         if !apply_change(recv, &mut deadline, &mut retries) { return; }
                     }
-                    _ = &mut sleep => {
+                    () = &mut sleep => {
                         match reload_certificates(&self.artifacts, &self.config).await {
                             Ok(()) => {
                                 retries = 0;
                                 deadline = None;
                             }
-                            Err(err) => retry_after_failure(err, &mut deadline, &mut retries),
+                            Err(err) => {
+                                if retries < MAX_RELOAD_RETRIES {
+                                    retries += 1;
+                                    tracing::warn!(
+                                        error = &err as &dyn StdError,
+                                        attempt = retries,
+                                        "TLS reload failed, retrying in {RELOAD_RETRY_BACKOFF:?}"
+                                    );
+                                    deadline = Some(Instant::now() + RELOAD_RETRY_BACKOFF);
+                                } else {
+                                    tracing::error!(
+                                        error = &err as &dyn StdError,
+                                        "TLS reload failed after {MAX_RELOAD_RETRIES} retries; \
+                                         keeping current config until the next change"
+                                    );
+                                    retries = 0;
+                                    deadline = None;
+                                }
+                            }
                         }
                     }
                 }
             } else {
                 tokio::select! {
                     biased;
-                    _ = token.cancelled() => return,
+                    () = token.cancelled() => return,
                     recv = self.rx.recv() => {
                         if !apply_change(recv, &mut deadline, &mut retries) { return; }
                     }
@@ -108,26 +125,4 @@ fn apply_change(
         }
     }
     true
-}
-
-/// Schedules another reload attempt after a failure, or gives up and waits
-/// for the next change. The previous config keeps serving throughout.
-fn retry_after_failure(err: TlsError, deadline: &mut Option<Instant>, retries: &mut u32) {
-    if *retries < MAX_RELOAD_RETRIES {
-        *retries += 1;
-        tracing::warn!(
-            error = &err as &dyn StdError,
-            attempt = *retries,
-            "TLS reload failed, retrying in {RELOAD_RETRY_BACKOFF:?}"
-        );
-        *deadline = Some(Instant::now() + RELOAD_RETRY_BACKOFF);
-    } else {
-        tracing::error!(
-            error = &err as &dyn StdError,
-            "TLS reload failed after {MAX_RELOAD_RETRIES} retries; keeping current config until \
-             the next change"
-        );
-        *retries = 0;
-        *deadline = None;
-    }
 }

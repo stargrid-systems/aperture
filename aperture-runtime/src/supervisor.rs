@@ -95,7 +95,7 @@ impl Supervisor {
         } else {
             // Early exit: drain with a second-signal escape hatch.
             tokio::select! {
-                _ = self.workers.drain(timeout) => {}
+                () = self.workers.drain(timeout) => {}
                 () = &mut signal => {
                     tracing::warn!("second shutdown signal received, forcing exit");
                 }

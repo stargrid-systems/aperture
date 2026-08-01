@@ -15,7 +15,7 @@ use serde::de::{self, Visitor};
 /// even when the format has a borrowed one available. This visitor accepts
 /// `visit_borrowed_str` so a JSON decoder reading from `&[u8]` can skip that
 /// extra copy.
-pub(super) fn deserialize_from_str<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub fn deserialize_from_str<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: FromStr,

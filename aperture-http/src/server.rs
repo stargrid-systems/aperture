@@ -44,7 +44,7 @@ pub struct HttpServer {
 
 impl HttpServer {
     /// Creates an empty server with no listeners.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             tls: None,
             http: Vec::new(),
@@ -54,45 +54,50 @@ impl HttpServer {
     /// Sets up the gateway HTTP stack from two optional listener addrs.
     /// Both set: HTTPS + HTTP redirect. HTTPS only: full API over TLS.
     /// HTTP only: full API (recovery mode). Neither: no listeners.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if TLS setup, certificate provisioning, or listener
+    /// binding fails.
     pub async fn start(
         artifacts: Artifacts,
-        https_addr: Option<SocketAddr>,
-        http_addr: Option<SocketAddr>,
+        tls_addr: Option<SocketAddr>,
+        plain_addr: Option<SocketAddr>,
         app: Router,
     ) -> anyhow::Result<Self> {
-        let mut server = HttpServer::new();
+        let mut server = Self::new();
         // The bound HTTPS port, so redirects target the real listener. With an
         // OS-assigned port (":0") the requested port would redirect to port 0.
         let mut https_port: Option<u16> = None;
 
-        if let Some(https_addr) = https_addr {
-            ensure_certificates(&artifacts, https_addr).await?;
-            let tcp_listener = TcpListener::bind(https_addr).await?;
+        if let Some(tls_addr) = tls_addr {
+            ensure_certificates(&artifacts, tls_addr).await?;
+            let tcp_listener = TcpListener::bind(tls_addr).await?;
             // Log the actual bound address so an OS-assigned port (":0")
             // surfaces in the startup banner instead of the requested one.
-            let bound = tcp_listener.local_addr().unwrap_or(https_addr);
+            let bound = tcp_listener.local_addr().unwrap_or(tls_addr);
             https_port = Some(bound.port());
             tracing::info!(%bound, "aperture listening (https)");
             let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener).await?;
             server = server.serve_tls(endpoint, app.clone());
         }
 
-        if let Some(http_addr) = http_addr {
-            let http_listener = TcpListener::bind(http_addr).await?;
-            let bound = http_listener.local_addr().unwrap_or(http_addr);
-            let http_app = match https_port {
-                Some(port) => {
-                    tracing::info!(%bound, "http redirect listening");
-                    redirect_router(port)
-                }
-                None => {
+        if let Some(plain_addr) = plain_addr {
+            let http_listener = TcpListener::bind(plain_addr).await?;
+            let bound = http_listener.local_addr().unwrap_or(plain_addr);
+            let http_app = https_port.map_or_else(
+                || {
                     tracing::warn!(
                         %bound,
                         "serving full API over plain HTTP (https disabled)"
                     );
                     app
-                }
-            };
+                },
+                |port| {
+                    tracing::info!(%bound, "http redirect listening");
+                    redirect_router(port)
+                },
+            );
             server = server.serve_http(http_listener, http_app);
         }
 
@@ -196,7 +201,7 @@ impl Default for HttpServer {
 /// Adapter for the `aperture-runtime` supervisor.
 impl Worker for HttpServer {
     async fn run(self, stop: Stop) {
-        HttpServer::run(self, stop).await;
+        Self::run(self, stop).await;
     }
 }
 

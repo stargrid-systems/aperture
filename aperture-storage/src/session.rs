@@ -31,7 +31,7 @@ const SESSION_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A login session associated with an actor.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     /// Store-assigned id.
     pub id: SessionId,
@@ -51,11 +51,15 @@ pub struct SessionRepository {
 }
 
 impl SessionRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
     /// Creates a new session and returns its assigned id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, token_hash))]
     pub async fn create(
         &self,
@@ -84,6 +88,10 @@ impl SessionRepository {
     }
 
     /// Returns the session with `token_hash`, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, token_hash))]
     pub async fn find_by_token_hash(&self, token_hash: &TokenHash) -> Result<Option<Session>> {
         let sql_str = format!(
@@ -102,6 +110,10 @@ impl SessionRepository {
     }
 
     /// Extends the expiry of session `id`. Used for sliding expiry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn touch_expiry(&self, id: SessionId, expires_at: Timestamp) -> Result<()> {
         self.connection
@@ -115,6 +127,10 @@ impl SessionRepository {
     }
 
     /// Deletes the session with `id`. Used for logout.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete(&self, id: SessionId) -> Result<()> {
         self.connection
@@ -129,6 +145,14 @@ impl SessionRepository {
 
     /// Deletes all sessions that have expired before `now`. Returns how many
     /// were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete_expired(&self, now: Timestamp) -> Result<usize> {
         let affected = self
@@ -139,11 +163,19 @@ impl SessionRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes all sessions for `actor_id`. Used when disabling an actor or
     /// forcing logout everywhere.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete_for_actor(&self, actor_id: ActorId) -> Result<usize> {
         let affected = self
@@ -154,12 +186,20 @@ impl SessionRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes all sessions for `actor_id` except the one whose token hash
     /// matches `keep`. When `keep` is `None`, every session is deleted. Used on
     /// password change to revoke other sessions while keeping the caller in.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self, keep))]
     pub async fn delete_for_actor_except(
         &self,
@@ -177,10 +217,14 @@ impl SessionRepository {
                 .map_err(StorageError::from_turso)?,
             None => return self.delete_for_actor(actor_id).await,
         };
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Lists sessions for `actor_id`, ordered by creation time descending.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_for_actor(&self, actor_id: ActorId) -> Result<Vec<Session>> {
         let sql_str = format!(
@@ -204,7 +248,7 @@ impl TryFrom<&Row> for Session {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(Session {
+        Ok(Self {
             id: SESSION_COLUMNS.extract(row, col::ID)?,
             actor_id: SESSION_COLUMNS.extract(row, col::ACTOR_ID)?,
             token_hash: SESSION_COLUMNS.extract(row, col::TOKEN_HASH)?,

@@ -139,13 +139,10 @@ impl Worker for LogWorker {
                     break;
                 }
                 maybe_record = self.rx.recv() => {
-                    match maybe_record {
-                        Some(record) => batch.push(record),
-                        None => {
-                            flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
-                            close_remaining_spans(&self.repo).await;
-                            break;
-                        }
+                    if let Some(record) = maybe_record { batch.push(record) } else {
+                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
+                        close_remaining_spans(&self.repo).await;
+                        break;
                     }
                     if batch.len() >= FLUSH_BATCH {
                         flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
@@ -205,7 +202,7 @@ where
         let tracing_id = id.into_u64();
         let parent_tracing_id = attrs
             .parent()
-            .map(|p| p.into_u64())
+            .map(SpanId::into_u64)
             .or_else(|| ctx.lookup_current().map(|s| s.id().into_u64()));
 
         self.try_send(Record::SpanStart(SpanStart {
@@ -444,24 +441,24 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
-        let _guard = dispatcher.clone().set_default();
+        let _guard = dispatcher.set_default();
 
         // Event outside the flush span -> captured.
         tracing::info!("outside");
 
         // Enter the flush span (same name as FLUSH_SPAN_NAME).
         let flush = tracing::info_span!("log_flush");
-        let _flush_guard = flush.enter();
+        let flush_guard = flush.enter();
 
         // Child span within flush -> filtered.
         let child = tracing::info_span!("storage_method");
-        let _child_guard = child.enter();
+        let child_guard = child.enter();
 
         // Event within flush and child span -> filtered.
         tracing::warn!("inside flush");
 
-        drop(_child_guard);
-        drop(_flush_guard);
+        drop(child_guard);
+        drop(flush_guard);
 
         // Collect all records.
         let mut events = Vec::new();
@@ -500,7 +497,7 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatcher = Dispatch::new(subscriber);
 
-        let _guard = dispatcher.clone().set_default();
+        let _guard = dispatcher.set_default();
 
         tracing::info!("first");
         tracing::warn!("second");
@@ -521,13 +518,13 @@ mod tests {
         let _guard = Dispatch::new(subscriber).set_default();
 
         let parent = tracing::info_span!("parent");
-        let _parent_guard = parent.enter();
+        let parent_guard = parent.enter();
 
         let child = tracing::info_span!("child");
-        let _child_guard = child.enter();
+        let child_guard = child.enter();
 
-        drop(_child_guard);
-        drop(_parent_guard);
+        drop(child_guard);
+        drop(parent_guard);
 
         let mut span_starts = Vec::new();
         while let Ok(record) = rx.try_recv() {
@@ -558,8 +555,8 @@ mod tests {
         let _guard = Dispatch::new(subscriber).set_default();
 
         let span = tracing::info_span!("root");
-        let _guard = span.enter();
-        drop(_guard);
+        let guard = span.enter();
+        drop(guard);
 
         while let Ok(record) = rx.try_recv() {
             if let Record::SpanStart(s) = record {
@@ -584,9 +581,9 @@ mod tests {
 
         // `late_field` is declared as Empty so it can be recorded later.
         let span = tracing::info_span!("my_span", initial = 42, late_field = field::Empty);
-        let _guard = span.enter();
+        let guard = span.enter();
         span.record("late_field", "hello");
-        drop(_guard);
+        drop(guard);
 
         let mut found_start = false;
         let mut found_fields = false;
@@ -641,9 +638,9 @@ mod tests {
         let _guard = Dispatch::new(subscriber).set_default();
 
         let span = tracing::info_span!("req", user_id = field::Empty, status = field::Empty);
-        let _guard = span.enter();
+        let guard = span.enter();
         span.record("status", "ok");
-        drop(_guard);
+        drop(guard);
 
         let mut found_start = false;
         let mut found_fields = false;

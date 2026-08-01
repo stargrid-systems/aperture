@@ -56,6 +56,11 @@ impl Password {
     }
 
     /// Validates the password against the length policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the password is shorter than the minimum or longer
+    /// than the maximum length.
     pub fn validate(&self) -> Result<(), AuthError> {
         let len = self.0.len();
         if len < MIN_PASSWORD_LEN {
@@ -68,6 +73,10 @@ impl Password {
     }
 
     /// Hashes this password with Argon2id and a random salt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Argon2 hashing fails.
     pub fn hash(&self) -> Result<PasswordHash, AuthError> {
         let salt = SaltString::generate(&mut OsRng);
         let hash = argon2()
@@ -78,6 +87,10 @@ impl Password {
 
     /// Verifies this password against a stored hash.
     /// Returns `Ok(true)` on match, `Ok(false)` on mismatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stored hash is malformed or verification fails.
     pub fn verify_against(&self, hash: &PasswordHash) -> Result<bool, AuthError> {
         let parsed = PhcHash::new(hash.as_str()).map_err(|e| AuthError::Internal(e.into()))?;
         match argon2().verify_password(self.0.as_bytes(), &parsed) {

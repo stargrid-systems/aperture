@@ -22,8 +22,14 @@ const BASE_VERSION: i64 = 0;
 const MIGRATIONS: &[&[&str]] = &[m0001_initial::STATEMENTS];
 
 /// Applies all pending migrations to the database.
-pub(crate) async fn run(connection: &Connection) -> Result<()> {
+///
+/// # Errors
+///
+/// Returns `StorageError` if a migration statement fails, the schema version
+/// is ahead of the binary, or the database predates the baseline.
+pub async fn run(connection: &Connection) -> Result<()> {
     let current = current_version(connection).await?;
+    #[expect(clippy::cast_possible_wrap, reason = "migration count fits i64")]
     let target = BASE_VERSION + MIGRATIONS.len() as i64;
     if current > target {
         return Err(StorageError::SchemaTooNew { current, target });
@@ -37,6 +43,7 @@ pub(crate) async fn run(connection: &Connection) -> Result<()> {
         });
     }
     for (index, chunks) in MIGRATIONS.iter().enumerate() {
+        #[expect(clippy::cast_possible_wrap, reason = "index fits i64")]
         let version = BASE_VERSION + index as i64 + 1;
         if version <= current {
             continue;
@@ -78,7 +85,7 @@ async fn apply(connection: &Connection, chunks: &[&str], version: i64) -> Result
     }
     .await;
     match res {
-        Ok(_) => {
+        Ok(()) => {
             tx.commit().await.map_err(StorageError::from_turso)?;
             Ok(())
         }

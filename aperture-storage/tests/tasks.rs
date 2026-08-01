@@ -1,12 +1,30 @@
 use aperture_storage::{
     ActorId, JsonField, JsonFilter, JsonPath, ListQuery, ParentFilter, StatusFilter, Storage,
-    TaskId, TaskStatus,
+    TaskId, TaskRepository, TaskStatus,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
 fn at(micros: i64) -> Timestamp {
     Timestamp::from_microsecond(micros).unwrap()
+}
+
+/// Creates a "download" task, runs it, and finishes it as succeeded.
+async fn seed(
+    repo: &TaskRepository,
+    input: &serde_json::Value,
+    output: Option<&serde_json::Value>,
+    started: Timestamp,
+    finished: Timestamp,
+) -> TaskId {
+    let id = repo
+        .create_running("download", None, ActorId::SYSTEM, input, started)
+        .await
+        .unwrap();
+    repo.finish(id, TaskStatus::Succeeded, finished, output, None)
+        .await
+        .unwrap();
+    id
 }
 
 #[tokio::test]
@@ -199,44 +217,22 @@ async fn list_filters_by_json_input_and_output() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.tasks().unwrap();
 
-    let spectra = repo
-        .create_running(
-            "download",
-            None,
-            ActorId::SYSTEM,
-            &json!({"key": "spectra", "source": {"reference": "ghcr.io/x/spectra:1"}}),
-            at(1_000),
-        )
-        .await
-        .unwrap();
-    repo.finish(
-        spectra,
-        TaskStatus::Succeeded,
-        at(1_050),
+    let spectra = seed(
+        &repo,
+        &json!({"key": "spectra", "source": {"reference": "ghcr.io/x/spectra:1"}}),
         Some(&json!({"version": "1.0"})),
-        None,
+        at(1_000),
+        at(1_050),
     )
-    .await
-    .unwrap();
-    let other = repo
-        .create_running(
-            "download",
-            None,
-            ActorId::SYSTEM,
-            &json!({"key": "other"}),
-            at(1_100),
-        )
-        .await
-        .unwrap();
-    repo.finish(
-        other,
-        TaskStatus::Succeeded,
-        at(1_150),
+    .await;
+    let other = seed(
+        &repo,
+        &json!({"key": "other"}),
         Some(&json!({"version": "2.0"})),
-        None,
+        at(1_100),
+        at(1_150),
     )
-    .await
-    .unwrap();
+    .await;
 
     // Filter by a top-level input field: the download history for one key.
     let by_key = repo

@@ -21,7 +21,7 @@ pub struct SpectraConfig {
 impl Default for SpectraConfig {
     fn default() -> Self {
         Self {
-            key: SPECTRA_KEY.clone(),
+            key: SPECTRA_KEY,
             source: SOURCE.to_owned(),
             media_type: MEDIA_TYPE.parse().expect("well-known media type"),
         }

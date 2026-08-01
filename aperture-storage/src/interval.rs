@@ -29,6 +29,15 @@ pub enum InvalidInterval {
 }
 
 impl Interval {
+    /// Returns `InvalidInterval::NotPositive` if `duration` is zero or
+    /// negative, or `InvalidInterval::OutOfRange` if it overflows `i64`
+    /// microseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidInterval::NotPositive`] if `duration` is not strictly
+    /// positive, or [`InvalidInterval::OutOfRange`] if it overflows `i64`
+    /// microseconds.
     pub fn new(duration: SignedDuration) -> StdResult<Self, InvalidInterval> {
         if !duration.is_positive() {
             return Err(InvalidInterval::NotPositive);
@@ -37,17 +46,27 @@ impl Interval {
         Ok(Self(duration))
     }
 
-    pub fn from_micros(micros: i64) -> StdResult<Self, InvalidInterval> {
+    /// Returns `InvalidInterval::NotPositive` if `micros` is zero or negative.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidInterval::NotPositive`] if `micros` is zero or
+    /// negative.
+    pub const fn from_micros(micros: i64) -> StdResult<Self, InvalidInterval> {
         if micros <= 0 {
             return Err(InvalidInterval::NotPositive);
         }
         Ok(Self(SignedDuration::from_micros(micros)))
     }
 
-    pub fn as_signed_duration(&self) -> &SignedDuration {
+    pub const fn as_signed_duration(&self) -> &SignedDuration {
         &self.0
     }
 
+    /// # Panics
+    ///
+    /// Never panics in practice. The microsecond count was validated to fit
+    /// `i64` at construction.
     pub fn as_micros(&self) -> i64 {
         i64::try_from(self.0.as_micros()).expect("validated at construction")
     }
@@ -74,7 +93,7 @@ impl<'de> Deserialize<'de> for Interval {
         D: serde::Deserializer<'de>,
     {
         let duration = SignedDuration::deserialize(deserializer)?;
-        Interval::new(duration).map_err(DeError::custom)
+        Self::new(duration).map_err(DeError::custom)
     }
 }
 
@@ -87,7 +106,7 @@ impl ToSql for Interval {
 impl FromSql for Interval {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         let micros = i64::from_sql(value, idx)?;
-        Interval::from_micros(micros).map_err(|err| StorageError::InvalidInterval {
+        Self::from_micros(micros).map_err(|err| StorageError::InvalidInterval {
             error: err.to_string(),
         })
     }

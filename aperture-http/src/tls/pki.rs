@@ -28,9 +28,9 @@ static PKIX_CERT: LazyLock<MediaType> =
     LazyLock::new(|| "application/pkix-cert".parse().expect("valid media type"));
 static PKCS8: LazyLock<MediaType> =
     LazyLock::new(|| "application/pkcs8".parse().expect("valid media type"));
+const CA_VALIDITY_DAYS: u32 = 365 * 5;
 
-const CA_VALIDITY_DAYS: u64 = 365 * 5;
-const LEAF_VALIDITY_DAYS: u64 = 14;
+const LEAF_VALIDITY_DAYS: u32 = 14;
 const LEAF_COMMON_NAME: &str = "Aperture Gateway";
 const CA_COMMON_NAME: &str = "Aperture Gateway CA";
 
@@ -129,10 +129,10 @@ fn default_leaf_subject() -> DistinguishedName {
     dn
 }
 
-fn set_validity(params: &mut CertificateParams, days: u64) {
+fn set_validity(params: &mut CertificateParams, days: u32) {
     let now = time::OffsetDateTime::now_utc();
     params.not_before = now - time::Duration::days(1);
-    params.not_after = now + time::Duration::days(days as i64);
+    params.not_after = now + time::Duration::days(days.into());
 }
 
 /// Computes SANs for a leaf cert. Localhost is always included. A non-loopback
@@ -435,7 +435,6 @@ mod tests {
             .unwrap()
             .latest
             .digest
-            .clone()
     }
 
     #[tokio::test]
@@ -638,11 +637,12 @@ mod tests {
 
     #[tokio::test]
     async fn reload_watcher_swaps_config_on_cert_change() {
-        install_crypto();
         use std::time::Duration;
 
         use tokio::time::{sleep, timeout};
         use tokio_util::sync::CancellationToken;
+
+        install_crypto();
 
         let (artifacts, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
@@ -679,7 +679,6 @@ mod tests {
     /// End-to-end TLS handshake with generated PKI.
     #[tokio::test]
     async fn generated_pki_completes_a_real_tls_handshake() {
-        install_crypto();
         use std::time::Duration;
 
         use axum::serve::Listener;
@@ -690,6 +689,8 @@ mod tests {
         use tokio_rustls::TlsConnector;
 
         use super::super::TlsListener;
+
+        install_crypto();
 
         let (artifacts, _dir) = fresh_store().await;
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -734,7 +735,9 @@ mod tests {
         match handshake {
             Ok(Ok(_)) => { /* handshake completed */ }
             Ok(Err(err)) => panic!("TLS handshake failed: {err}"),
-            Err(_) => panic!("TLS handshake against generated PKI should complete within timeout"),
+            Err(err) => {
+                panic!("TLS handshake against generated PKI should complete within timeout: {err}")
+            }
         }
     }
 

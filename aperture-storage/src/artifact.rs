@@ -49,7 +49,7 @@ const ARTIFACT_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A stored version of an artifact. Every row maps to a materialized blob.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artifact {
     /// Store-assigned id. Ignored by [`ArtifactRepository::record_version`].
     pub id: ArtifactId,
@@ -72,7 +72,7 @@ pub struct Artifact {
 }
 
 /// A distinct key with its newest version and how many versions are stored.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactKeyEntry {
     /// The newest stored version for this key.
     pub latest: Artifact,
@@ -95,7 +95,7 @@ pub struct ArtifactRepository {
 }
 
 impl ArtifactRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
@@ -103,6 +103,10 @@ impl ArtifactRepository {
     ///
     /// If `(key, digest)` already exists its metadata is refreshed. The `id`
     /// field of `artifact` is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the upsert fails.
     #[tracing::instrument(level = "info", skip(self, artifact))]
     pub async fn record_version(&self, artifact: &Artifact) -> Result<()> {
         let params = params_from_iter([
@@ -137,6 +141,10 @@ impl ArtifactRepository {
     }
 
     /// Returns the newest stored version of `key`, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn latest(&self, key: &ArtifactKey) -> Result<Option<Artifact>> {
         let sql = format!(
@@ -158,6 +166,10 @@ impl ArtifactRepository {
     }
 
     /// Returns the `(key, digest)` version, if stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get_version(
         &self,
@@ -180,6 +192,10 @@ impl ArtifactRepository {
     }
 
     /// Returns `key` with its newest version and version count, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get_key(&self, key: &ArtifactKey) -> Result<Option<ArtifactKeyEntry>> {
         let sql = format!(
@@ -206,6 +222,11 @@ impl ArtifactRepository {
     /// Lists distinct keys, each with its newest version and version count.
     /// Ordered by key, ascending by default. `q` matches a substring of the
     /// key.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_keys(
         &self,
@@ -255,6 +276,11 @@ impl ArtifactRepository {
 
     /// Lists the stored versions of `key`. Ordered by `sort`, descending by
     /// default. Optionally filtered by exact `media_type` and `version`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_versions(
         &self,
@@ -273,7 +299,7 @@ impl ArtifactRepository {
 
         let mut filters = Filters::new();
         filters.eq_text(col::KEY, key.as_str());
-        filters.eq_text_opt(col::MEDIA_TYPE, media_type.map(|mt| mt.as_str()));
+        filters.eq_text_opt(col::MEDIA_TYPE, media_type.map(MediaType::as_str));
         filters.eq_text_opt(col::VERSION, version);
         filters.keyset(&keyset, &paginator);
 
@@ -297,13 +323,17 @@ impl ArtifactRepository {
         Ok(paginator.finish(items, |artifact| {
             let value = match sort {
                 VersionSort::DownloadedAt => artifact.downloaded_at.as_microsecond(),
-                VersionSort::SizeBytes => artifact.size_bytes as i64,
+                VersionSort::SizeBytes => i64::try_from(artifact.size_bytes).unwrap_or(i64::MAX),
             };
             (CursorValue::Int(value), artifact.id.get())
         }))
     }
 
     /// Lists every stored version. For internal reconciliation, not paginated.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn all_versions(&self) -> Result<Vec<Artifact>> {
         let sql = format!(
@@ -323,6 +353,10 @@ impl ArtifactRepository {
     }
 
     /// Removes the `(key, digest)` version. Does nothing if it is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<()> {
         self.connection
@@ -340,7 +374,7 @@ impl TryFrom<&Row> for Artifact {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(Artifact {
+        Ok(Self {
             id: ARTIFACT_COLUMNS.extract(row, col::ID)?,
             key: ARTIFACT_COLUMNS.extract(row, col::KEY)?,
             source: ARTIFACT_COLUMNS.extract(row, col::SOURCE)?,
@@ -358,7 +392,7 @@ impl ArtifactKeyEntry {
     /// Builds an [`ArtifactKeyEntry`] from a row in `ARTIFACT_COLUMNS` order
     /// followed by the version count column.
     fn from_row(row: &Row) -> Result<Self> {
-        Ok(ArtifactKeyEntry {
+        Ok(Self {
             latest: Artifact::try_from(row)?,
             version_count: get(row, ARTIFACT_COLUMNS.len())?,
         })

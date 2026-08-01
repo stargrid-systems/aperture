@@ -38,6 +38,11 @@ impl Scheduler {
 
     /// Runs one tick. Kept public so tests can drive a single tick in
     /// isolation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SchedulerError::Storage` if the due-list query or schedule
+    /// advancement fails.
     pub async fn tick(&self) -> Result<usize, SchedulerError> {
         let now = Timestamp::now();
         let repo = &self.inner.schedules;
@@ -110,6 +115,8 @@ impl Scheduler {
 
 #[cfg(test)]
 mod tests {
+    use std::future::{Future, ready};
+
     use aperture_storage::{Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch};
     use serde_json::{Value, json};
 
@@ -129,12 +136,12 @@ mod tests {
             }
         }
 
-        async fn run(
+        fn run(
             &self,
             _input: Self::Input,
             _ctx: crate::TaskContext,
-        ) -> Result<Self::Output, crate::RunError> {
-            Ok(())
+        ) -> impl Future<Output = Result<Self::Output, crate::RunError>> + Send {
+            ready(Ok(()))
         }
     }
 

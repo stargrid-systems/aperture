@@ -1,4 +1,4 @@
-//! Globally unique OpenAPI operation IDs.
+//! Globally unique `OpenAPI` operation IDs.
 //!
 //! Every operation in the API must have a unique operation id. These consts
 //! are the single source of truth so that there is no risk of collisions

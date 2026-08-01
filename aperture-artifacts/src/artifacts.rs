@@ -145,11 +145,19 @@ impl Artifacts {
 
     /// Returns the blob of the newest stored version of `key`, if present on
     /// disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Storage` if the catalog lookup fails.
     pub async fn locate(&self, key: &ArtifactKey) -> Result<Option<Located>> {
         self.inner.locate(key).await
     }
 
     /// Returns the blob of the `(key, digest)` version, if present on disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Storage` if the catalog lookup fails.
     pub async fn locate_version(
         &self,
         key: &ArtifactKey,
@@ -160,6 +168,10 @@ impl Artifacts {
 
     /// Lists stored artifact keys with their newest version and version count.
     /// `q` matches a substring of the key.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Storage` if the storage layer or query fails.
     pub async fn list_artifacts(
         &self,
         q: Option<&str>,
@@ -169,12 +181,20 @@ impl Artifacts {
     }
 
     /// Returns one artifact key with its newest version and version count.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Storage` if the storage layer is unavailable.
     pub async fn artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactKeyEntry>> {
         Ok(self.inner.storage.artifacts()?.get_key(key).await?)
     }
 
     /// Lists the stored versions of `key`, optionally filtered by exact
     /// `media_type` and `version`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Storage` if the storage layer or query fails.
     pub async fn list_versions(
         &self,
         key: &ArtifactKey,
@@ -192,6 +212,10 @@ impl Artifacts {
     }
 
     /// Returns the `(key, digest)` version, if stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Storage` if the storage layer is unavailable.
     pub async fn version(&self, key: &ArtifactKey, digest: &Digest) -> Result<Option<Artifact>> {
         Ok(self
             .inner
@@ -203,6 +227,10 @@ impl Artifacts {
 
     /// Removes the `(key, digest)` version, and its blob if no other version
     /// references it. Returns whether the version existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Storage` if the catalog or blob removal fails.
     pub async fn evict_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<bool> {
         let removed = self.inner.evict_version(key, digest).await?;
         if removed {
@@ -224,6 +252,11 @@ impl Artifacts {
     ///
     /// `media_type` is stored verbatim. Callers must validate upstream if they
     /// need to reject invalid values.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if writing the blob fails, or
+    /// `ArtifactError::Storage` if recording the version fails.
     pub async fn put<R>(
         &self,
         key: &ArtifactKey,
@@ -264,6 +297,12 @@ impl Artifacts {
     ///
     /// If the newest version is already on disk it is returned without
     /// fetching. Transferred bytes are reported into `progress`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Fetch` if the registry lookup or download fails,
+    /// `ArtifactError::DigestMismatch` if the bytes do not match the advertised
+    /// digest, or `ArtifactError::Storage` if recording the version fails.
     pub async fn download(
         &self,
         request: FetchRequest,
@@ -284,6 +323,11 @@ impl Artifacts {
     ///
     /// Removes catalog entries whose blob is missing, removes blobs that no
     /// entry references, and clears leftover temporary files.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if a filesystem operation fails, or
+    /// `ArtifactError::Storage` if a catalog operation fails.
     pub async fn sync(&self) -> Result<SyncReport> {
         self.inner.sync().await
     }
@@ -583,7 +627,7 @@ fn build_artifact(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
     use std::{env, fs, process};
 
@@ -619,8 +663,8 @@ mod tests {
     }
 
     /// Removes the temp dir created by [`fresh_store`]. Best-effort.
-    fn cleanup(dir: PathBuf) {
-        let _ = fs::remove_dir_all(&dir);
+    fn cleanup(dir: &Path) {
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
@@ -644,7 +688,7 @@ mod tests {
             Some(artifact.digest.to_string()),
             "Written events must carry the new digest",
         );
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[tokio::test]
@@ -663,11 +707,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            artifact.media_type.as_ref().map(|mt| mt.as_str()),
+            artifact
+                .media_type
+                .as_ref()
+                .map(aperture_storage::MediaType::as_str),
             Some("application/octet-stream")
         );
 
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[tokio::test]
@@ -688,7 +735,7 @@ mod tests {
             change.digest.is_none(),
             "Removed events do not carry a digest"
         );
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[tokio::test]
@@ -704,7 +751,7 @@ mod tests {
             outcome.is_err(),
             "late subscriber should not see prior events"
         );
-        cleanup(dir);
+        cleanup(&dir);
     }
 
     #[test]

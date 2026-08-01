@@ -73,6 +73,10 @@ impl BlobStore {
     ///
     /// Blobs live under `blobs/<algorithm>/<hex>`, so this walks both levels:
     /// one directory per digest algorithm, then the hashes within it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if reading the blob directory fails.
     pub async fn list(&self) -> Result<Vec<Digest>> {
         let mut algorithms = match fs::read_dir(self.blobs_dir()).await {
             Ok(entries) => entries,
@@ -103,6 +107,11 @@ impl BlobStore {
     }
 
     /// Removes the blob with `digest`. Does nothing if it is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if removing the file fails for a reason
+    /// other than it not being present.
     pub async fn remove(&self, digest: &Digest) -> Result<()> {
         remove_if_exists(&self.path(digest)).await
     }
@@ -112,6 +121,11 @@ impl BlobStore {
     /// Temporary files of writes still in flight in this process are kept. Any
     /// other file in the temp directory is left over from a crashed run, or
     /// from a write that has already finished, so it is safe to remove.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if reading the temp directory or removing a
+    /// file fails.
     pub async fn clear_temp(&self) -> Result<()> {
         let mut entries = match fs::read_dir(self.tmp_dir()).await {
             Ok(entries) => entries,
@@ -130,6 +144,11 @@ impl BlobStore {
 
     /// Creates an empty temporary file to stream a blob into. Write through the
     /// returned `TempFile`, then store it with [`BlobStore::place`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if creating the temp directory or file
+    /// fails.
     pub async fn temp_file(&self) -> Result<TempFile> {
         fs::create_dir_all(self.tmp_dir()).await?;
         let path = self.tmp_dir().join(tmp_name());
@@ -152,6 +171,11 @@ impl BlobStore {
 
     /// Moves the file at `temp` into the store under `digest`. The caller is
     /// responsible for ensuring the file's content matches `digest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if creating the target directory or renaming
+    /// the file fails.
     pub async fn place(&self, temp: &Path, digest: &Digest) -> Result<()> {
         let path = self.path(digest);
         if let Some(parent_dir) = path.parent() {
@@ -162,6 +186,10 @@ impl BlobStore {
     }
 
     /// Streams `reader` into the store. Returns the content digest and length.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Io` if writing the blob or placing it fails.
     pub async fn put<R>(&self, mut reader: R) -> Result<(Digest, u64)>
     where
         R: AsyncRead + Unpin,

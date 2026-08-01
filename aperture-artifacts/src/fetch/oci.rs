@@ -23,13 +23,18 @@ impl OciFetcher {
 
     /// Resolves the layer matching `media_type` in `reference` against the
     /// registry, without transferring it. This is a manifest lookup only.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Fetch` if the registry lookup fails or the
+    /// layer digest is malformed.
     pub async fn resolve(&self, reference: &Reference, media_type: &MediaType) -> Result<Resolved> {
         let layer = self.resolve_layer(reference, media_type).await?;
         let digest: Digest = layer.digest.parse()?;
         Ok(Resolved {
             digest,
             media_type: media_type.clone(),
-            size: layer.size.max(0) as u64,
+            size: u64::try_from(layer.size).unwrap_or(0),
             version: reference.tag().map(str::to_owned),
         })
     }
@@ -41,6 +46,11 @@ impl OciFetcher {
     /// `media_type` is the validated media type of the layer to pull. The
     /// returned [`FetchMeta`] echoes it back so the caller can record it
     /// without re-parsing.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArtifactError::Fetch` if the manifest lookup, blob pull, or
+    /// digest parsing fails.
     pub async fn fetch(
         &self,
         reference: &Reference,
@@ -50,7 +60,7 @@ impl OciFetcher {
     ) -> Result<FetchMeta> {
         let layer = self.resolve_layer(reference, media_type).await?;
         let expected: Digest = layer.digest.parse()?;
-        progress.set_total(layer.size.max(0) as u64);
+        progress.set_total(u64::try_from(layer.size).unwrap_or(0));
 
         self.client
             .pull_blob(reference, &layer, &mut *sink)

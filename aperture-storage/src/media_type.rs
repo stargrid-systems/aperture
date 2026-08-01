@@ -28,6 +28,10 @@ pub struct MediaType(Box<str>);
 impl MediaType {
     /// Wraps `s` after validation. Returns the validated media type, or
     /// [`InvalidMediaType`] when `s` is not a bare `type/subtype`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidMediaType`] if `s` is not a valid bare media type.
     pub fn new(s: &str) -> StdResult<Self, InvalidMediaType> {
         s.parse()
     }
@@ -129,7 +133,7 @@ fn is_valid(s: &str) -> bool {
     is_token(ty) && is_token(sub)
 }
 
-/// RFC 9110 token rule: one or more ASCII alphanumeric or `!#$%&'*+-.^_`|~`.
+/// RFC 9110 token rule: one or more ASCII alphanumeric or ``!#$%&'*+-.^_`|~``.
 fn is_token(s: &str) -> bool {
     if s.is_empty() {
         return false;

@@ -6,15 +6,16 @@
 
 use axum::Router;
 use axum::extract::Request;
+use axum::http::uri::PathAndQuery;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 pub fn redirect_router(https_port: u16) -> Router {
     Router::new()
-        .fallback(move |request: Request| async move { redirect_to_https(https_port, request) })
+        .fallback(move |request: Request| async move { redirect_to_https(https_port, &request) })
 }
 
-fn redirect_to_https(https_port: u16, request: Request) -> Response {
+fn redirect_to_https(https_port: u16, request: &Request) -> Response {
     let host = request
         .headers()
         .get(header::HOST)
@@ -31,8 +32,7 @@ fn redirect_to_https(https_port: u16, request: Request) -> Response {
     let path = request
         .uri()
         .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or("/");
+        .map_or("/", PathAndQuery::as_str);
     let target = if https_port == 443 {
         format!("https://{host}{path}")
     } else {
@@ -48,7 +48,7 @@ fn strip_port(host: &str) -> &str {
     {
         return &host[..=end];
     }
-    host.rsplit_once(':').map(|(name, _)| name).unwrap_or(host)
+    host.rsplit_once(':').map_or(host, |(name, _)| name)
 }
 
 #[cfg(test)]
@@ -72,7 +72,7 @@ mod tests {
             .uri("/path")
             .body(Body::empty())
             .unwrap();
-        let resp = redirect_to_https(8443, req);
+        let resp = redirect_to_https(8443, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -83,7 +83,7 @@ mod tests {
             .header("host", "example.com:8080")
             .body(Body::empty())
             .unwrap();
-        let resp = redirect_to_https(8443, req);
+        let resp = redirect_to_https(8443, &req);
         assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
         let location = resp
             .headers()
@@ -101,7 +101,7 @@ mod tests {
             .header("host", "example.com")
             .body(Body::empty())
             .unwrap();
-        let resp = redirect_to_https(443, req);
+        let resp = redirect_to_https(443, &req);
         let location = resp
             .headers()
             .get(header::LOCATION)
@@ -118,7 +118,7 @@ mod tests {
             .header("host", "evil.example other")
             .body(Body::empty())
             .unwrap();
-        let resp = redirect_to_https(8443, req);
+        let resp = redirect_to_https(8443, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -129,7 +129,7 @@ mod tests {
             .header("host", "evil\t.example")
             .body(Body::empty())
             .unwrap();
-        let resp = redirect_to_https(8443, req);
+        let resp = redirect_to_https(8443, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

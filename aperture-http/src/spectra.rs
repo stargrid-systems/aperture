@@ -11,7 +11,7 @@
 
 pub use self::config::SpectraConfig;
 pub use self::manager::{Spectra, SpectraWorker};
-pub(crate) use self::serve::fallback;
+pub use self::serve::fallback;
 
 mod config;
 mod image;

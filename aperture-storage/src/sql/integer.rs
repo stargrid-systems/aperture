@@ -5,7 +5,7 @@ use crate::{Result, StorageError};
 
 impl ToSql for bool {
     fn to_sql(&self) -> Value {
-        Value::Integer(if *self { 1 } else { 0 })
+        Value::Integer(i64::from(*self))
     }
 }
 
@@ -75,7 +75,7 @@ impl ToSql for u32 {
 impl FromSql for u32 {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
-            Value::Integer(v) => u32::try_from(v).map_err(|_| StorageError::IntegerCast {
+            Value::Integer(v) => Self::try_from(v).map_err(|_| StorageError::IntegerCast {
                 column: idx,
                 value: v,
                 target: "u32",

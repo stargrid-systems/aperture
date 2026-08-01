@@ -17,14 +17,14 @@ impl FromSql for Uuid {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
             Value::Text(raw) => {
-                Uuid::parse_str(&raw).map_err(|_| StorageError::ColumnTypeMismatch {
+                Self::parse_str(&raw).map_err(|_| StorageError::ColumnTypeMismatch {
                     column: idx,
                     expected: "uuid",
                     actual: Value::Text(raw),
                 })
             }
             Value::Blob(bytes) => {
-                Uuid::from_slice(&bytes).map_err(|_| StorageError::ColumnTypeMismatch {
+                Self::from_slice(&bytes).map_err(|_| StorageError::ColumnTypeMismatch {
                     column: idx,
                     expected: "16-byte uuid blob",
                     actual: Value::Blob(bytes),
@@ -48,7 +48,7 @@ impl ToSql for Timestamp {
 impl FromSql for Timestamp {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         match value {
-            Value::Integer(micros) => Timestamp::from_microsecond(micros)
+            Value::Integer(micros) => Self::from_microsecond(micros)
                 .map_err(|_| StorageError::InvalidTimestamp { micros }),
             actual => Err(StorageError::ColumnTypeMismatch {
                 column: idx,
@@ -68,7 +68,7 @@ impl ToSql for Level {
 impl FromSql for Level {
     fn from_sql(value: Value, idx: usize) -> Result<Self> {
         let v = i64::from_sql(value, idx)?;
-        Level::from_db(v)
+        Self::from_db(v)
     }
 }
 

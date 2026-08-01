@@ -1,4 +1,4 @@
-//! HTTP conditional request helpers: ETag matching, HTTP date formatting.
+//! HTTP conditional request helpers: `ETag` matching, HTTP date formatting.
 
 use std::time::SystemTime;
 
@@ -10,11 +10,11 @@ use jiff::Timestamp;
 ///
 /// Formats as `Sun, 06 Nov 1994 08:49:37 GMT` via [`HttpDate::as_header`].
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct HttpDate(Timestamp);
+pub struct HttpDate(Timestamp);
 
 impl HttpDate {
     /// Wraps `ts` for HTTP-date formatting.
-    pub(crate) fn from_timestamp(ts: Timestamp) -> Self {
+    pub(crate) const fn from_timestamp(ts: Timestamp) -> Self {
         Self(ts)
     }
 
@@ -27,7 +27,7 @@ impl HttpDate {
     }
 
     /// Returns the underlying timestamp.
-    pub(crate) fn to_timestamp(self) -> Timestamp {
+    pub(crate) const fn to_timestamp(self) -> Timestamp {
         self.0
     }
 
@@ -41,7 +41,7 @@ impl HttpDate {
 
 /// Returned when an HTTP-date string fails parsing.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum InvalidHttpDate {
+pub enum InvalidHttpDate {
     /// The string was not a valid IMF-fixdate.
     #[error("invalid HTTP date: {0}")]
     ParseError(#[source] httpdate::Error),
@@ -50,17 +50,17 @@ pub(crate) enum InvalidHttpDate {
     OutOfRange(String),
 }
 
-/// A quoted ETag suitable for use as an HTTP header value.
+/// A quoted `ETag` suitable for use as an HTTP header value.
 #[derive(Debug, Clone)]
-pub(crate) struct Etag(HeaderValue);
+pub struct Etag(HeaderValue);
 
 impl Etag {
-    /// Wraps an opaque header value as an ETag.
-    pub(crate) fn wrap(value: HeaderValue) -> Self {
+    /// Wraps an opaque header value as an `ETag`.
+    pub(crate) const fn wrap(value: HeaderValue) -> Self {
         Self(value)
     }
 
-    /// Builds a quoted strong ETag from a content digest.
+    /// Builds a quoted strong `ETag` from a content digest.
     ///
     /// The digest is always valid ASCII (`sha256:hex...`), so this never fails.
     pub(crate) fn from_digest(digest: &Digest) -> Self {
@@ -68,7 +68,7 @@ impl Etag {
     }
 
     /// Returns `true` when the request's `If-None-Match` header matches this
-    /// ETag.
+    /// `ETag`.
     ///
     /// Handles the wildcard `"*"`, comma-separated lists, and weak validators
     /// (`W/"..."`) per RFC 9110 section 8.8.3.2 (weak comparison algorithm).

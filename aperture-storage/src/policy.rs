@@ -24,7 +24,7 @@ pub enum PolicyType {
 }
 
 impl PolicyType {
-    pub fn as_db(self) -> &'static str {
+    pub const fn as_db(self) -> &'static str {
         match self {
             Self::Policy => "p",
             Self::Grouping => "g",
@@ -69,17 +69,21 @@ pub struct PolicyRule {
     pub values: Vec<String>,
 }
 
-/// Repository over the casbin_rule table.
+/// Repository over the `casbin_rule` table.
 pub struct PolicyRuleRepository {
     connection: Connection,
 }
 
 impl PolicyRuleRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
     /// Loads every rule, ordered by id for deterministic loading.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn load_all(&self) -> Result<Vec<PolicyRule>> {
         let mut rows = self
@@ -104,6 +108,10 @@ impl PolicyRuleRepository {
     }
 
     /// Inserts a single rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, values))]
     pub async fn insert(&self, ptype: PolicyType, values: &[String]) -> Result<()> {
         let params = padded_params(ptype, values);
@@ -122,6 +130,14 @@ impl PolicyRuleRepository {
 
     /// Deletes all rules matching `ptype` and `values` exactly. Returns how
     /// many were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self, values))]
     pub async fn delete(&self, ptype: PolicyType, values: &[String]) -> Result<usize> {
         let params = padded_params(ptype, values);
@@ -137,12 +153,20 @@ impl PolicyRuleRepository {
             )
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes all rules matching `ptype` where the fields starting at
     /// `field_index` equal `field_values`. Fields before `field_index` are
     /// wildcarded. Returns how many were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self, field_values))]
     pub async fn delete_filtered(
         &self,
@@ -166,10 +190,14 @@ impl PolicyRuleRepository {
             .execute(&sql_str, params_from_iter(filters.into_params()))
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(affected as usize)
+        Ok(usize::try_from(affected).expect("row count fits usize"))
     }
 
     /// Deletes every rule. Used by `save_policy` to replace all rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn clear(&self) -> Result<()> {
         self.connection
@@ -180,6 +208,10 @@ impl PolicyRuleRepository {
     }
 
     /// Returns how many rules exist. Used at bootstrap to detect first run.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the count cannot be read.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn count(&self) -> Result<i64> {
         let mut rows = self
@@ -195,6 +227,10 @@ impl PolicyRuleRepository {
 
     /// Clears the table then inserts all `rules` in a single transaction.
     /// On failure the table is left unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the transaction, clear, or any insert fails.
     #[tracing::instrument(level = "info", skip(self, rules))]
     pub async fn replace_all(&self, rules: &[(PolicyType, Vec<String>)]) -> Result<()> {
         let tx = self
@@ -211,6 +247,10 @@ impl PolicyRuleRepository {
     }
 
     /// Inserts multiple rules in a single transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the transaction or any insert fails.
     #[tracing::instrument(level = "info", skip(self, rules))]
     pub async fn insert_batch(&self, rules: &[(PolicyType, Vec<String>)]) -> Result<()> {
         let tx = self
@@ -227,6 +267,10 @@ impl PolicyRuleRepository {
 
     /// Deletes multiple exact-match rules in a single transaction. Returns the
     /// total number of rows removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the transaction or any delete fails.
     #[tracing::instrument(level = "info", skip(self, rules))]
     pub async fn delete_batch(&self, rules: &[(PolicyType, Vec<String>)]) -> Result<usize> {
         let tx = self

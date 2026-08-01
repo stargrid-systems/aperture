@@ -1,3 +1,4 @@
+use std::future::{Future, ready};
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::{ActorId, Storage, TaskId, TaskStatus};
@@ -36,10 +37,14 @@ impl TaskDefinition for Double {
         Capabilities::default()
     }
 
-    async fn run(&self, input: DoubleIn, _ctx: TaskContext) -> Result<DoubleOut, RunError> {
-        Ok(DoubleOut {
+    fn run(
+        &self,
+        input: DoubleIn,
+        _ctx: TaskContext,
+    ) -> impl Future<Output = Result<DoubleOut, RunError>> + Send {
+        ready(Ok(DoubleOut {
             result: input.n * 2,
-        })
+        }))
     }
 }
 
@@ -73,8 +78,8 @@ impl TaskDefinition for Probe {
         progress.set_message(ProgressMessage::new("working"));
         self.ready.notify_one();
         tokio::select! {
-            _ = self.gate.notified() => Ok(Empty {}),
-            _ = ctx.cancellation_token().cancelled() => Err(RunError::Cancelled),
+            () = self.gate.notified() => Ok(Empty {}),
+            () = ctx.cancellation_token().cancelled() => Err(RunError::Cancelled),
         }
     }
 }
@@ -136,12 +141,16 @@ impl TaskDefinition for Fail {
         Capabilities::default()
     }
 
-    async fn run(&self, _input: Empty, _ctx: TaskContext) -> Result<Empty, RunError> {
-        Err(RunError::Failed(
+    fn run(
+        &self,
+        _input: Empty,
+        _ctx: TaskContext,
+    ) -> impl Future<Output = Result<Empty, RunError>> + Send {
+        ready(Err(RunError::Failed(
             anyhow::format_err!("root cause")
                 .context("middle")
                 .context("outer failure"),
-        ))
+        )))
     }
 }
 

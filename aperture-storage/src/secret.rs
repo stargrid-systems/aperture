@@ -18,7 +18,7 @@ use crate::sql::{FromSql, ToSql};
 pub struct PasswordHash(PasswordHashString);
 
 impl PasswordHash {
-    pub fn new(hash: PasswordHashString) -> Self {
+    pub const fn new(hash: PasswordHashString) -> Self {
         Self(hash)
     }
 

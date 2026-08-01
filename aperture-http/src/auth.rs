@@ -1,4 +1,4 @@
-//! Auth middleware, path predicates, session cookie helpers, and OpenAPI
+//! Auth middleware, path predicates, session cookie helpers, and `OpenAPI`
 //! security scheme registration.
 
 use std::error::Error as StdError;
@@ -18,7 +18,7 @@ use utoipa::openapi::security::{
 use crate::{AppState, OpenApiSpec};
 
 /// Name of the session cookie.
-pub(crate) const SESSION_COOKIE: &str = "aperture_session";
+pub const SESSION_COOKIE: &str = "aperture_session";
 
 /// Paths that do not require authentication.
 fn is_public_path(path: &str) -> bool {
@@ -36,7 +36,7 @@ fn is_password_change_path(path: &str) -> bool {
 
 /// Auth middleware: resolves the actor from a session cookie or API key bearer
 /// token and stores it in request extensions. Public paths bypass auth.
-pub(crate) async fn auth_middleware(
+pub async fn auth_middleware(
     State(state): State<AppState>,
     headers: HeaderMap,
     mut request: Request,
@@ -50,7 +50,7 @@ pub(crate) async fn auth_middleware(
 
     let actor = match resolve_actor(&state, &headers).await {
         Ok(actor) => actor,
-        Err(response) => return response,
+        Err(status) => return status.into_response(),
     };
 
     if actor.must_change_password && !is_password_change_path(&path) {
@@ -62,11 +62,10 @@ pub(crate) async fn auth_middleware(
 }
 
 /// Tries session cookie first, then API key bearer.
-#[allow(clippy::result_large_err)]
 async fn resolve_actor(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<AuthenticatedActor, Response> {
+) -> Result<AuthenticatedActor, StatusCode> {
     if let Some(token) = extract_session_token(headers) {
         match state
             .auth()
@@ -77,7 +76,7 @@ async fn resolve_actor(
             Ok(None) => {}
             Err(err) => {
                 tracing::error!(error = &err as &dyn StdError, "session resolution failed");
-                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
     }
@@ -87,22 +86,22 @@ async fn resolve_actor(
             Ok(None) => {}
             Err(err) => {
                 tracing::error!(error = &err as &dyn StdError, "api key resolution failed");
-                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
     }
-    Err(StatusCode::UNAUTHORIZED.into_response())
+    Err(StatusCode::UNAUTHORIZED)
 }
 
 /// Extracts the bearer token from the `Authorization` header.
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     let header = headers.get(header::AUTHORIZATION)?;
     let value = header.to_str().ok()?;
-    value.strip_prefix("Bearer ").map(|t| t.to_owned())
+    value.strip_prefix("Bearer ").map(str::to_owned)
 }
 
 /// Extracts the raw session token from the `Cookie` header, if present.
-pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
+pub fn extract_session_token(headers: &HeaderMap) -> Option<String> {
     let value = headers.get(header::COOKIE)?;
     let header_str = value.to_str().ok()?;
     for pair in header_str.split(';') {
@@ -115,7 +114,7 @@ pub(crate) fn extract_session_token(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Builds a cookie string that sets the session cookie to `token`.
-pub(crate) fn build_session_cookie(token: &str) -> String {
+pub fn build_session_cookie(token: &str) -> String {
     Cookie::build((SESSION_COOKIE, token.to_owned()))
         .http_only(true)
         .secure(true)
@@ -127,7 +126,7 @@ pub(crate) fn build_session_cookie(token: &str) -> String {
 }
 
 /// Builds a cookie string that clears the session cookie.
-pub(crate) fn clear_session_cookie() -> String {
+pub fn clear_session_cookie() -> String {
     Cookie::build((SESSION_COOKIE, ""))
         .http_only(true)
         .secure(true)
@@ -141,7 +140,7 @@ pub(crate) fn clear_session_cookie() -> String {
 /// Adds session-cookie and bearer-token security schemes plus a default
 /// security requirement to the spec. Endpoints annotated with
 /// `security(())` override the default and are documented as public.
-pub(crate) fn add_security_schemes(spec: &mut OpenApiSpec) {
+pub fn add_security_schemes(spec: &mut OpenApiSpec) {
     let components = spec.components.get_or_insert_with(Components::new);
     components.security_schemes.insert(
         "SessionCookie".to_owned(),

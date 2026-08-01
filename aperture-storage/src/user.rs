@@ -33,7 +33,7 @@ const USER_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A registered user with credentials.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     /// Store-assigned id.
     pub id: UserId,
@@ -55,11 +55,15 @@ pub struct UserRepository {
 }
 
 impl UserRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
     /// Creates a new user and returns the full record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, password_hash))]
     pub async fn create(
         &self,
@@ -98,6 +102,10 @@ impl UserRepository {
     }
 
     /// Returns the user with `username`, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn find_by_username(&self, username: &str) -> Result<Option<User>> {
         let sql_str = format!(
@@ -116,6 +124,10 @@ impl UserRepository {
     }
 
     /// Returns the user with `id`, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get(&self, id: UserId) -> Result<Option<User>> {
         let sql_str = format!(
@@ -134,6 +146,10 @@ impl UserRepository {
     }
 
     /// Returns the user associated with `actor_id`, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn find_by_actor_id(&self, actor_id: ActorId) -> Result<Option<User>> {
         let sql_str = format!(
@@ -152,6 +168,10 @@ impl UserRepository {
     }
 
     /// Lists all users, ordered by username.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list(&self) -> Result<Vec<User>> {
         let sql_str = format!(
@@ -171,6 +191,10 @@ impl UserRepository {
     }
 
     /// Updates the password hash and the password-change-required timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self, password_hash))]
     pub async fn update_password(
         &self,
@@ -197,6 +221,10 @@ impl UserRepository {
     }
 
     /// Deletes the user with `id`. Does nothing if absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete(&self, id: UserId) -> Result<()> {
         self.connection
@@ -210,6 +238,10 @@ impl UserRepository {
     }
 
     /// Returns how many users exist. Used at bootstrap to detect first run.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the count cannot be read.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn count(&self) -> Result<i64> {
         let mut rows = self
@@ -228,7 +260,7 @@ impl TryFrom<&Row> for User {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(User {
+        Ok(Self {
             id: USER_COLUMNS.extract(row, col::ID)?,
             actor_id: USER_COLUMNS.extract(row, col::ACTOR_ID)?,
             username: USER_COLUMNS.extract(row, col::USERNAME)?,

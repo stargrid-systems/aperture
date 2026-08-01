@@ -168,8 +168,6 @@ impl VersionListParams {
     }
 
     pub fn sort(&self) -> VersionSort {
-        self.sort
-            .map(Into::into)
-            .unwrap_or(VersionSort::DownloadedAt)
+        self.sort.map_or(VersionSort::DownloadedAt, Into::into)
     }
 }

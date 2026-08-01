@@ -54,19 +54,19 @@ impl FieldCollector {
         }
     }
 
-    pub fn take_message(&mut self) -> Option<String> {
+    pub const fn take_message(&mut self) -> Option<String> {
         self.message.take()
     }
 
-    pub fn take_log_target(&mut self) -> Option<String> {
+    pub const fn take_log_target(&mut self) -> Option<String> {
         self.log_target.take()
     }
 
-    pub fn take_log_file(&mut self) -> Option<String> {
+    pub const fn take_log_file(&mut self) -> Option<String> {
         self.log_file.take()
     }
 
-    pub fn take_log_line(&mut self) -> Option<u32> {
+    pub const fn take_log_line(&mut self) -> Option<u32> {
         self.log_line.take()
     }
 
@@ -135,8 +135,7 @@ impl Visit for FieldCollector {
 
     fn record_f64(&mut self, field: &Field, value: f64) {
         let v = serde_json::Number::from_f64(value)
-            .map(Value::Number)
-            .unwrap_or_else(|| Value::String(value.to_string()));
+            .map_or_else(|| Value::String(value.to_string()), Value::Number);
         self.fields.insert(field.name().to_owned(), v);
     }
 

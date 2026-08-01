@@ -16,7 +16,7 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 
-pub(crate) fn router() -> OpenApiRouter<AppState> {
+pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_task_schedules, create_task_schedule))
         .routes(routes!(

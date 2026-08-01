@@ -249,7 +249,7 @@ impl TaskListParams {
         }
     }
 
-    pub fn parent_filter(&self) -> Option<ParentFilter> {
+    pub const fn parent_filter(&self) -> Option<ParentFilter> {
         match (self.parent, self.root) {
             (Some(id), _) => Some(ParentFilter::Of(id)),
             (None, Some(true)) => Some(ParentFilter::Root),

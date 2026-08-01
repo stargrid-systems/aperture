@@ -18,7 +18,7 @@ use self::adapter::{TursoAdapter, map_storage_err};
 mod adapter;
 
 /// RBAC model with glob-matching on objects and actions.
-const MODEL_TEXT: &str = r#"
+const MODEL_TEXT: &str = r"
 [request_definition]
 r = sub, obj, act
 
@@ -33,7 +33,7 @@ e = some(where (p.eft == allow))
 
 [matchers]
 m = g(r.sub, p.sub) && globMatch(r.obj, p.obj) && globMatch(r.act, p.act)
-"#;
+";
 
 /// The protected resource a permission targets. A closed vocabulary so every
 /// authorization check names a real resource.
@@ -136,7 +136,7 @@ impl fmt::Display for Role {
 
 /// Creates and returns the enforcer with the turso adapter, loading existing
 /// policies from the database.
-pub(crate) async fn create_enforcer(storage: &Storage) -> casbin::Result<Enforcer> {
+pub async fn create_enforcer(storage: &Storage) -> casbin::Result<Enforcer> {
     let model = DefaultModel::from_str(MODEL_TEXT).await?;
     let repo = storage.policy().map_err(map_storage_err)?;
     let adapter = TursoAdapter::new(repo);
@@ -151,10 +151,13 @@ pub(crate) async fn create_enforcer(storage: &Storage) -> casbin::Result<Enforce
 /// grants rather than wildcards, so adding a new object never silently becomes
 /// accessible. Notably, a viewer can read artifact catalog metadata but cannot
 /// download artifact blobs (which include secrets such as TLS private keys).
-pub(crate) async fn seed_builtin_policies(
-    e: &mut Enforcer,
-    storage: &Storage,
-) -> casbin::Result<bool> {
+pub async fn seed_builtin_policies(e: &mut Enforcer, storage: &Storage) -> casbin::Result<bool> {
+    use casbin::MgmtApi;
+
+    fn policy(role: Role, obj: impl fmt::Display, act: impl fmt::Display) -> Vec<String> {
+        vec![role.to_string(), obj.to_string(), act.to_string()]
+    }
+
     let count = storage
         .policy()
         .map_err(map_storage_err)?
@@ -163,12 +166,6 @@ pub(crate) async fn seed_builtin_policies(
         .map_err(map_storage_err)?;
     if count > 0 {
         return Ok(false);
-    }
-
-    use casbin::MgmtApi;
-
-    fn policy(role: Role, obj: impl fmt::Display, act: impl fmt::Display) -> Vec<String> {
-        vec![role.to_string(), obj.to_string(), act.to_string()]
     }
 
     let policies = vec![

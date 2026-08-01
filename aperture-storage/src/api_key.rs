@@ -41,7 +41,7 @@ const API_KEY_COLUMNS: Columns = Columns::new(&[
 ]);
 
 /// A stored API key. The raw key is never stored, only its SHA-256 hash.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiKey {
     /// Store-assigned id.
     pub id: ApiKeyId,
@@ -59,17 +59,21 @@ pub struct ApiKey {
     pub created_at: Timestamp,
 }
 
-/// Repository over the api_keys table.
+/// Repository over the `api_keys` table.
 pub struct ApiKeyRepository {
     connection: Connection,
 }
 
 impl ApiKeyRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
     /// Creates a new API key record and returns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, key_hash))]
     pub async fn create(
         &self,
@@ -110,6 +114,10 @@ impl ApiKeyRepository {
 
     /// Returns the API key with matching `prefix`, if one exists. The caller
     /// must still verify the full key hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn find_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>> {
         let sql_str = format!(
@@ -128,6 +136,10 @@ impl ApiKeyRepository {
     }
 
     /// Returns the API key with `id`, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get(&self, id: ApiKeyId) -> Result<Option<ApiKey>> {
         let sql_str = format!(
@@ -146,6 +158,10 @@ impl ApiKeyRepository {
     }
 
     /// Lists API keys for `actor_id`, ordered by creation time descending.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_for_actor(&self, actor_id: ActorId) -> Result<Vec<ApiKey>> {
         let sql_str = format!(
@@ -167,6 +183,10 @@ impl ApiKeyRepository {
     /// Updates the last-used timestamp only if it is unset or older than the
     /// stale threshold (60 seconds) from `at`. This bounds the per-request
     /// write load from API-key authentication to at most one write per window.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn touch_last_used_if_stale(&self, id: ApiKeyId, at: Timestamp) -> Result<()> {
         let cutoff = at - STALE_THRESHOLD;
@@ -184,6 +204,10 @@ impl ApiKeyRepository {
     }
 
     /// Deletes the API key with `id`. Does nothing if absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete(&self, id: ApiKeyId) -> Result<()> {
         self.connection
@@ -201,7 +225,7 @@ impl TryFrom<&Row> for ApiKey {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(ApiKey {
+        Ok(Self {
             id: API_KEY_COLUMNS.extract(row, col::ID)?,
             actor_id: API_KEY_COLUMNS.extract(row, col::ACTOR_ID)?,
             name: API_KEY_COLUMNS.extract(row, col::NAME)?,

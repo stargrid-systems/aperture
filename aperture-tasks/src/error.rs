@@ -63,7 +63,7 @@ impl From<TaskError> for RunError {
     fn from(err: TaskError) -> Self {
         match err {
             TaskError::Run(run) => run,
-            other => RunError::Failed(other.into()),
+            other => Self::Failed(other.into()),
         }
     }
 }

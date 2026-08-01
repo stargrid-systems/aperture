@@ -38,7 +38,7 @@ use crate::error::ApiError;
 /// `Content-Length: artifact.size_bytes` on the response.
 const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
-pub(crate) fn router() -> OpenApiRouter<AppState> {
+pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_artifacts))
         .routes(routes!(get_artifact))

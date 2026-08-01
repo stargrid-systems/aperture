@@ -77,10 +77,15 @@ pub struct TaskScheduleRepository {
 }
 
 impl TaskScheduleRepository {
-    pub(crate) fn new(connection: Connection) -> Self {
+    pub(crate) const fn new(connection: Connection) -> Self {
         Self { connection }
     }
 
+    /// Creates a new schedule and returns its assigned id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, new))]
     pub async fn create(&self, new: &NewTaskSchedule) -> Result<TaskScheduleId> {
         let params = params_from_iter([
@@ -106,6 +111,10 @@ impl TaskScheduleRepository {
     }
 
     /// Returns the task schedule with `id`, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get(&self, id: TaskScheduleId) -> Result<Option<TaskSchedule>> {
         let sql = format!(
@@ -124,6 +133,11 @@ impl TaskScheduleRepository {
     }
 
     /// Oldest first by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list(&self, query: &ListQuery) -> Result<Page<TaskSchedule>> {
         let paginator = Paginator::new(query, Order::Asc)?;
@@ -155,6 +169,10 @@ impl TaskScheduleRepository {
     }
 
     /// Returns `None` if no schedule has `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the update or follow-up read fails.
     #[tracing::instrument(level = "info", skip(self, patch))]
     pub async fn update(
         &self,
@@ -179,6 +197,10 @@ impl TaskScheduleRepository {
     }
 
     /// Returns whether a row was removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the lookup or delete fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete(&self, id: TaskScheduleId) -> Result<bool> {
         let existed = self.get(id).await?.is_some();
@@ -196,6 +218,10 @@ impl TaskScheduleRepository {
 
     /// Enabled schedules whose `next_run_at` is at or before `now`, ordered by
     /// `next_run_at` then `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_due(&self, now: Timestamp, limit: usize) -> Result<Vec<TaskSchedule>> {
         let sql = format!(
@@ -221,6 +247,11 @@ impl TaskScheduleRepository {
 
     /// Advances `next_run_at` by one interval and records the spawn. Pass
     /// `None` for `last_task_id` when the spawn failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::InvalidTimestamp` if the next run time overflows
+    /// the timestamp range, or `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn mark_run(
         &self,
@@ -261,7 +292,7 @@ impl TryFrom<&Row> for TaskSchedule {
     type Error = StorageError;
 
     fn try_from(row: &Row) -> Result<Self> {
-        Ok(TaskSchedule {
+        Ok(Self {
             id: SCHEDULE_COLUMNS.extract(row, col::ID)?,
             kind: SCHEDULE_COLUMNS.extract(row, col::KIND)?,
             input: SCHEDULE_COLUMNS.extract(row, col::INPUT)?,
