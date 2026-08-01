@@ -28,9 +28,9 @@ static PKIX_CERT: LazyLock<MediaType> =
     LazyLock::new(|| "application/pkix-cert".parse().expect("valid media type"));
 static PKCS8: LazyLock<MediaType> =
     LazyLock::new(|| "application/pkcs8".parse().expect("valid media type"));
+const CA_VALIDITY_DAYS: u32 = 365 * 5;
 
-const CA_VALIDITY_DAYS: u64 = 365 * 5;
-const LEAF_VALIDITY_DAYS: u64 = 14;
+const LEAF_VALIDITY_DAYS: u32 = 14;
 const LEAF_COMMON_NAME: &str = "Aperture Gateway";
 const CA_COMMON_NAME: &str = "Aperture Gateway CA";
 
@@ -129,14 +129,10 @@ fn default_leaf_subject() -> DistinguishedName {
     dn
 }
 
-#[expect(
-    clippy::cast_possible_wrap,
-    reason = "certificate validity in days fits i64"
-)]
-fn set_validity(params: &mut CertificateParams, days: u64) {
+fn set_validity(params: &mut CertificateParams, days: u32) {
     let now = time::OffsetDateTime::now_utc();
     params.not_before = now - time::Duration::days(1);
-    params.not_after = now + time::Duration::days(days as i64);
+    params.not_after = now + time::Duration::days(days.into());
 }
 
 /// Computes SANs for a leaf cert. Localhost is always included. A non-loopback

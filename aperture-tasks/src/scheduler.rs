@@ -38,6 +38,11 @@ impl Scheduler {
 
     /// Runs one tick. Kept public so tests can drive a single tick in
     /// isolation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SchedulerError::Storage` if the due-list query or schedule
+    /// advancement fails.
     pub async fn tick(&self) -> Result<usize, SchedulerError> {
         let now = Timestamp::now();
         let repo = &self.inner.schedules;

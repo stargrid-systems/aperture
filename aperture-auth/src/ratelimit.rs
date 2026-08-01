@@ -72,6 +72,11 @@ impl LoginLimiter {
     /// Returns `Ok(())` when a login attempt may proceed, or
     /// [`AuthError::TooManyAttempts`] when `username` or the global counter is
     /// in backoff.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::TooManyAttempts`] when `username` or the global
+    /// counter is in backoff.
     pub fn check(&self, username: &str) -> Result<()> {
         self.check_at(username, Instant::now())
     }

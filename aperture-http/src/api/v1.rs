@@ -3,13 +3,6 @@ use axum::extract::State;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use self::api_keys::router as api_keys_routes;
-use self::artifacts::router as artifacts_routes;
-use self::auth::router as auth_routes;
-use self::logs::router as logs_routes;
-use self::task_schedules::router as task_schedules_routes;
-use self::tasks::{definitions_router as task_definitions_routes, router as tasks_routes};
-use self::users::router as users_routes;
 use crate::AppState;
 use crate::dto::VersionResponse;
 
@@ -25,14 +18,14 @@ mod users;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_gateway_version))
-        .nest("/auth", auth_routes())
-        .nest("/artifacts", artifacts_routes())
-        .nest("/tasks", tasks_routes())
-        .nest("/task-definitions", task_definitions_routes())
-        .nest("/task-schedules", task_schedules_routes())
-        .nest("/logs", logs_routes())
-        .nest("/users", users_routes())
-        .nest("/api-keys", api_keys_routes())
+        .nest("/auth", auth::router())
+        .nest("/artifacts", artifacts::router())
+        .nest("/tasks", tasks::router())
+        .nest("/task-definitions", tasks::definitions_router())
+        .nest("/task-schedules", task_schedules::router())
+        .nest("/logs", logs::router())
+        .nest("/users", users::router())
+        .nest("/api-keys", api_keys::router())
 }
 
 /// Returns version information about the gateway.

@@ -105,6 +105,11 @@ impl Tasks {
     }
 
     /// Spawns a top-level task of kind `T` and returns a typed handle to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::EncodeInput` if the input cannot be encoded, or a
+    /// storage or kind-resolution error from the spawn.
     pub async fn spawn<T: TaskDefinition>(
         &self,
         input: T::Input,
@@ -119,6 +124,12 @@ impl Tasks {
     /// Spawns a top-level task by kind string, validating `input` against the
     /// kind's input type, and returns the created invocation. Used by the API,
     /// which does not await a typed output.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::NotRegistered` if `kind` is unknown,
+    /// `TaskError::DecodeInput` if the input fails validation, or a storage
+    /// error if recording the invocation fails.
     pub async fn create(
         &self,
         kind: &str,
@@ -131,6 +142,10 @@ impl Tasks {
 
     /// Lists recorded invocations, optionally filtered by status, kind, parent,
     /// and any number of `json` field matches over the input/output payloads.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::Storage` if the query fails.
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
@@ -147,6 +162,10 @@ impl Tasks {
     }
 
     /// Returns the recorded invocation `id`, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::Storage` if the lookup fails.
     pub async fn get(&self, id: TaskId) -> Result<Option<TaskInvocation>, TaskError> {
         Ok(self.inner.tasks.get(id).await?)
     }
@@ -156,6 +175,15 @@ impl Tasks {
     /// cancellable. Returns [`TaskError::AlreadySettled`] if the task
     /// exists but has finished, and [`TaskError::NotFound`] if no such task
     /// exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::AlreadySettled` if the task already finished, or
+    /// `TaskError::NotFound` if no such task exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the running-task registry lock is poisoned.
     pub async fn cancel(&self, id: TaskId) -> Result<bool, TaskError> {
         {
             let running = self.inner.running.lock().expect("running poisoned");
@@ -175,6 +203,10 @@ impl Tasks {
     }
 
     /// A snapshot of every task running right now.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the running-task registry lock is poisoned.
     pub fn active(&self) -> Vec<ActiveTask> {
         let running = self.inner.running.lock().expect("running poisoned");
         running
@@ -191,6 +223,10 @@ impl Tasks {
     }
 
     /// Live progress of the running task `id`, or `None` if it is not running.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the running-task registry lock is poisoned.
     pub fn progress(&self, id: TaskId) -> Option<Progress> {
         let running = self.inner.running.lock().expect("running poisoned");
         running.get(&id).map(|task| task.shared.progress.snapshot())
@@ -199,6 +235,11 @@ impl Tasks {
     /// Marks invocations left active by a previous process as interrupted.
     /// Call once at startup, before spawning anything. Returns how many were
     /// reconciled.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::Storage` if listing active tasks or recording the
+    /// interrupted status fails.
     pub async fn reconcile(&self) -> Result<usize, TaskError> {
         let now = Timestamp::now();
         let mut count = 0;
@@ -221,6 +262,10 @@ impl Tasks {
     /// Stops accepting nothing new here, but resolves the running set for
     /// shutdown: resumable tasks are aborted and recorded as interrupted, while
     /// unresumable tasks are awaited so they finish cleanly.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the running-task registry lock is poisoned.
     pub async fn shutdown(&self) {
         let entries: Vec<(TaskId, bool, AbortHandle, Arc<TaskShared>)> = {
             let running = self.inner.running.lock().expect("running poisoned");
@@ -452,6 +497,10 @@ impl<O> TaskHandle<O> {
     }
 
     /// Live progress, or `None` once the task has settled.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the running-task registry lock is poisoned.
     pub fn progress(&self) -> Option<Progress> {
         self.inner
             .running
@@ -464,6 +513,12 @@ impl<O> TaskHandle<O> {
 
 impl<O: DeserializeOwned> TaskHandle<O> {
     /// Waits for the task to settle and returns its decoded output.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::NotFound` if the invocation vanished,
+    /// `TaskError::DecodeOutput` if the output cannot be decoded, or
+    /// `TaskError::Run` if the task failed or was cancelled.
     pub async fn wait(mut self) -> Result<O, TaskError> {
         while *self.phase.borrow_and_update() == Phase::Running {
             if self.phase.changed().await.is_err() {

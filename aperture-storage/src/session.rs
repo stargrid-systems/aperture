@@ -56,6 +56,10 @@ impl SessionRepository {
     }
 
     /// Creates a new session and returns its assigned id.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, token_hash))]
     pub async fn create(
         &self,
@@ -84,6 +88,10 @@ impl SessionRepository {
     }
 
     /// Returns the session with `token_hash`, if one exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, token_hash))]
     pub async fn find_by_token_hash(&self, token_hash: &TokenHash) -> Result<Option<Session>> {
         let sql_str = format!(
@@ -102,6 +110,10 @@ impl SessionRepository {
     }
 
     /// Extends the expiry of session `id`. Used for sliding expiry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn touch_expiry(&self, id: SessionId, expires_at: Timestamp) -> Result<()> {
         self.connection
@@ -115,6 +127,10 @@ impl SessionRepository {
     }
 
     /// Deletes the session with `id`. Used for logout.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete(&self, id: SessionId) -> Result<()> {
         self.connection
@@ -129,6 +145,14 @@ impl SessionRepository {
 
     /// Deletes all sessions that have expired before `now`. Returns how many
     /// were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete_expired(&self, now: Timestamp) -> Result<usize> {
         let affected = self
@@ -144,6 +168,14 @@ impl SessionRepository {
 
     /// Deletes all sessions for `actor_id`. Used when disabling an actor or
     /// forcing logout everywhere.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn delete_for_actor(&self, actor_id: ActorId) -> Result<usize> {
         let affected = self
@@ -160,6 +192,14 @@ impl SessionRepository {
     /// Deletes all sessions for `actor_id` except the one whose token hash
     /// matches `keep`. When `keep` is `None`, every session is deleted. Used on
     /// password change to revoke other sessions while keeping the caller in.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the delete fails.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self, keep))]
     pub async fn delete_for_actor_except(
         &self,
@@ -181,6 +221,10 @@ impl SessionRepository {
     }
 
     /// Lists sessions for `actor_id`, ordered by creation time descending.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_for_actor(&self, actor_id: ActorId) -> Result<Vec<Session>> {
         let sql_str = format!(

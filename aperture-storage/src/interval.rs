@@ -29,6 +29,15 @@ pub enum InvalidInterval {
 }
 
 impl Interval {
+    /// Returns `InvalidInterval::NotPositive` if `duration` is zero or
+    /// negative, or `InvalidInterval::OutOfRange` if it overflows `i64`
+    /// microseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidInterval::NotPositive`] if `duration` is not strictly
+    /// positive, or [`InvalidInterval::OutOfRange`] if it overflows `i64`
+    /// microseconds.
     pub fn new(duration: SignedDuration) -> StdResult<Self, InvalidInterval> {
         if !duration.is_positive() {
             return Err(InvalidInterval::NotPositive);
@@ -37,6 +46,12 @@ impl Interval {
         Ok(Self(duration))
     }
 
+    /// Returns `InvalidInterval::NotPositive` if `micros` is zero or negative.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidInterval::NotPositive`] if `micros` is zero or
+    /// negative.
     pub const fn from_micros(micros: i64) -> StdResult<Self, InvalidInterval> {
         if micros <= 0 {
             return Err(InvalidInterval::NotPositive);
@@ -48,6 +63,10 @@ impl Interval {
         &self.0
     }
 
+    /// # Panics
+    ///
+    /// Never panics in practice. The microsecond count was validated to fit
+    /// `i64` at construction.
     pub fn as_micros(&self) -> i64 {
         i64::try_from(self.0.as_micros()).expect("validated at construction")
     }

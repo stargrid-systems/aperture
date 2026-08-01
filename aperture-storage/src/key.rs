@@ -35,9 +35,14 @@ pub struct ArtifactKey(Cow<'static, str>);
 impl ArtifactKey {
     /// Wraps `key` after validation.
     ///
-    /// Rejects empty, too long, and characters outside `[a-zA-Z0-9._-]`.
-    /// Also rejects the literal strings `.` and `..` to prevent path-traversal
+    /// Rejects empty, too long, and characters outside `[a-zA-Z0-9._-]`. Also
+    /// rejects the literal strings `.` and `..` to prevent path-traversal
     /// confusion in callers that join the key with file paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidArtifactKey`] if `key` is empty, too long, or contains
+    /// an invalid character.
     pub fn new(key: impl Into<Cow<'static, str>>) -> Result<Self, InvalidArtifactKey> {
         let key = key.into();
         validate(key.as_bytes())?;
@@ -52,6 +57,10 @@ impl ArtifactKey {
     /// ```ignore
     /// static SPECTRA: ArtifactKey = ArtifactKey::from_static("spectra");
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` fails validation for any reason.
     pub const fn from_static(key: &'static str) -> Self {
         match validate(key.as_bytes()) {
             Ok(()) => Self(Cow::Borrowed(key)),

@@ -180,6 +180,10 @@ pub struct JsonPath<'a>(&'a str);
 impl<'a> JsonPath<'a> {
     /// Validates `path` as a JSON path body. Returns [`InvalidJsonPath`] if it
     /// is empty, too long, or not the accepted key-and-index grammar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidJsonPath`] if `path` is empty, too long, or malformed.
     pub const fn new(path: &'a str) -> StdResult<Self, InvalidJsonPath> {
         if is_valid_json_path(path) {
             Ok(Self(path))
@@ -272,6 +276,10 @@ impl TaskRepository {
 
     /// Records a new invocation in the [`TaskStatus::Pending`] state and
     /// returns its assigned id. `input` is the task's input value.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create(
         &self,
@@ -306,6 +314,10 @@ impl TaskRepository {
     /// and returns its assigned id. Used when a task starts running the
     /// moment it is created, so no observable [`TaskStatus::Pending`] step
     /// exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create_running(
         &self,
@@ -338,6 +350,10 @@ impl TaskRepository {
     }
 
     /// Marks the invocation with `id` as running.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn mark_running(&self, id: TaskId, started_at: Timestamp) -> Result<()> {
         self.connection
@@ -360,6 +376,10 @@ impl TaskRepository {
     /// Only an unfinished row is updated. A row that already reached a terminal
     /// state keeps it, so a late interrupt during shutdown cannot clobber a
     /// task that just succeeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self, output, error))]
     pub async fn finish(
         &self,
@@ -390,6 +410,10 @@ impl TaskRepository {
     }
 
     /// Returns the invocation with `id`, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get(&self, id: TaskId) -> Result<Option<TaskInvocation>> {
         let sql = format!(
@@ -410,6 +434,11 @@ impl TaskRepository {
     /// Lists invocations, newest first, optionally filtered by `status`,
     /// `kind`, `parent`, and any number of `json` field matches over the
     /// input/output payloads. All filters combine with `AND`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, json, query))]
     pub async fn list(
         &self,
@@ -470,6 +499,10 @@ impl TaskRepository {
     }
 
     /// Lists the children of `parent_id`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn children(&self, parent_id: TaskId) -> Result<Vec<TaskInvocation>> {
         let sql = format!(
@@ -490,6 +523,10 @@ impl TaskRepository {
 
     /// Lists invocations still in an active state. After a clean start these
     /// are leftovers from a process that stopped mid-run.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_active(&self) -> Result<Vec<TaskInvocation>> {
         let sql = format!(

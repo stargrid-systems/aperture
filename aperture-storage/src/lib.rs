@@ -83,6 +83,11 @@ impl Storage {
     /// pending migrations.
     ///
     /// Pass `":memory:"` for an ephemeral in-memory database.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the database cannot be opened, connected to,
+    /// or migrated.
     pub async fn open(path: &str) -> Result<Self> {
         let db = Builder::new_local(path)
             .experimental_index_method(true)
@@ -106,51 +111,93 @@ impl Storage {
     }
 
     /// Returns the repository over the artifact catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn artifacts(&self) -> Result<ArtifactRepository> {
         Ok(ArtifactRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the task catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn tasks(&self) -> Result<TaskRepository> {
         Ok(TaskRepository::new(self.connect()?))
     }
 
+    /// Returns the repository over the periodic task schedules.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn task_schedules(&self) -> Result<TaskScheduleRepository> {
         Ok(TaskScheduleRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the structured log tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn logs(&self) -> Result<LogRepository> {
         Ok(LogRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the actors table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn actors(&self) -> Result<ActorRepository> {
         Ok(ActorRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the users table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn users(&self) -> Result<UserRepository> {
         Ok(UserRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the sessions table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn sessions(&self) -> Result<SessionRepository> {
         Ok(SessionRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the `api_keys` table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn api_keys(&self) -> Result<ApiKeyRepository> {
         Ok(ApiKeyRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the policy rules table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn policy(&self) -> Result<PolicyRuleRepository> {
         Ok(PolicyRuleRepository::new(self.connect()?))
     }
 
     /// Creates a user actor and user record in one transaction. If the user
     /// insert fails (e.g. duplicate username), the actor insert is rolled back.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the connection, transaction, or either insert
+    /// fails.
     pub async fn create_user(
         &self,
         username: &str,
@@ -221,6 +268,11 @@ impl Storage {
     /// Returns `None` if a user already exists. The count check and inserts run
     /// inside one `BEGIN IMMEDIATE` transaction, so concurrent setup attempts
     /// serialize and only one succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the connection, transaction, count query, or
+    /// either insert fails.
     pub async fn create_initial_user(
         &self,
         username: &str,

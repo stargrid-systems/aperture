@@ -97,6 +97,10 @@ impl ActorRepository {
     }
 
     /// Creates a new actor and returns the full record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn create(
         &self,
@@ -126,6 +130,10 @@ impl ActorRepository {
     }
 
     /// Returns the actor with `id`, if it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get(&self, id: ActorId) -> Result<Option<Actor>> {
         let sql_str = format!(
@@ -144,6 +152,10 @@ impl ActorRepository {
     }
 
     /// Marks the actor as disabled at `at`. Does nothing if already disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if the update fails.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn disable(&self, id: ActorId, at: Timestamp) -> Result<()> {
         self.connection
@@ -158,6 +170,10 @@ impl ActorRepository {
 
     /// Returns how many actors exist of any kind. Used at bootstrap to detect
     /// first run.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or the count cannot be read.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn count(&self) -> Result<i64> {
         let mut rows = self
@@ -172,6 +188,10 @@ impl ActorRepository {
     }
 
     /// Lists actors of `kind`, ordered by creation time.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list_by_kind(&self, kind: ActorKind) -> Result<Vec<Actor>> {
         let sql_str = format!(

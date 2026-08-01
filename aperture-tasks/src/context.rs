@@ -62,6 +62,10 @@ impl TaskContext {
 
     /// Returns [`RunError::Cancelled`] if cancellation has been requested, so a
     /// body can bail at a safe point with `?`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::Cancelled` when cancellation has been requested.
     pub fn check_cancelled(&self) -> Result<(), RunError> {
         if self.cancel.is_cancelled() {
             Err(RunError::Cancelled)
@@ -78,6 +82,11 @@ impl TaskContext {
     /// Spawns a sub-task of kind `T`, recorded as a child of this invocation.
     /// The child's cancellation is tied to this task's, so cancelling the
     /// parent cancels the child.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::EncodeInput` if the input cannot be encoded, or a
+    /// storage or kind-resolution error from the spawn.
     pub async fn spawn_child<T: TaskDefinition>(
         &self,
         input: T::Input,

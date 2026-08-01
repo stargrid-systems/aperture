@@ -96,6 +96,10 @@ impl ProgressHandle {
     }
 
     /// Sets the current step as a localizable [`ProgressMessage`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the progress mutex is poisoned.
     pub fn set_message(&self, message: ProgressMessage) {
         *self.0.message.lock().expect("progress poisoned") = Some(message);
     }

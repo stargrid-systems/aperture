@@ -37,23 +37,32 @@ fn init_crypto_provider() {
 
 /// Runs the gateway until the process is terminated.
 ///
-/// `https_addr` and `http_addr` are independently optional. When both are
+/// `tls_addr` and `plain_addr` are independently optional. When both are
 /// set, HTTP redirects to HTTPS. The TLS PKI and rotation schedule are only
-/// touched when `https_addr` is set. At least one listener must be set.
-#[allow(clippy::similar_names)]
+/// touched when `tls_addr` is set. At least one listener must be set.
+///
+/// # Errors
+///
+/// Returns an error if neither listener is set, if both bind the same
+/// address, if storage or artifact initialization fails, or if the server
+/// encounters a runtime error.
+///
+/// # Panics
+///
+/// Panics if the rustls crypto provider is already installed.
 pub async fn serve(
-    https_addr: Option<SocketAddr>,
-    http_addr: Option<SocketAddr>,
+    tls_addr: Option<SocketAddr>,
+    plain_addr: Option<SocketAddr>,
     data_dir: PathBuf,
 ) -> anyhow::Result<()> {
-    if https_addr.is_none() && http_addr.is_none() {
+    if tls_addr.is_none() && plain_addr.is_none() {
         anyhow::bail!(
             "at least one of --https-addr or --http-addr must be set (pass an empty string to \
              disable a single listener)"
         );
     }
-    if matches!((https_addr, http_addr), (Some(a), Some(b)) if a == b) {
-        let addr = https_addr.unwrap();
+    if matches!((tls_addr, plain_addr), (Some(a), Some(b)) if a == b) {
+        let addr = tls_addr.unwrap();
         anyhow::bail!("--https-addr and --http-addr must differ (both were {addr})");
     }
 
@@ -84,7 +93,7 @@ pub async fn serve(
     );
     spectra.activate_if_present().await?;
 
-    if https_addr.is_some() {
+    if tls_addr.is_some() {
         install_default_rotation_schedule(&storage).await?;
     }
 
@@ -98,7 +107,7 @@ pub async fn serve(
     );
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(artifacts, https_addr, http_addr, app).await?;
+    let server = HttpServer::start(artifacts, tls_addr, plain_addr, app).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
@@ -135,6 +144,10 @@ async fn shutdown_signal() {
 }
 
 /// Returns the `OpenAPI` specification, with the task kinds projected in.
+///
+/// # Errors
+///
+/// Returns an error if the in-memory storage cannot be opened.
 pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
     let storage = Storage::open(":memory:").await?;
     let artifacts = Artifacts::new(storage, PathBuf::from("."));
@@ -153,6 +166,11 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
 ///
 /// Revokes every active session for the user's actor so the old password
 /// stops working immediately.
+///
+/// # Errors
+///
+/// Returns an error if storage cannot be opened, the user is not found, or
+/// the password update fails.
 pub async fn reset_password(username: &str, data_dir: &Path) -> anyhow::Result<()> {
     let db_path = data_dir.join("aperture.db");
     let db_path = db_path.to_str().ok_or_else(|| {

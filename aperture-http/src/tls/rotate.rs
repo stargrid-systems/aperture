@@ -57,6 +57,10 @@ impl TaskDefinition for RotateCertificateDefinition {
 }
 
 /// Installs the default rotation schedule if none exists yet.
+///
+/// # Errors
+///
+/// Returns an error if the storage layer fails to list or create schedules.
 pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Result<()> {
     let repo = storage.task_schedules()?;
     let existing = repo.list(&ListQuery::default()).await?;

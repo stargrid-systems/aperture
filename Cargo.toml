@@ -78,6 +78,7 @@ pedantic = { level = "warn", priority = -1 }
 
 # Individual lint overrides.
 absolute_paths = "warn"
+allow_attributes = "warn"
 # `must_use`-on-unit is noisy for fallible setters that log instead of returning.
 must_use_candidate = "allow"
 # Duplicate crate versions come from transitive deps we cannot control.
@@ -85,7 +86,3 @@ multiple_crate_versions = "allow"
 # `significant_drop_tightening` mostly suggests sprinkling `drop()` calls and is
 # especially noisy in tests. It does not lead to meaningful refactors.
 significant_drop_tightening = "allow"
-# `# Errors`/`# Panics` doc sections are valuable but adding them to 150+
-# existing functions is low-value boilerplate. Kept off for now.
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"

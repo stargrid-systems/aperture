@@ -28,6 +28,10 @@ pub struct MediaType(Box<str>);
 impl MediaType {
     /// Wraps `s` after validation. Returns the validated media type, or
     /// [`InvalidMediaType`] when `s` is not a bare `type/subtype`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidMediaType`] if `s` is not a valid bare media type.
     pub fn new(s: &str) -> StdResult<Self, InvalidMediaType> {
         s.parse()
     }

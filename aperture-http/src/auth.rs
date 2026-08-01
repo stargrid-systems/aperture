@@ -62,7 +62,7 @@ pub async fn auth_middleware(
 }
 
 /// Tries session cookie first, then API key bearer.
-#[allow(clippy::result_large_err)]
+#[expect(clippy::result_large_err)]
 async fn resolve_actor(
     state: &AppState,
     headers: &HeaderMap,
