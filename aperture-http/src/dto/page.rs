@@ -1,10 +1,4 @@
 //! The generic response-page type.
-//!
-//! `option_if_let_else` is allowed module-locally because utoipa's `ToSchema`
-//! derive triggers a clippy false positive on the generic `Vec<T>` field that
-//! cannot be suppressed at the item level.
-
-#![expect(clippy::option_if_let_else)]
 
 use aperture_artifacts::Page as StoragePage;
 use serde::Serialize;

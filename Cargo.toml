@@ -86,3 +86,6 @@ multiple_crate_versions = "allow"
 # `significant_drop_tightening` mostly suggests sprinkling `drop()` calls and is
 # especially noisy in tests. It does not lead to meaningful refactors.
 significant_drop_tightening = "allow"
+# False positive from utoipa's `ToSchema` derive on generic structs.
+# Cannot be suppressed at the field or struct level.
+option_if_let_else = "allow"

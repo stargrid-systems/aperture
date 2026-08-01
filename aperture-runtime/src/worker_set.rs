@@ -102,7 +102,7 @@ impl WorkerSet {
     /// dropped mid-iteration) and left for the runtime to clean up at process
     /// exit. Panics are logged at `error` level.
     pub async fn drain(self, time_limit: Duration) {
-        if timeout(time_limit, self.drain_all()).await == Ok(()) {
+        if timeout(time_limit, self.drain_all()).await.is_ok() {
             tracing::info!("worker set drain complete");
         } else {
             tracing::warn!(
