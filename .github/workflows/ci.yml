@@ -19,6 +19,7 @@ env:
 jobs:
   fmt:
     runs-on: ubuntu-26.04
+    timeout-minutes: 10
     if: github.event_name == 'pull_request' && github.event.action != 'edited'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,6 +28,7 @@ jobs:
 
   clippy:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     if: github.event_name == 'pull_request' && github.event.action != 'edited'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,16 +37,18 @@ jobs:
 
   docs:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     if: github.event_name == 'pull_request' && github.event.action != 'edited'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo doc --all-features --no-deps
+      - run: cargo doc --all-features --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
   typos:
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     if: github.event_name == 'pull_request' && github.event.action != 'edited'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,6 +56,7 @@ jobs:
 
   pr-title:
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
@@ -73,6 +78,7 @@ jobs:
 
   test:
     runs-on: ubuntu-26.04
+    timeout-minutes: 60
     if: github.event_name == 'merge_group'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,7 +86,11 @@ jobs:
       - run: cargo test --all-features --workspace
 
   ci-pass:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-slim
     needs: [fmt, clippy, docs, typos, pr-title, test]
+    if: always()
+    timeout-minutes: 5
     steps:
+      - run: exit 1
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
       - run: echo "All checks passed"
