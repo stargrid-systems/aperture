@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use self::api::router as api_routes;
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
+use aperture_storage::{ApiKeyId, UserId};
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
@@ -99,7 +100,7 @@ impl AppState {
     // TODO(utoipa): These types are only referenced indirectly as field types
     // of IntoParams structs. utoipa does not discover their schemas
     // automatically. See: <https://github.com/stargrid-systems/aperture/issues/110>.
-    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam))
+    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam, ApiKeyId, UserId))
 )]
 struct ApiDoc;
 
