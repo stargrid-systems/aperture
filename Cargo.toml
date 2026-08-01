@@ -76,16 +76,13 @@ cargo = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
-# Individual lint overrides.
 absolute_paths = "warn"
 allow_attributes = "warn"
-# Fires on nearly every value-returning function. Too noisy to be useful.
+# Too noisy on value-returning functions.
 must_use_candidate = "allow"
-# Duplicate crate versions come from transitive deps we cannot control.
+# Transitive deps.
 multiple_crate_versions = "allow"
-# `significant_drop_tightening` mostly suggests sprinkling `drop()` calls and is
-# especially noisy in tests. It does not lead to meaningful refactors.
+# Noisy, rarely actionable.
 significant_drop_tightening = "allow"
-# False positive from utoipa's `ToSchema` derive on generic structs.
-# Cannot be suppressed at the field or struct level.
+# utoipa ToSchema false positive, see #161.
 option_if_let_else = "allow"
