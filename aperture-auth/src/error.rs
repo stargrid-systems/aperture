@@ -57,10 +57,10 @@ pub enum AuthError {
 
 impl AuthError {
     /// Converts a casbin error into an [`AuthError`]. If the casbin error
-    /// wraps a [`StorageError`] (the common case, since our adapter boxes
-    /// storage errors into casbin's `AdapterError`), the original storage
-    /// error is recovered so callers see the real cause. Everything else is
-    /// wrapped opaquely as [`AuthError::Policy`].
+    /// wraps a [`aperture_storage::StorageError`] (the common case, since our
+    /// adapter boxes storage errors into casbin's `AdapterError`), the
+    /// original storage error is recovered so callers see the real cause.
+    /// Everything else is wrapped opaquely as [`AuthError::Policy`].
     pub(crate) fn from_casbin(err: casbin::Error) -> Self {
         if let casbin::Error::AdapterError(adapter_err) = err {
             let boxed: Box<dyn StdError + Send + Sync> = adapter_err.0;
