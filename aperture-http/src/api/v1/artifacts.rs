@@ -243,7 +243,7 @@ async fn upload_artifact(
         .auth()
         .require(&auth.subject, Object::Artifact, Action::Write)
         .await?;
-    // Parse Content-Type as a MediaType at the boundary. An unparseable
+    // Parse Content-Type as a MediaType at the boundary. An unparsable
     // value is treated as absent, so the store records no media type rather
     // than garbage.
     let media_type = headers

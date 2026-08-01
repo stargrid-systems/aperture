@@ -188,7 +188,7 @@ struct AcceptedEncodings {
 }
 
 impl AcceptedEncodings {
-    /// Parses `Accept-Encoding` from `headers`. A missing or unparseable
+    /// Parses `Accept-Encoding` from `headers`. A missing or unparsable
     /// header yields no accepted encodings.
     fn from_headers(headers: &HeaderMap) -> Self {
         let value = headers
