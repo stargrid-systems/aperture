@@ -268,21 +268,12 @@ impl Paginator {
 
     /// Trims `rows` to the page size, restores base order, and derives the
     /// neighbouring cursors. `key_of` reads a row's sort value and id.
-    ///
-    /// # Panics
-    ///
-    /// Never panics in practice. The row count is bounded by the page limit
-    /// (a `u32`), so the `as u32` cast cannot truncate.
     pub(crate) fn finish<T>(
         &self,
         mut rows: Vec<T>,
         key_of: impl Fn(&T) -> (CursorValue, i64),
     ) -> Page<T> {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "rows.len() is bounded by the u32 page limit"
-        )]
-        let has_extra = rows.len() as u32 > self.limit;
+        let has_extra = rows.len() > self.limit as usize;
         if has_extra {
             rows.truncate(self.limit as usize);
         }

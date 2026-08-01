@@ -79,7 +79,7 @@ pedantic = { level = "warn", priority = -1 }
 # Individual lint overrides.
 absolute_paths = "warn"
 allow_attributes = "warn"
-# `must_use`-on-unit is noisy for fallible setters that log instead of returning.
+# Fires on nearly every value-returning function. Too noisy to be useful.
 must_use_candidate = "allow"
 # Duplicate crate versions come from transitive deps we cannot control.
 multiple_crate_versions = "allow"

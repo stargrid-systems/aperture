@@ -50,7 +50,7 @@ pub async fn auth_middleware(
 
     let actor = match resolve_actor(&state, &headers).await {
         Ok(actor) => actor,
-        Err(response) => return response,
+        Err(status) => return status.into_response(),
     };
 
     if actor.must_change_password && !is_password_change_path(&path) {
@@ -62,11 +62,10 @@ pub async fn auth_middleware(
 }
 
 /// Tries session cookie first, then API key bearer.
-#[expect(clippy::result_large_err)]
 async fn resolve_actor(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<AuthenticatedActor, Response> {
+) -> Result<AuthenticatedActor, StatusCode> {
     if let Some(token) = extract_session_token(headers) {
         match state
             .auth()
@@ -77,7 +76,7 @@ async fn resolve_actor(
             Ok(None) => {}
             Err(err) => {
                 tracing::error!(error = &err as &dyn StdError, "session resolution failed");
-                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
     }
@@ -87,11 +86,11 @@ async fn resolve_actor(
             Ok(None) => {}
             Err(err) => {
                 tracing::error!(error = &err as &dyn StdError, "api key resolution failed");
-                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
     }
-    Err(StatusCode::UNAUTHORIZED.into_response())
+    Err(StatusCode::UNAUTHORIZED)
 }
 
 /// Extracts the bearer token from the `Authorization` header.
