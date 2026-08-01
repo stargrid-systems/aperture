@@ -11,7 +11,7 @@ use serde::de::{self, Visitor};
 /// the deserializer can offer a borrowed `&str`.
 ///
 /// Serializers that hand us an owned `String` pay one allocation (the input
-/// itself). With [`String::deserialize`] serde always asks for an owned string
+/// itself). With `String::deserialize` serde always asks for an owned string
 /// even when the format has a borrowed one available. This visitor accepts
 /// `visit_borrowed_str` so a JSON decoder reading from `&[u8]` can skip that
 /// extra copy.

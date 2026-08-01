@@ -4,7 +4,7 @@ use std::fmt;
 use std::fmt::Write;
 
 use aperture_storage::{ApiKeyHash, TokenHash};
-use rand::rngs::OsRng;
+use argon2::password_hash::rand_core::OsRng;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -95,7 +95,7 @@ fn sha256(input: &str) -> Vec<u8> {
 pub fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     {
-        use rand::TryRngCore;
+        use argon2::password_hash::rand_core::RngCore;
         OsRng.try_fill_bytes(&mut buf).expect("OsRng failed");
     }
     let mut s = String::with_capacity(buf.len() * 2);
