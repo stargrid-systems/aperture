@@ -5,9 +5,9 @@
     {
       "description": "Track the Spectra frontend OCI image pinned in the Rust source.",
       "customType": "regex",
-      "datasource": "docker",
+      "datasourceTemplate": "docker",
       "depNameTemplate": "ghcr.io/stargrid-systems/spectra",
-      "fileMatch": ["^aperture-http/src/spectra/config\\.rs$"],
+      "managerFilePatterns": ["/^aperture-http/src/spectra/config\\.rs$/"],
       "matchStrings": ["ghcr\\.io/stargrid-systems/spectra:(?<currentValue>[^\"]+)"]
     }
   ],
