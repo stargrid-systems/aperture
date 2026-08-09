@@ -8,12 +8,14 @@
 //! update, which keeps the vocabulary and the granted permissions in sync.
 
 use std::fmt;
+use std::str::FromStr;
 
 use aperture_storage::Storage;
 use casbin::{CoreApi, DefaultModel, Enforcer};
 use serde::{Deserialize, Serialize};
 
 use self::adapter::{TursoAdapter, map_storage_err};
+use crate::error::AuthError;
 
 mod adapter;
 
@@ -131,6 +133,19 @@ impl Role {
 impl fmt::Display for Role {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Role {
+    type Err = AuthError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "admin" => Ok(Self::Admin),
+            "operator" => Ok(Self::Operator),
+            "viewer" => Ok(Self::Viewer),
+            _ => Err(AuthError::UnknownRole(s.to_owned())),
+        }
     }
 }
 
