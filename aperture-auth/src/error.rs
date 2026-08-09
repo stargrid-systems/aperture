@@ -30,6 +30,9 @@ pub enum AuthError {
     #[error("invalid username")]
     InvalidUsername,
 
+    #[error("unknown role: {0}")]
+    UnknownRole(String),
+
     #[error("session not found")]
     SessionNotFound,
 

@@ -1279,7 +1279,7 @@ async fn current_user_returns_identity_and_role() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["actor_id"], api_actor.get().to_string());
     assert_eq!(json["username"], "alice");
-    assert_eq!(json["role"], "operator");
+    assert_eq!(json["roles"], serde_json::json!(["operator"]));
     assert_eq!(json["must_change_password"], false);
 
     // Session caller: the user's username and role are populated.
@@ -1308,7 +1308,7 @@ async fn current_user_returns_identity_and_role() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["username"], "carol");
     assert_eq!(json["display_name"], "carol");
-    assert_eq!(json["role"], "admin");
+    assert_eq!(json["roles"], serde_json::json!(["admin"]));
 }
 
 #[tokio::test]

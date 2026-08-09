@@ -7,7 +7,6 @@
 //! object or action is a deliberate change that also forces a policy-seed
 //! update, which keeps the vocabulary and the granted permissions in sync.
 
-use std::error::Error as StdError;
 use std::fmt;
 use std::str::FromStr;
 
@@ -16,6 +15,7 @@ use casbin::{CoreApi, DefaultModel, Enforcer};
 use serde::{Deserialize, Serialize};
 
 use self::adapter::{TursoAdapter, map_storage_err};
+use crate::error::AuthError;
 
 mod adapter;
 
@@ -137,29 +137,17 @@ impl fmt::Display for Role {
 }
 
 impl FromStr for Role {
-    type Err = UnknownRole;
+    type Err = AuthError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "admin" => Ok(Self::Admin),
             "operator" => Ok(Self::Operator),
             "viewer" => Ok(Self::Viewer),
-            _ => Err(UnknownRole(s.to_owned())),
+            _ => Err(AuthError::UnknownRole(s.to_owned())),
         }
     }
 }
-
-/// Error returned when a role string is not a built-in role.
-#[derive(Debug)]
-pub struct UnknownRole(String);
-
-impl fmt::Display for UnknownRole {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown role: {}", self.0)
-    }
-}
-
-impl StdError for UnknownRole {}
 
 /// Creates and returns the enforcer with the turso adapter, loading existing
 /// policies from the database.

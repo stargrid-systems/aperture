@@ -1,6 +1,7 @@
 use std::future::Future;
 
 use aperture_auth::{AuthenticatedActor, Password, Role, SessionToken, Username};
+use aperture_storage::ActorId;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -89,10 +90,10 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CurrentUserResponse {
-    actor_id: String,
+    actor_id: ActorId,
     username: Option<String>,
     display_name: String,
-    role: Option<Role>,
+    roles: Vec<Role>,
     must_change_password: bool,
 }
 
@@ -117,17 +118,12 @@ async fn current_user(
     } else {
         None
     };
-    let role = state
-        .auth()
-        .roles_for(&auth.subject)
-        .await?
-        .into_iter()
-        .find_map(|r| r.parse::<Role>().ok());
+    let roles = state.auth().roles_for(&auth.subject).await?;
     Ok(Json(CurrentUserResponse {
-        actor_id: auth.actor.id.to_string(),
+        actor_id: auth.actor.id,
         username,
         display_name: auth.actor.display_name,
-        role,
+        roles,
         must_change_password: auth.must_change_password,
     }))
 }

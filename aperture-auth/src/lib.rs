@@ -28,7 +28,7 @@ use tokio::sync::RwLock;
 
 pub use self::error::{AuthError, Result};
 pub use self::password::Password;
-pub use self::policy::{Action, Object, Role, UnknownRole, actor_subject, apikey_subject};
+pub use self::policy::{Action, Object, Role, actor_subject, apikey_subject};
 pub use self::ratelimit::LoginLimiter;
 pub use self::token::{RawApiKey, SessionToken};
 pub use self::username::Username;
@@ -152,10 +152,14 @@ impl AuthHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error if the casbin enforcer fails to read roles.
-    pub async fn roles_for(&self, subject: &str) -> Result<Vec<String>> {
+    /// Returns an error if the casbin enforcer fails to read roles, or if a
+    /// stored role string is not a built-in role.
+    pub async fn roles_for(&self, subject: &str) -> Result<Vec<Role>> {
         let e = self.enforcer.read().await;
-        Ok(e.get_roles_for_user(subject, None))
+        e.get_roles_for_user(subject, None)
+            .into_iter()
+            .map(|r| r.parse::<Role>())
+            .collect()
     }
 
     /// Removes all direct permissions for `subject`.
