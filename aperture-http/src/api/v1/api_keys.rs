@@ -3,6 +3,7 @@ use aperture_storage::ApiKeyId;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
@@ -20,15 +21,15 @@ pub fn router() -> OpenApiRouter<AppState> {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ApiKeyResponse {
-    id: String,
+    id: ApiKeyId,
     name: String,
     prefix: String,
-    last_used_at: Option<String>,
+    last_used_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CreateApiKeyResponse {
-    id: String,
+    id: ApiKeyId,
     name: String,
     prefix: String,
     /// The full key. Only visible at creation time.
@@ -61,10 +62,10 @@ async fn list_api_keys(
     Ok(Json(
         keys.into_iter()
             .map(|k| ApiKeyResponse {
-                id: k.id.to_string(),
+                id: k.id,
                 name: k.name,
                 prefix: k.prefix,
-                last_used_at: k.last_used_at.map(|ts| ts.to_string()),
+                last_used_at: k.last_used_at,
             })
             .collect(),
     ))
@@ -102,7 +103,7 @@ async fn create_api_key(
     Ok((
         StatusCode::CREATED,
         Json(CreateApiKeyResponse {
-            id: api_key.id.to_string(),
+            id: api_key.id,
             name: api_key.name,
             prefix: api_key.prefix,
             key: raw_key,

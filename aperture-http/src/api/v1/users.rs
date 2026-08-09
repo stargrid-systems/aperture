@@ -1,5 +1,5 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, Password, Role, Username};
-use aperture_storage::UserId;
+use aperture_storage::{ActorId, UserId};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -21,8 +21,8 @@ pub fn router() -> OpenApiRouter<AppState> {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UserResponse {
-    id: String,
-    actor_id: String,
+    id: UserId,
+    actor_id: ActorId,
     username: String,
     must_change_password: bool,
 }
@@ -30,8 +30,8 @@ pub struct UserResponse {
 impl From<aperture_storage::User> for UserResponse {
     fn from(user: aperture_storage::User) -> Self {
         Self {
-            id: user.id.to_string(),
-            actor_id: user.actor_id.to_string(),
+            id: user.id,
+            actor_id: user.actor_id,
             username: user.username,
             must_change_password: user.password_change_required_at.is_some(),
         }
