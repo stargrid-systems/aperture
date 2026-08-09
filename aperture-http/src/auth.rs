@@ -31,7 +31,9 @@ fn is_public_path(path: &str) -> bool {
 
 /// Paths accessible when the user must change their password.
 fn is_password_change_path(path: &str) -> bool {
-    path == "/api/v1/auth/change-password" || path == "/api/v1/auth/logout"
+    path == "/api/v1/auth/change-password"
+        || path == "/api/v1/auth/logout"
+        || path == "/api/v1/auth/me"
 }
 
 /// Auth middleware: resolves the actor from a session cookie or API key bearer

@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use aperture_auth::{AuthenticatedActor, Password, SessionToken, Username};
+use aperture_auth::{AuthenticatedActor, Password, Role, SessionToken, Username};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -20,6 +20,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(login))
         .routes(routes!(logout))
+        .routes(routes!(current_user))
         .routes(routes!(change_password))
         .routes(routes!(setup_status))
         .routes(routes!(setup))
@@ -84,6 +85,51 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         clear_session_cookie().parse().expect("valid header value"),
     );
     Ok(response)
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CurrentUserResponse {
+    actor_id: String,
+    username: Option<String>,
+    display_name: String,
+    role: Option<Role>,
+    must_change_password: bool,
+}
+
+/// Returns the authenticated caller's identity and role.
+#[utoipa::path(
+    get,
+    path = "/me",
+    operation_id = operation_ids::GET_CURRENT_USER,
+    responses((status = 200, description = "Current caller", body = CurrentUserResponse)),
+)]
+async fn current_user(
+    auth: AuthenticatedActor,
+    State(state): State<AppState>,
+) -> Result<Json<CurrentUserResponse>, ApiError> {
+    let username = if auth.actor.kind == aperture_storage::ActorKind::User {
+        state
+            .storage()
+            .users()?
+            .find_by_actor_id(auth.actor.id)
+            .await?
+            .map(|u| u.username)
+    } else {
+        None
+    };
+    let role = state
+        .auth()
+        .roles_for(&auth.subject)
+        .await?
+        .into_iter()
+        .find_map(|r| r.parse::<Role>().ok());
+    Ok(Json(CurrentUserResponse {
+        actor_id: auth.actor.id.to_string(),
+        username,
+        display_name: auth.actor.display_name,
+        role,
+        must_change_password: auth.must_change_password,
+    }))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

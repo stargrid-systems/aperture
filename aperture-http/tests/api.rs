@@ -1268,3 +1268,63 @@ async fn change_password_rejected_for_api_key_auth() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn current_user_returns_identity_and_role() {
+    let (app, auth, _storage) = fresh_app().await;
+
+    // API-key caller: resolves to its owning user actor, carries the key's role.
+    let (api_actor, token) = key_for_role(&auth, "alice", Role::Operator).await;
+    let (status, json) = get_json(&app, &token, "/api/v1/auth/me").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["actor_id"], api_actor.get().to_string());
+    assert_eq!(json["username"], "alice");
+    assert_eq!(json["role"], "operator");
+    assert_eq!(json["must_change_password"], false);
+
+    // Session caller: the user's username and role are populated.
+    let pw = test_password();
+    let actor = auth
+        .create_user(&"carol".parse().unwrap(), &Password::new(pw.clone()), None)
+        .await
+        .unwrap();
+    auth.assign_role(&aperture_auth::actor_subject(actor.id), Role::Admin)
+        .await
+        .unwrap();
+    let cookie = login(&app, "carol", &pw).await.expect("login");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/me")
+                .header("cookie", format!("aperture_session={cookie}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, json) = read_json(response).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["username"], "carol");
+    assert_eq!(json["display_name"], "carol");
+    assert_eq!(json["role"], "admin");
+}
+
+#[tokio::test]
+async fn current_user_requires_authentication() {
+    let (app, _auth, _storage) = fresh_app().await;
+
+    let status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
