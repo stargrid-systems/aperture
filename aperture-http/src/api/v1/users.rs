@@ -63,23 +63,16 @@ async fn list_users(
         .auth()
         .require(&auth.subject, Object::User, Action::Read)
         .await?;
-    let mut users: Vec<_> = state
+    let users: Vec<_> = state
         .auth()
         .list_users()
         .await?
         .into_iter()
         .map(UserResponse::from)
         .collect();
-    let order = params.order.map_or(Order::Asc, Into::into);
-    users.sort_by(|a, b| {
-        let cmp = a.id.get().cmp(&b.id.get());
-        match order {
-            Order::Asc => cmp,
-            Order::Desc => cmp.reverse(),
-        }
-    });
+    // DB returns users ordered by username ASC.
     let page = aperture_storage::Page::paginate(&users, &params.to_query(), Order::Asc, |u| {
-        CursorValue::Int(u.id.get())
+        CursorValue::Text(u.username.clone())
     })?;
     Ok(Json(Page::from_storage(page, |x| x)))
 }

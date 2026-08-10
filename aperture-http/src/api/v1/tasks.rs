@@ -173,16 +173,7 @@ async fn list_definitions(
         .into_iter()
         .map(TaskDefinitionResponse::from)
         .collect();
-    let order = params
-        .order
-        .map_or(aperture_storage::Order::Asc, Into::into);
-    descriptors.sort_by(|a, b| {
-        let cmp = a.kind.cmp(&b.kind);
-        match order {
-            aperture_storage::Order::Asc => cmp,
-            aperture_storage::Order::Desc => cmp.reverse(),
-        }
-    });
+    descriptors.sort_by(|a, b| a.kind.cmp(&b.kind));
     let page = aperture_storage::Page::paginate(
         &descriptors,
         &params.to_query(),

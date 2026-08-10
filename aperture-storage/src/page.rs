@@ -350,12 +350,12 @@ impl<T: Clone> Page<T> {
     /// Extracts a page from a pre-sorted slice using the same cursor format as
     /// SQL queries.
     ///
-    /// `items` must be sorted by `key_of` in the order the caller wants to
-    /// present (ascending or descending, as determined by `query.order` or
-    /// `default_order`). The sort key must be unique per item so no tiebreaker
-    /// is needed.
+    /// `items` must be sorted by `key_of` in `default_order`. The sort key
+    /// must be unique per item so no tiebreaker is needed. If `query.order`
+    /// flips the direction, the window is scanned from the opposite end so no
+    /// re-sort is needed.
     ///
-    /// Only the page window is copied; the rest of the slice is untouched.
+    /// Only the page window is cloned; the rest of the slice is untouched.
     ///
     /// # Errors
     ///
@@ -368,22 +368,32 @@ impl<T: Clone> Page<T> {
         key_of: impl Fn(&T) -> CursorValue,
     ) -> Result<Self> {
         let paginator = Paginator::new(query, default_order)?;
-        let base_order = paginator.base_order();
+        let flipped = paginator.base_order() != default_order;
+        let effective_backward = paginator.is_backward() ^ flipped;
         let limit = paginator.fetch_limit() as usize;
 
         let page_items: Vec<T> = match paginator.cursor() {
-            None => items[..limit.min(items.len())].to_vec(),
+            None => {
+                if flipped {
+                    let start = items.len().saturating_sub(limit);
+                    let mut window = items[start..].to_vec();
+                    window.reverse();
+                    window
+                } else {
+                    items[..limit.min(items.len())].to_vec()
+                }
+            }
             Some(cursor) => {
                 let cv = cursor.value();
-                let (start, end, reverse) = if paginator.is_backward() {
-                    let idx = match base_order {
+                let (start, end, reverse) = if effective_backward {
+                    let idx = match default_order {
                         Order::Asc => items.partition_point(|item| &key_of(item) < cv),
                         Order::Desc => items.partition_point(|item| &key_of(item) > cv),
                     };
                     let start = idx.saturating_sub(limit);
                     (start, idx, true)
                 } else {
-                    let idx = match base_order {
+                    let idx = match default_order {
                         Order::Asc => items.partition_point(|item| &key_of(item) <= cv),
                         Order::Desc => items.partition_point(|item| &key_of(item) >= cv),
                     };
@@ -479,5 +489,188 @@ mod tests {
         assert_eq!(page.items, vec![2, 3]);
         assert!(page.next_cursor.is_some());
         assert!(page.prev_cursor.is_some());
+    }
+
+    #[test]
+    fn paginate_first_page_forward() {
+        let data = vec![10i64, 20, 30, 40, 50];
+        let page = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        assert_eq!(page.items, vec![10, 20]);
+        assert!(page.next_cursor.is_some());
+        assert!(page.prev_cursor.is_none());
+    }
+
+    #[test]
+    fn paginate_second_page_forward() {
+        let data = vec![10i64, 20, 30, 40, 50];
+        let first = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        let second = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                cursor: first.next_cursor,
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        assert_eq!(second.items, vec![30, 40]);
+        assert!(second.next_cursor.is_some());
+        assert!(second.prev_cursor.is_some());
+    }
+
+    #[test]
+    fn paginate_last_page_forward() {
+        let data = vec![10i64, 20, 30, 40, 50];
+        let second_cursor = Cursor::encode(CursorValue::Int(40), 0, Step::After);
+        let page = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                cursor: Some(second_cursor),
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        assert_eq!(page.items, vec![50]);
+        assert!(page.next_cursor.is_none());
+        assert!(page.prev_cursor.is_some());
+    }
+
+    #[test]
+    fn paginate_backward_page() {
+        let data = vec![10i64, 20, 30, 40, 50];
+        let backward = Cursor::encode(CursorValue::Int(30), 0, Step::Before);
+        let page = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                cursor: Some(backward),
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        assert_eq!(page.items, vec![10, 20]);
+        assert!(page.next_cursor.is_some());
+        assert!(page.prev_cursor.is_none());
+    }
+
+    #[test]
+    fn paginate_order_inversion_first_page() {
+        let data = vec![10i64, 20, 30, 40, 50];
+        let page = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                order: Some(Order::Desc),
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        assert_eq!(page.items, vec![50, 40]);
+        assert!(page.next_cursor.is_some());
+        assert!(page.prev_cursor.is_none());
+    }
+
+    #[test]
+    fn paginate_order_inversion_second_page() {
+        let data = vec![10i64, 20, 30, 40, 50];
+        let first = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                order: Some(Order::Desc),
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        let second = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                order: Some(Order::Desc),
+                cursor: first.next_cursor,
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        assert_eq!(second.items, vec![30, 20]);
+        assert!(second.next_cursor.is_some());
+        assert!(second.prev_cursor.is_some());
+    }
+
+    #[test]
+    fn paginate_empty_collection() {
+        let data: Vec<i64> = vec![];
+        let page = Page::paginate(&data, &ListQuery::default(), Order::Asc, |n| {
+            CursorValue::Int(*n)
+        })
+        .unwrap();
+        assert!(page.items.is_empty());
+        assert!(page.next_cursor.is_none());
+        assert!(page.prev_cursor.is_none());
+    }
+
+    #[test]
+    fn paginate_limit_exceeds_collection() {
+        let data = vec![10i64, 20];
+        let page = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(10),
+                ..Default::default()
+            },
+            Order::Asc,
+            |n| CursorValue::Int(*n),
+        )
+        .unwrap();
+        assert_eq!(page.items, vec![10, 20]);
+        assert!(page.next_cursor.is_none());
+        assert!(page.prev_cursor.is_none());
+    }
+
+    #[test]
+    fn paginate_text_keys() {
+        let data = vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
+        let page = Page::paginate(
+            &data,
+            &ListQuery {
+                limit: Some(2),
+                ..Default::default()
+            },
+            Order::Asc,
+            |s| CursorValue::Text(s.clone()),
+        )
+        .unwrap();
+        assert_eq!(page.items, vec!["alpha", "beta"]);
+        assert!(page.next_cursor.is_some());
     }
 }
