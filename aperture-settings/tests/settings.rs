@@ -1,5 +1,5 @@
-use aperture_settings::{SettingDefinition, SettingError, SettingRegistry, Settings};
-use aperture_storage::Storage;
+use aperture_settings::{ListQuery, SettingDefinition, SettingError, SettingRegistry, Settings};
+use aperture_storage::{Order, Storage};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -13,15 +13,39 @@ struct SystemDef;
 impl SettingDefinition for SystemDef {
     const KEY: &'static str = "system";
     type Value = SystemValue;
-
     fn default(&self) -> Self::Value {
         SystemValue { hostname: None }
     }
 }
 
+macro_rules! stub_def {
+    ($name:ident, $key:literal) => {
+        struct $name;
+        impl SettingDefinition for $name {
+            const KEY: &'static str = $key;
+            type Value = SystemValue;
+            fn default(&self) -> Self::Value {
+                SystemValue { hostname: None }
+            }
+        }
+    };
+}
+
+stub_def!(DefA, "a");
+stub_def!(DefB, "b");
+stub_def!(DefC, "c");
+
 fn registry() -> SettingRegistry {
     let mut registry = SettingRegistry::new();
     registry.register(SystemDef);
+    registry
+}
+
+fn registry_multi() -> SettingRegistry {
+    let mut registry = SettingRegistry::new();
+    registry.register(DefA);
+    registry.register(DefB);
+    registry.register(DefC);
     registry
 }
 
@@ -101,7 +125,6 @@ async fn set_value_rejects_value_that_does_not_deserialize() {
         .unwrap_err();
     assert!(matches!(err, SettingError::Decode(_)));
 
-    // Nothing was written, so the default is still returned.
     let value = settings.get_value("system").await.unwrap();
     assert_eq!(value, serde_json::json!({"hostname": null}));
 }
@@ -111,8 +134,54 @@ async fn list_returns_registered_keys_with_defaults() {
     let storage = Storage::open(":memory:").await.unwrap();
     let settings = Settings::new(storage.settings().unwrap(), registry());
 
-    let entries = settings.list().await.unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].0, "system");
-    assert_eq!(entries[0].1, serde_json::json!({"hostname": null}));
+    let page = settings.list(&ListQuery::default()).await.unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].0, "system");
+    assert_eq!(page.items[0].1, serde_json::json!({"hostname": null}));
+    assert!(page.next_cursor.is_none());
+    assert!(page.prev_cursor.is_none());
+}
+
+#[tokio::test]
+async fn list_paginates_and_orders() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let settings = Settings::new(storage.settings().unwrap(), registry_multi());
+
+    let page = settings
+        .list(&ListQuery {
+            limit: Some(2),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.items[0].0, "a");
+    assert_eq!(page.items[1].0, "b");
+    assert!(page.next_cursor.is_some());
+    assert!(page.prev_cursor.is_none());
+
+    let page2 = settings
+        .list(&ListQuery {
+            limit: Some(2),
+            cursor: page.next_cursor,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page2.items.len(), 1);
+    assert_eq!(page2.items[0].0, "c");
+    assert!(page2.next_cursor.is_none());
+    assert!(page2.prev_cursor.is_some());
+
+    let page_desc = settings
+        .list(&ListQuery {
+            limit: Some(2),
+            order: Some(Order::Desc),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page_desc.items.len(), 2);
+    assert_eq!(page_desc.items[0].0, "c");
+    assert_eq!(page_desc.items[1].0, "b");
 }

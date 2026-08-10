@@ -5,7 +5,9 @@
 //! [`SettingRegistry`]. [`Settings`] reads and writes values, filling from the
 //! definition default when no value has been stored.
 
-pub use aperture_storage::{ActorId, SettingRecord, SettingRepository};
+pub use aperture_storage::{
+    ActorId, CursorValue, ListQuery, Order, Page, SettingRecord, SettingRepository,
+};
 
 pub use self::definition::SettingDefinition;
 pub use self::erased::ErasedSettingDefinition;

@@ -1,13 +1,13 @@
 use aperture_auth::{Action, AuthenticatedActor, Object};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use serde_json::Value;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::dto::{SettingResponse, UpdateSettingRequest};
+use crate::dto::{Page, SettingListParams, SettingResponse, UpdateSettingRequest};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -16,27 +16,27 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_setting, update_setting))
 }
 
-/// Lists every setting key with its current value.
+/// Lists setting keys with their current values, paginated.
 #[utoipa::path(
     get,
     path = "",
     operation_id = operation_ids::LIST_SETTINGS,
-    responses((status = 200, description = "Settings", body = [SettingResponse])),
+    params(SettingListParams),
+    responses((status = 200, description = "Settings", body = Page<SettingResponse>)),
 )]
 async fn list_settings(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<Vec<SettingResponse>>, ApiError> {
+    Query(params): Query<SettingListParams>,
+) -> Result<Json<Page<SettingResponse>>, ApiError> {
     state
         .auth()
         .require(&auth.subject, Object::Setting, Action::Read)
         .await?;
-    let entries = state.settings().list().await?;
-    let response = entries
-        .into_iter()
-        .map(|(key, value)| SettingResponse { key, value })
-        .collect();
-    Ok(Json(response))
+    let page = state.settings().list(&params.to_query()).await?;
+    Ok(Json(Page::from_storage(page, |(key, value)| {
+        SettingResponse { key, value }
+    })))
 }
 
 /// Returns the value of one setting key.
