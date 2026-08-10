@@ -1,7 +1,7 @@
 //! DTOs for the structured log endpoints.
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{BootInfo, Event, EventId, Level, Span, SpanId};
+use aperture_storage::{Event, EventId, Level, Span, SpanId};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
@@ -273,21 +273,4 @@ pub struct BootResponse {
     pub event_count: u64,
     /// True if this is the currently running gateway boot.
     pub is_current: bool,
-}
-
-impl BootResponse {
-    /// Maps a list of storage [`BootInfo`] into boot responses, marking the
-    /// current boot id.
-    pub fn from_boots(boots: Vec<BootInfo>, current_boot_id: Uuid) -> Vec<Self> {
-        boots
-            .into_iter()
-            .map(|b| Self {
-                is_current: b.boot_id == current_boot_id,
-                boot_id: b.boot_id,
-                first_seen: b.first_seen,
-                last_seen: b.last_seen,
-                event_count: b.event_count,
-            })
-            .collect()
-    }
 }

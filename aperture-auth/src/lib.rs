@@ -419,14 +419,17 @@ impl AuthHandle {
         Ok(())
     }
 
-    /// Lists all users.
+    /// Lists users, paginated.
     ///
     /// # Errors
     ///
     /// Returns an error if the storage layer fails to list users.
-    pub async fn list_users(&self) -> Result<Vec<aperture_storage::User>> {
+    pub async fn list_users(
+        &self,
+        query: &aperture_storage::ListQuery,
+    ) -> Result<aperture_storage::Page<aperture_storage::User>> {
         let users = self.storage.users()?;
-        Ok(users.list().await?)
+        Ok(users.list(query).await?)
     }
 
     /// Deletes user `user_id` and disables the associated actor.

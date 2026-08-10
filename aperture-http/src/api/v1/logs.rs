@@ -1,5 +1,5 @@
 use aperture_auth::{Action, AuthenticatedActor, Object};
-use aperture_storage::{CursorValue, EventFilter, Order, SpanFilter, SpanId, SpanParentFilter};
+use aperture_storage::{EventFilter, SpanFilter, SpanId, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -77,14 +77,9 @@ async fn list_log_targets(
         .require(&auth.subject, Object::Log, Action::Read)
         .await?;
     let logs = state.storage().logs()?;
-    let targets = logs.list_targets(params.q.as_deref()).await?;
-    // DB returns targets ordered ASC.
-    let page = aperture_storage::Page::paginate(
-        &targets,
-        &params.to_query(),
-        Order::Asc,
-        |t: &String| CursorValue::Text(t.clone()),
-    )?;
+    let page = logs
+        .list_targets(params.q.as_deref(), &params.to_query())
+        .await?;
     Ok(Json(Page::from_storage(page, |x| x)))
 }
 
@@ -106,16 +101,15 @@ async fn list_log_boots(
         .require(&auth.subject, Object::Log, Action::Read)
         .await?;
     let logs = state.storage().logs()?;
-    let boots = logs.list_boots().await?;
-    let responses = BootResponse::from_boots(boots, state.boot_id());
-    // DB returns boots ordered by first_seen DESC.
-    let page = aperture_storage::Page::paginate(
-        &responses,
-        &params.to_query(),
-        Order::Desc,
-        |b: &BootResponse| CursorValue::Int(b.first_seen.as_microsecond()),
-    )?;
-    Ok(Json(Page::from_storage(page, |x| x)))
+    let page = logs.list_boots(&params.to_query()).await?;
+    let current = state.boot_id();
+    Ok(Json(Page::from_storage(page, |b| BootResponse {
+        boot_id: b.boot_id,
+        first_seen: b.first_seen,
+        last_seen: b.last_seen,
+        event_count: b.event_count,
+        is_current: b.boot_id == current,
+    })))
 }
 
 /// Lists tracing spans with optional filtering.

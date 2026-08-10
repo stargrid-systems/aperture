@@ -1,5 +1,5 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, Password, Role, Username};
-use aperture_storage::{ActorId, CursorValue, Order, UserId};
+use aperture_storage::{ActorId, UserId};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -63,18 +63,8 @@ async fn list_users(
         .auth()
         .require(&auth.subject, Object::User, Action::Read)
         .await?;
-    let users: Vec<_> = state
-        .auth()
-        .list_users()
-        .await?
-        .into_iter()
-        .map(UserResponse::from)
-        .collect();
-    // DB returns users ordered by username ASC.
-    let page = aperture_storage::Page::paginate(&users, &params.to_query(), Order::Asc, |u| {
-        CursorValue::Text(u.username.clone())
-    })?;
-    Ok(Json(Page::from_storage(page, |x| x)))
+    let page = state.auth().list_users(&params.to_query()).await?;
+    Ok(Json(Page::from_storage(page, UserResponse::from)))
 }
 
 /// Creates a new user.

@@ -373,43 +373,54 @@ impl LogRepository {
     }
 
     /// Lists distinct targets across both events and spans, optionally
-    /// filtered by prefix.
+    /// filtered by prefix, paginated by target (ascending by default).
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` if the query fails or a target cannot be read.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn list_targets(&self, q: Option<&str>) -> Result<Vec<String>> {
-        let sql = match q {
-            Some(_) => {
-                // Raw string because sql!() cannot handle SQL single-quoted literals.
-                r"
-                SELECT target FROM log_events WHERE target LIKE ?1 ESCAPE '\'
-                UNION
-                SELECT target FROM log_spans WHERE target LIKE ?1 ESCAPE '\'
-                ORDER BY target
-            "
-            }
-            None => sql!(
-                SELECT target FROM log_events
-                UNION
-                SELECT target FROM log_spans
-                ORDER BY target
+    /// Returns `StorageError` if the query or cursor is invalid, or a target
+    /// cannot be read.
+    #[tracing::instrument(level = "info", skip(self, query))]
+    pub async fn list_targets(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<String>> {
+        let paginator = Paginator::new(query, Order::Asc)?;
+        let keyset = Keyset::unique("target", paginator.query_order());
+
+        let (inner, mut all_params): (&str, Vec<Value>) = match q {
+            Some(prefix) => (
+                r"SELECT target FROM log_events WHERE target LIKE ?1 ESCAPE '\'
+                 UNION
+                 SELECT target FROM log_spans WHERE target LIKE ?1 ESCAPE '\'",
+                vec![Value::Text(format!("{}%", EscapeLike(prefix)))],
+            ),
+            None => (
+                "SELECT target FROM log_events UNION SELECT target FROM log_spans",
+                vec![],
             ),
         };
-        let params: Vec<Value> = q
-            .map(|prefix| vec![Value::Text(format!("{}%", EscapeLike(prefix)))])
-            .unwrap_or_default();
+
+        let (cond, cond_params) = keyset.condition(paginator.cursor(), all_params.len() + 1);
+        let where_clause = if cond.is_empty() {
+            String::new()
+        } else {
+            all_params.extend(cond_params);
+            format!(" WHERE {cond}")
+        };
+
+        let sql = format!(
+            "SELECT target FROM ({inner}){where_clause} ORDER BY {order} LIMIT {limit}",
+            order = keyset.order_by(),
+            limit = paginator.fetch_limit(),
+        );
+
         let mut rows = self
             .connection
-            .query(sql, params_from_iter(params))
+            .query(&sql, params_from_iter(all_params))
             .await
             .map_err(StorageError::from_turso)?;
         let mut targets = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             targets.push(get(&row, 0)?);
         }
-        Ok(targets)
+        Ok(paginator.finish(targets, |t| (CursorValue::Text(t.clone()), 0)))
     }
 
     /// Lists spans matching the given filters, ordered by `started_at`
@@ -566,27 +577,44 @@ impl LogRepository {
         Ok(event_count)
     }
 
-    /// Lists all distinct boot sessions, derived from the `boot_id` column of
-    /// stored events. Ordered newest first.
+    /// Lists distinct boot sessions, derived from the `boot_id` column of
+    /// stored events. Paginated by `first_seen` (descending by default).
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` if the query fails or a row cannot be decoded.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn list_boots(&self) -> Result<Vec<BootInfo>> {
-        const SQL_LIST_BOOTS: &str = sql!(
-            SELECT boot_id,
-                   MIN(timestamp) AS first_seen,
-                   MAX(timestamp) AS last_seen,
-                   COUNT(*) AS event_count
-            FROM log_events
-            WHERE boot_id IS NOT NULL
-            GROUP BY boot_id
-            ORDER BY first_seen DESC
+    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// cannot be decoded.
+    #[tracing::instrument(level = "info", skip(self, query))]
+    pub async fn list_boots(&self, query: &ListQuery) -> Result<Page<BootInfo>> {
+        let paginator = Paginator::new(query, Order::Desc)?;
+        let keyset = Keyset::unique("first_seen", paginator.query_order());
+
+        let inner = concat!(
+            "SELECT boot_id,",
+            " MIN(timestamp) AS first_seen,",
+            " MAX(timestamp) AS last_seen,",
+            " COUNT(*) AS event_count",
+            " FROM log_events",
+            " WHERE boot_id IS NOT NULL",
+            " GROUP BY boot_id",
         );
+
+        let (cond, cond_params) = keyset.condition(paginator.cursor(), 1);
+        let (where_clause, params) = if cond.is_empty() {
+            (String::new(), Vec::<Value>::new())
+        } else {
+            (format!(" WHERE {cond}"), cond_params)
+        };
+
+        let sql = format!(
+            "SELECT * FROM ({inner}){where_clause} ORDER BY {order} LIMIT {limit}",
+            order = keyset.order_by(),
+            limit = paginator.fetch_limit(),
+        );
+
         let mut rows = self
             .connection
-            .query(SQL_LIST_BOOTS, params_from_iter(Vec::<Value>::new()))
+            .query(&sql, params_from_iter(params))
             .await
             .map_err(StorageError::from_turso)?;
         let mut boots = Vec::new();
@@ -598,7 +626,9 @@ impl LogRepository {
                 event_count: get(&row, 3)?,
             });
         }
-        Ok(boots)
+        Ok(paginator.finish(boots, |boot| {
+            (CursorValue::Int(boot.first_seen.as_microsecond()), 0)
+        }))
     }
 }
 

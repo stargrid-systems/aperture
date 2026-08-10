@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use aperture_auth::{Action, AuthenticatedActor, Object};
-use aperture_storage::TaskId;
+use aperture_storage::{CursorValue, Order, Page as StoragePage, TaskId};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -174,11 +174,8 @@ async fn list_definitions(
         .map(TaskDefinitionResponse::from)
         .collect();
     descriptors.sort_by(|a, b| a.kind.cmp(&b.kind));
-    let page = aperture_storage::Page::paginate(
-        &descriptors,
-        &params.to_query(),
-        aperture_storage::Order::Asc,
-        |d| aperture_storage::CursorValue::Text(d.kind.clone()),
-    )?;
+    let page = StoragePage::paginate(&descriptors, &params.to_query(), Order::Asc, |d| {
+        CursorValue::Text(d.kind.clone())
+    })?;
     Ok(Json(Page::from_storage(page, |x| x)))
 }
