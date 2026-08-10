@@ -10,6 +10,7 @@ use aperture_http::{
     SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
+use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
 use tokio::{fs, signal};
@@ -83,6 +84,10 @@ pub async fn serve(
     register_kinds(&mut registry, artifacts.clone());
     let tasks = Tasks::new(storage.tasks()?, registry);
 
+    let mut setting_registry = SettingRegistry::new();
+    register_settings(&mut setting_registry);
+    let settings = Settings::new(storage.settings()?, setting_registry);
+
     let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
     let spectra = Spectra::new(
@@ -103,6 +108,7 @@ pub async fn serve(
         storage.clone(),
         spectra.clone(),
         tasks.clone(),
+        settings,
         auth,
     );
     let app = aperture_http::app(state);
@@ -161,6 +167,9 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
     registry.register(DownloadDefinition::new(artifacts.clone()));
     registry.register(RotateCertificateDefinition::new(artifacts));
 }
+
+/// Registers every setting scope the gateway supports.
+const fn register_settings(_registry: &mut SettingRegistry) {}
 
 /// Resets the password for `username` and prints the new password to stdout.
 ///

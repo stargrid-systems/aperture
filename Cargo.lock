@@ -134,6 +134,7 @@ dependencies = [
  "aperture-auth",
  "aperture-http",
  "aperture-runtime",
+ "aperture-settings",
  "aperture-storage",
  "aperture-tasks",
  "clap",
@@ -196,6 +197,7 @@ dependencies = [
  "aperture-artifacts",
  "aperture-auth",
  "aperture-runtime",
+ "aperture-settings",
  "aperture-storage",
  "aperture-tasks",
  "arc-swap",
@@ -236,6 +238,20 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "aperture-settings"
+version = "0.1.0"
+dependencies = [
+ "aperture-storage",
+ "jiff",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "utoipa",
 ]
 
 [[package]]

@@ -3,6 +3,7 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
+use aperture_settings::Settings;
 use aperture_storage::{ApiKeyId, Storage, UserId};
 use aperture_tasks::{TaskDescriptor, Tasks};
 use axum::middleware::from_fn_with_state;
@@ -40,6 +41,7 @@ pub struct AppState {
     storage: Storage,
     spectra: Spectra,
     tasks: Tasks,
+    settings: Settings,
     auth: aperture_auth::AuthHandle,
     login_limiter: aperture_auth::LoginLimiter,
 }
@@ -51,6 +53,7 @@ impl AppState {
         storage: Storage,
         spectra: Spectra,
         tasks: Tasks,
+        settings: Settings,
         auth: aperture_auth::AuthHandle,
     ) -> Self {
         Self {
@@ -59,6 +62,7 @@ impl AppState {
             storage,
             spectra,
             tasks,
+            settings,
             auth,
             login_limiter: aperture_auth::LoginLimiter::default(),
         }
@@ -82,6 +86,10 @@ impl AppState {
 
     pub(crate) const fn tasks(&self) -> &Tasks {
         &self.tasks
+    }
+
+    pub(crate) const fn settings(&self) -> &Settings {
+        &self.settings
     }
 
     pub(crate) const fn auth(&self) -> &aperture_auth::AuthHandle {

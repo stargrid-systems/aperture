@@ -112,3 +112,12 @@ pub const CREATE_API_KEY: &str = "createApiKey";
 
 /// `DELETE /api/v1/api-keys/{id}`
 pub const DELETE_API_KEY: &str = "deleteApiKey";
+
+/// `GET /api/v1/settings`
+pub const LIST_SETTINGS: &str = "listSettings";
+
+/// `GET /api/v1/settings/{scope}`
+pub const GET_SETTING: &str = "getSetting";
+
+/// `PUT /api/v1/settings/{scope}`
+pub const UPDATE_SETTING: &str = "updateSetting";

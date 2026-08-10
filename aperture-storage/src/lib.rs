@@ -26,6 +26,7 @@ pub use self::media_type::{InvalidMediaType, MediaType};
 pub use self::page::{ListQuery, Order, Page};
 pub use self::policy::{PolicyRule, PolicyRuleRepository, PolicyType};
 pub use self::secret::{ApiKeyHash, PasswordHash, TokenHash};
+pub use self::setting::{SettingRecord, SettingRepository};
 pub use self::session::{Session, SessionId, SessionRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskId,
@@ -55,6 +56,7 @@ mod query;
 mod secret;
 mod serde_util;
 mod session;
+mod setting;
 mod sql;
 mod task;
 mod task_schedule;
@@ -135,6 +137,15 @@ impl Storage {
     /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn task_schedules(&self) -> Result<TaskScheduleRepository> {
         Ok(TaskScheduleRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the `settings` table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
+    pub fn settings(&self) -> Result<SettingRepository> {
+        Ok(SettingRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the structured log tables.

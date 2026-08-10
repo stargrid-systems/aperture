@@ -11,6 +11,7 @@ mod artifacts;
 mod auth;
 mod logs;
 pub mod operation_ids;
+mod settings;
 mod task_schedules;
 mod tasks;
 mod users;
@@ -24,6 +25,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .nest("/task-definitions", tasks::definitions_router())
         .nest("/task-schedules", task_schedules::router())
         .nest("/logs", logs::router())
+        .nest("/settings", settings::router())
         .nest("/users", users::router())
         .nest("/api-keys", api_keys::router())
 }

@@ -8,7 +8,7 @@ use serde_json::Map;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::dto::{JsonQueryString, OrderParam, Page, deserialize_single_or_vec_string};
+use crate::dto::{deserialize_single_or_vec_string, JsonQueryString, OrderParam, Page};
 
 /// Severity level of a log event or span.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
