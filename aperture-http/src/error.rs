@@ -84,7 +84,7 @@ impl From<SettingError> for ApiError {
     fn from(err: SettingError) -> Self {
         let status = match &err {
             SettingError::NotRegistered(_) => StatusCode::NOT_FOUND,
-            SettingError::Invalid(_) | SettingError::Decode(_) => StatusCode::BAD_REQUEST,
+            SettingError::Decode(_) => StatusCode::BAD_REQUEST,
             SettingError::Storage(_) | SettingError::Encode(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {

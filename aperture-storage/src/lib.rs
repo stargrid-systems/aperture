@@ -26,8 +26,8 @@ pub use self::media_type::{InvalidMediaType, MediaType};
 pub use self::page::{ListQuery, Order, Page};
 pub use self::policy::{PolicyRule, PolicyRuleRepository, PolicyType};
 pub use self::secret::{ApiKeyHash, PasswordHash, TokenHash};
-pub use self::setting::{SettingRecord, SettingRepository};
 pub use self::session::{Session, SessionId, SessionRepository};
+pub use self::setting::{SettingRecord, SettingRepository};
 pub use self::task::{
     InvalidJsonPath, JsonField, JsonFilter, JsonPath, ParentFilter, StatusFilter, TaskId,
     TaskInvocation, TaskRepository, TaskStatus,

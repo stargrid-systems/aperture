@@ -115,8 +115,8 @@ const TABLES: &str = sql!(
     CREATE INDEX idx_task_schedules_next_run ON task_schedules (next_run_at) WHERE enabled = TRUE;
 
     CREATE TABLE settings (
-        scope TEXT PRIMARY KEY,
-        data jsonb NOT NULL,
+        key TEXT PRIMARY KEY,
+        value jsonb NOT NULL,
         updated_at timestamp_us NOT NULL,
         updated_by INTEGER NOT NULL REFERENCES actors (id)
     ) STRICT;

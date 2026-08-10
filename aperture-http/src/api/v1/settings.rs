@@ -16,7 +16,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_setting, update_setting))
 }
 
-/// Lists every setting scope with its current value.
+/// Lists every setting key with its current value.
 #[utoipa::path(
     get,
     path = "",
@@ -39,47 +39,47 @@ async fn list_settings(
     Ok(Json(response))
 }
 
-/// Returns the value of one setting scope.
+/// Returns the value of one setting key.
 #[utoipa::path(
     get,
-    path = "/{scope}",
+    path = "/{key}",
     operation_id = operation_ids::GET_SETTING,
-    params(("scope" = String, Path, description = "Setting scope")),
+    params(("key" = String, Path, description = "Setting key")),
     responses(
         (status = 200, description = "Setting value", body = SettingResponse),
-        (status = 404, description = "Unknown setting scope"),
+        (status = 404, description = "Unknown setting key"),
     ),
 )]
 async fn get_setting(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(scope): Path<String>,
+    Path(key): Path<String>,
 ) -> Result<Json<SettingResponse>, ApiError> {
     state
         .auth()
         .require(&auth.subject, Object::Setting, Action::Read)
         .await?;
-    let value = state.settings().get_value(&scope).await?;
-    Ok(Json(SettingResponse { key: scope, value }))
+    let value = state.settings().get_value(&key).await?;
+    Ok(Json(SettingResponse { key, value }))
 }
 
-/// Replaces the value of one setting scope.
+/// Replaces the value of one setting key.
 #[utoipa::path(
     put,
-    path = "/{scope}",
+    path = "/{key}",
     operation_id = operation_ids::UPDATE_SETTING,
-    params(("scope" = String, Path, description = "Setting scope")),
+    params(("key" = String, Path, description = "Setting key")),
     request_body = UpdateSettingRequest,
     responses(
         (status = 200, description = "Setting updated", body = SettingResponse),
         (status = 400, description = "Invalid value"),
-        (status = 404, description = "Unknown setting scope"),
+        (status = 404, description = "Unknown setting key"),
     ),
 )]
 async fn update_setting(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-    Path(scope): Path<String>,
+    Path(key): Path<String>,
     Json(request): Json<UpdateSettingRequest>,
 ) -> Result<Json<SettingResponse>, ApiError> {
     state
@@ -88,8 +88,8 @@ async fn update_setting(
         .await?;
     state
         .settings()
-        .set_value(&scope, request.value, auth.actor.id)
+        .set_value(&key, request.value, auth.actor.id)
         .await?;
-    let value: Value = state.settings().get_value(&scope).await?;
-    Ok(Json(SettingResponse { key: scope, value }))
+    let value: Value = state.settings().get_value(&key).await?;
+    Ok(Json(SettingResponse { key, value }))
 }

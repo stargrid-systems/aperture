@@ -1,6 +1,6 @@
-//! Settings store: one JSON blob per scope.
+//! Settings store: one JSON blob per setting key.
 //!
-//! Each row holds the serialized value for one setting scope. The shape of
+//! Each row holds the serialized value for one setting key. The shape of
 //! that value is opaque here. The settings layer owns the typed definition,
 //! validation, and (de)serialization, so storage stays a plain key-value
 //! record.
@@ -15,26 +15,22 @@ use crate::macros::sql;
 use crate::sql::{Columns, ToSql};
 
 mod col {
-    pub const DATA: &str = "data";
-    pub const SCOPE: &str = "scope";
+    pub const KEY: &str = "key";
     pub const UPDATED_AT: &str = "updated_at";
     pub const UPDATED_BY: &str = "updated_by";
+    pub const VALUE: &str = "value";
 }
 
-const SETTING_COLUMNS: Columns = Columns::new(&[
-    col::SCOPE,
-    col::DATA,
-    col::UPDATED_AT,
-    col::UPDATED_BY,
-]);
+const SETTING_COLUMNS: Columns =
+    Columns::new(&[col::KEY, col::VALUE, col::UPDATED_AT, col::UPDATED_BY]);
 
-/// One stored setting value, including its scope key and audit metadata.
+/// One stored setting value, including its key and audit metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingRecord {
-    /// The scope this value belongs to.
-    pub scope: String,
+    /// The setting key.
+    pub key: String,
     /// The serialized value.
-    pub data: Value,
+    pub value: Value,
     /// When the value was last written.
     pub updated_at: Timestamp,
     /// The actor that last wrote the value.
@@ -51,20 +47,20 @@ impl SettingRepository {
         Self { connection }
     }
 
-    /// Returns the stored value for `scope`, if one has been written.
+    /// Returns the stored value for `key`, if one has been written.
     ///
     /// # Errors
     ///
     /// Returns `StorageError` if the query fails or the row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn get(&self, scope: &str) -> Result<Option<SettingRecord>> {
+    pub async fn get(&self, key: &str) -> Result<Option<SettingRecord>> {
         let sql = format!(
-            sql!(SELECT {cols} FROM settings WHERE scope = ?1),
+            sql!(SELECT {cols} FROM settings WHERE key = ?1),
             cols = SETTING_COLUMNS
         );
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter([scope.to_sql()]))
+            .query(&sql, params_from_iter([key.to_sql()]))
             .await
             .map_err(StorageError::from_turso)?;
         match rows.next().await.map_err(StorageError::from_turso)? {
@@ -73,32 +69,32 @@ impl SettingRepository {
         }
     }
 
-    /// Stores `data` for `scope`, replacing any existing value (upsert).
+    /// Stores `value` for `key`, replacing any existing value (upsert).
     ///
     /// # Errors
     ///
     /// Returns `StorageError::Database` if the write fails.
-    #[tracing::instrument(level = "info", skip(self, data))]
+    #[tracing::instrument(level = "info", skip(self, value))]
     pub async fn put(
         &self,
-        scope: &str,
-        data: &Value,
+        key: &str,
+        value: &Value,
         updated_by: ActorId,
         updated_at: Timestamp,
     ) -> Result<()> {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO settings (scope, data, updated_at, updated_by)
+                    INSERT INTO settings (key, value, updated_at, updated_by)
                     VALUES (?1, ?2, ?3, ?4)
-                    ON CONFLICT (scope) DO UPDATE SET
-                        data = excluded.data,
+                    ON CONFLICT (key) DO UPDATE SET
+                        value = excluded.value,
                         updated_at = excluded.updated_at,
                         updated_by = excluded.updated_by
                 ),
                 params_from_iter([
-                    scope.to_sql(),
-                    data.to_sql(),
+                    key.to_sql(),
+                    value.to_sql(),
                     updated_at.to_sql(),
                     updated_by.to_sql(),
                 ]),
@@ -108,7 +104,7 @@ impl SettingRepository {
         Ok(())
     }
 
-    /// Returns every stored setting, ordered by scope.
+    /// Returns every stored setting, ordered by key.
     ///
     /// # Errors
     ///
@@ -116,7 +112,7 @@ impl SettingRepository {
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn list(&self) -> Result<Vec<SettingRecord>> {
         let sql = format!(
-            sql!(SELECT {cols} FROM settings ORDER BY scope),
+            sql!(SELECT {cols} FROM settings ORDER BY key),
             cols = SETTING_COLUMNS
         );
         let mut rows = self
@@ -137,8 +133,8 @@ impl TryFrom<&Row> for SettingRecord {
 
     fn try_from(row: &Row) -> Result<Self> {
         Ok(Self {
-            scope: SETTING_COLUMNS.extract(row, col::SCOPE)?,
-            data: SETTING_COLUMNS.extract(row, col::DATA)?,
+            key: SETTING_COLUMNS.extract(row, col::KEY)?,
+            value: SETTING_COLUMNS.extract(row, col::VALUE)?,
             updated_at: SETTING_COLUMNS.extract(row, col::UPDATED_AT)?,
             updated_by: SETTING_COLUMNS.extract(row, col::UPDATED_BY)?,
         })

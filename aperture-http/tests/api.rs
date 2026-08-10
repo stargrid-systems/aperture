@@ -82,7 +82,15 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     auth.assign_role(&subject, Role::Admin).await.unwrap();
 
     let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
-    let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks, settings, auth);
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        spectra,
+        tasks,
+        settings,
+        auth,
+    );
     (app(state), artifacts, storage, raw_key.as_str().to_owned())
 }
 
@@ -797,7 +805,15 @@ async fn app_with_role(role: Role) -> (Router, String) {
     auth.assign_role(&subject, role).await.unwrap();
 
     let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
-    let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks, settings, auth);
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        spectra,
+        tasks,
+        settings,
+        auth,
+    );
     (app(state), raw_key.as_str().to_owned())
 }
 

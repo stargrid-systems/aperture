@@ -7,7 +7,7 @@ fn at(micros: i64) -> Timestamp {
 }
 
 #[tokio::test]
-async fn get_returns_none_for_missing_scope() {
+async fn get_returns_none_for_missing_key() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.settings().unwrap();
 
@@ -29,8 +29,8 @@ async fn put_then_get_round_trips_value() {
     .unwrap();
 
     let record = repo.get("system").await.unwrap().unwrap();
-    assert_eq!(record.scope, "system");
-    assert_eq!(record.data, json!({"hostname": "aperture"}));
+    assert_eq!(record.key, "system");
+    assert_eq!(record.value, json!({"hostname": "aperture"}));
     assert_eq!(record.updated_at, at(1_000));
     assert_eq!(record.updated_by, ActorId::SYSTEM);
 }
@@ -40,9 +40,14 @@ async fn put_replaces_existing_value() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.settings().unwrap();
 
-    repo.put("system", &json!({"hostname": "old"}), ActorId::SYSTEM, at(1_000))
-        .await
-        .unwrap();
+    repo.put(
+        "system",
+        &json!({"hostname": "old"}),
+        ActorId::SYSTEM,
+        at(1_000),
+    )
+    .await
+    .unwrap();
     repo.put(
         "system",
         &json!({"hostname": "new"}),
@@ -53,13 +58,13 @@ async fn put_replaces_existing_value() {
     .unwrap();
 
     let record = repo.get("system").await.unwrap().unwrap();
-    assert_eq!(record.data, json!({"hostname": "new"}));
+    assert_eq!(record.value, json!({"hostname": "new"}));
     assert_eq!(record.updated_at, at(2_000));
     assert_eq!(record.updated_by, ActorId::from(42));
 }
 
 #[tokio::test]
-async fn list_returns_all_scopes_ordered() {
+async fn list_returns_all_keys_ordered() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.settings().unwrap();
 
@@ -73,7 +78,13 @@ async fn list_returns_all_scopes_ordered() {
         .await
         .unwrap();
 
-    let records: Vec<String> = repo.list().await.unwrap().into_iter().map(|r| r.scope).collect();
+    let records: Vec<String> = repo
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.key)
+        .collect();
     assert_eq!(records, vec!["alpha", "mid", "zeta"]);
 }
 

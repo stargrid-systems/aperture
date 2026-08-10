@@ -1,6 +1,6 @@
-//! [`Settings`]: reads and writes scoped configuration values.
+//! [`Settings`]: reads and writes keyed configuration values.
 //!
-//! Each scope is a [`SettingDefinition`] registered in a
+//! Each key is a [`SettingDefinition`] registered in a
 //! [`SettingRegistry`]. Values are persisted as JSON in the storage catalog.
 //! Reads fill from the definition default when no value has been stored, so a
 //! fresh install always returns a complete configuration.
@@ -28,7 +28,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Creates a settings service backed by `repo` and the scopes in
+    /// Creates a settings service backed by `repo` and the keys in
     /// `registry`.
     pub fn new(repo: SettingRepository, registry: SettingRegistry) -> Self {
         Self {
@@ -36,7 +36,7 @@ impl Settings {
         }
     }
 
-    /// The registry of scopes, for projecting schemas.
+    /// The registry of keys, for projecting schemas.
     pub fn registry(&self) -> &SettingRegistry {
         &self.inner.registry
     }
@@ -55,17 +55,17 @@ impl Settings {
             .get(key)
             .ok_or_else(|| SettingError::NotRegistered(key.to_owned()))?;
         match self.inner.repo.get(key).await? {
-            Some(record) => Ok(record.data),
+            Some(record) => Ok(record.value),
             None => Ok(definition.default_value()),
         }
     }
 
-    /// Returns the typed value for the scope `D`, filling from the definition
+    /// Returns the typed value for the key `D`, filling from the definition
     /// default when no value has been stored.
     ///
     /// # Errors
     ///
-    /// Returns `SettingError::NotRegistered` if the scope is unknown,
+    /// Returns `SettingError::NotRegistered` if the key is unknown,
     /// `SettingError::Decode` if the stored value cannot be decoded, or a
     /// storage error if the read fails.
     pub async fn get<D>(&self) -> Result<D::Value, SettingError>
@@ -76,13 +76,13 @@ impl Settings {
         serde_json::from_value(value).map_err(SettingError::Decode)
     }
 
-    /// Validates and stores `value` for `key`, recording `updated_by` as the
-    /// actor that wrote it.
+    /// Stores `value` for `key`, recording `updated_by` as the actor that
+    /// wrote it. The value must deserialize into the key's value type.
     ///
     /// # Errors
     ///
     /// Returns `SettingError::NotRegistered` if `key` is unknown,
-    /// `SettingError::Invalid` if validation rejects the value, or a storage
+    /// `SettingError::Decode` if the value does not fit the type, or a storage
     /// error if the write fails.
     pub async fn set_value(
         &self,
@@ -95,23 +95,23 @@ impl Settings {
             .registry
             .get(key)
             .ok_or_else(|| SettingError::NotRegistered(key.to_owned()))?;
-        definition.validate(&value)?;
+        definition.check_value(&value)?;
         let now = Timestamp::now();
         self.inner.repo.put(key, &value, updated_by, now).await?;
         Ok(())
     }
 
-    /// Returns every registered scope with its current value (or default).
-    /// Ordered by scope key.
+    /// Returns every registered key with its current value (or default).
+    /// Ordered by key.
     ///
     /// # Errors
     ///
     /// Returns a storage error if any read fails.
     pub async fn list(&self) -> Result<Vec<(String, Value)>, SettingError> {
-        let mut scopes: Vec<&'static str> = self.inner.registry.keys();
-        scopes.sort_unstable();
-        let mut result = Vec::with_capacity(scopes.len());
-        for key in scopes {
+        let mut keys: Vec<&'static str> = self.inner.registry.keys().collect();
+        keys.sort_unstable();
+        let mut result = Vec::with_capacity(keys.len());
+        for key in keys {
             let value = self.get_value(key).await?;
             result.push((key.to_owned(), value));
         }
