@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  open-pr:
+    name: Open release PR
+    if: |
+      github.event_name == 'push' &&
+      !startsWith(github.event.head_commit.message, 'release:')
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Open release PR
+        uses: stargrid-systems/calver-release@1c45aa1ec6ea7a659798dadbf33ac260c63cc350 # v2.0.0
+        with:
+          version-file: Cargo.toml
+
+  tag:
+    name: Tag release
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+      - name: Create release
+        uses: stargrid-systems/calver-release@1c45aa1ec6ea7a659798dadbf33ac260c63cc350 # v2.0.0
+        with:
+          version-file: Cargo.toml
+          mode: tag
