@@ -131,7 +131,7 @@ pub struct SimpleListParams {
 }
 
 impl SimpleListParams {
-    /// Converts these params into a storage [`ListQuery`].
+    /// Converts these params into a storage `ListQuery`.
     pub fn to_query(&self) -> aperture_artifacts::ListQuery {
         aperture_artifacts::ListQuery {
             limit: self.limit,
