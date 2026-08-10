@@ -263,6 +263,16 @@ impl Paginator {
         self.cursor.as_ref()
     }
 
+    /// The sort order the caller should provide items in.
+    pub const fn base_order(&self) -> Order {
+        self.base_order
+    }
+
+    /// Whether the cursor requests a backward (previous-page) fetch.
+    pub const fn is_backward(&self) -> bool {
+        matches!(self.step, Step::Before)
+    }
+
     /// The order to run the query in. Backward paging queries in the flipped
     /// order, then [`Paginator::finish`] reverses the rows back to base order.
     pub const fn query_order(&self) -> Order {
@@ -336,43 +346,60 @@ impl Paginator {
     }
 }
 
-/// Paginates an in-memory collection with the same cursor format as SQL
-/// queries. Each item's sort position is determined by `key_of`. The sort key
-/// must be unique per item so no tiebreaker is needed.
-///
-/// # Errors
-///
-/// Returns `StorageError::InvalidCursor` if the cursor in `query` is invalid.
-pub fn paginate<T>(
-    mut items: Vec<T>,
-    query: &ListQuery,
-    default_order: Order,
-    key_of: impl Fn(&T) -> CursorValue,
-) -> Result<Page<T>> {
-    let paginator = Paginator::new(query, default_order)?;
-    let order = paginator.query_order();
-    let key_of = &key_of;
+impl<T: Clone> Page<T> {
+    /// Extracts a page from a pre-sorted slice using the same cursor format as
+    /// SQL queries.
+    ///
+    /// `items` must be sorted by `key_of` in the order the caller wants to
+    /// present (ascending or descending, as determined by `query.order` or
+    /// `default_order`). The sort key must be unique per item so no tiebreaker
+    /// is needed.
+    ///
+    /// Only the page window is copied; the rest of the slice is untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::InvalidCursor` if the cursor in `query` is
+    /// invalid.
+    pub fn paginate(
+        items: &[T],
+        query: &ListQuery,
+        default_order: Order,
+        key_of: impl Fn(&T) -> CursorValue,
+    ) -> Result<Self> {
+        let paginator = Paginator::new(query, default_order)?;
+        let base_order = paginator.base_order();
+        let limit = paginator.fetch_limit() as usize;
 
-    items.sort_by(|a, b| {
-        let cmp = key_of(a).cmp(&key_of(b));
-        match order {
-            Order::Asc => cmp,
-            Order::Desc => cmp.reverse(),
-        }
-    });
+        let page_items: Vec<T> = match paginator.cursor() {
+            None => items[..limit.min(items.len())].to_vec(),
+            Some(cursor) => {
+                let cv = cursor.value();
+                let (start, end, reverse) = if paginator.is_backward() {
+                    let idx = match base_order {
+                        Order::Asc => items.partition_point(|item| &key_of(item) < cv),
+                        Order::Desc => items.partition_point(|item| &key_of(item) > cv),
+                    };
+                    let start = idx.saturating_sub(limit);
+                    (start, idx, true)
+                } else {
+                    let idx = match base_order {
+                        Order::Asc => items.partition_point(|item| &key_of(item) <= cv),
+                        Order::Desc => items.partition_point(|item| &key_of(item) >= cv),
+                    };
+                    (idx, (idx + limit).min(items.len()), false)
+                };
 
-    if let Some(cursor) = paginator.cursor() {
-        let cv = cursor.value();
-        match order {
-            Order::Asc => items.retain(|item| &key_of(item) > cv),
-            Order::Desc => items.retain(|item| &key_of(item) < cv),
-        }
+                let mut window = items[start..end].to_vec();
+                if reverse {
+                    window.reverse();
+                }
+                window
+            }
+        };
+
+        Ok(paginator.finish(page_items, |item| (key_of(item), 0)))
     }
-
-    let limit = paginator.fetch_limit() as usize;
-    items.truncate(limit);
-
-    Ok(paginator.finish(items, |item| (key_of(item), 0)))
 }
 
 fn to_hex(bytes: &[u8]) -> String {

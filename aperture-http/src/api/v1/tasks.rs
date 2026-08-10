@@ -166,15 +166,25 @@ async fn list_definitions(
         .auth()
         .require(&auth.subject, Object::TaskDefinition, Action::Read)
         .await?;
-    let descriptors: Vec<_> = state
+    let mut descriptors: Vec<_> = state
         .tasks()
         .registry()
         .descriptors()
         .into_iter()
         .map(TaskDefinitionResponse::from)
         .collect();
-    let page = aperture_storage::paginate(
-        descriptors,
+    let order = params
+        .order
+        .map_or(aperture_storage::Order::Asc, Into::into);
+    descriptors.sort_by(|a, b| {
+        let cmp = a.kind.cmp(&b.kind);
+        match order {
+            aperture_storage::Order::Asc => cmp,
+            aperture_storage::Order::Desc => cmp.reverse(),
+        }
+    });
+    let page = aperture_storage::Page::paginate(
+        &descriptors,
         &params.to_query(),
         aperture_storage::Order::Asc,
         |d| aperture_storage::CursorValue::Text(d.kind.clone()),

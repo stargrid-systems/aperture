@@ -1,7 +1,5 @@
 use aperture_auth::{Action, AuthenticatedActor, Object};
-use aperture_storage::{
-    CursorValue, EventFilter, Order, SpanFilter, SpanId, SpanParentFilter, paginate,
-};
+use aperture_storage::{CursorValue, EventFilter, Order, SpanFilter, SpanId, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -79,10 +77,21 @@ async fn list_log_targets(
         .require(&auth.subject, Object::Log, Action::Read)
         .await?;
     let logs = state.storage().logs()?;
-    let targets = logs.list_targets(params.q.as_deref()).await?;
-    let page = paginate(targets, &params.to_query(), Order::Asc, |t: &String| {
-        CursorValue::Text(t.clone())
-    })?;
+    let mut targets = logs.list_targets(params.q.as_deref()).await?;
+    let order = params.order.map_or(Order::Asc, Into::into);
+    targets.sort_by(|a, b| {
+        let cmp = a.cmp(b);
+        match order {
+            Order::Asc => cmp,
+            Order::Desc => cmp.reverse(),
+        }
+    });
+    let page = aperture_storage::Page::paginate(
+        &targets,
+        &params.to_query(),
+        Order::Asc,
+        |t: &String| CursorValue::Text(t.clone()),
+    )?;
     Ok(Json(Page::from_storage(page, |x| x)))
 }
 
@@ -105,9 +114,20 @@ async fn list_log_boots(
         .await?;
     let logs = state.storage().logs()?;
     let boots = logs.list_boots().await?;
-    let responses = BootResponse::from_boots(boots, state.boot_id());
-    let page = paginate(
-        responses,
+    let mut responses = BootResponse::from_boots(boots, state.boot_id());
+    let order = params.order.map_or(Order::Desc, Into::into);
+    responses.sort_by(|a, b| {
+        let cmp = a
+            .first_seen
+            .as_microsecond()
+            .cmp(&b.first_seen.as_microsecond());
+        match order {
+            Order::Asc => cmp,
+            Order::Desc => cmp.reverse(),
+        }
+    });
+    let page = aperture_storage::Page::paginate(
+        &responses,
         &params.to_query(),
         Order::Desc,
         |b: &BootResponse| CursorValue::Int(b.first_seen.as_microsecond()),

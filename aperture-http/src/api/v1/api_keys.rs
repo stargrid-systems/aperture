@@ -1,5 +1,5 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, RawApiKey, Role};
-use aperture_storage::{ApiKeyId, CursorValue, Order, paginate};
+use aperture_storage::{ApiKeyId, CursorValue, Order};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -20,7 +20,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(delete_api_key))
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ApiKeyResponse {
     id: ApiKeyId,
     name: String,
@@ -62,7 +62,7 @@ async fn list_api_keys(
         .api_keys()?
         .list_for_actor(auth.actor.id)
         .await?;
-    let responses: Vec<_> = keys
+    let mut responses: Vec<_> = keys
         .into_iter()
         .map(|k| ApiKeyResponse {
             id: k.id,
@@ -71,9 +71,18 @@ async fn list_api_keys(
             last_used_at: k.last_used_at,
         })
         .collect();
-    let page = paginate(responses, &params.to_query(), Order::Desc, |k| {
-        CursorValue::Int(k.id.get())
-    })?;
+    let order = params.order.map_or(Order::Desc, Into::into);
+    responses.sort_by(|a, b| {
+        let cmp = a.id.get().cmp(&b.id.get());
+        match order {
+            Order::Asc => cmp,
+            Order::Desc => cmp.reverse(),
+        }
+    });
+    let page =
+        aperture_storage::Page::paginate(&responses, &params.to_query(), Order::Desc, |k| {
+            CursorValue::Int(k.id.get())
+        })?;
     Ok(Json(Page::from_storage(page, |x| x)))
 }
 

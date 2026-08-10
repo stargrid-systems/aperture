@@ -1,5 +1,5 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, Password, Role, Username};
-use aperture_storage::{ActorId, CursorValue, Order, UserId, paginate};
+use aperture_storage::{ActorId, CursorValue, Order, UserId};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -20,7 +20,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(delete_user))
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct UserResponse {
     id: UserId,
     actor_id: ActorId,
@@ -63,14 +63,22 @@ async fn list_users(
         .auth()
         .require(&auth.subject, Object::User, Action::Read)
         .await?;
-    let users: Vec<_> = state
+    let mut users: Vec<_> = state
         .auth()
         .list_users()
         .await?
         .into_iter()
         .map(UserResponse::from)
         .collect();
-    let page = paginate(users, &params.to_query(), Order::Asc, |u| {
+    let order = params.order.map_or(Order::Asc, Into::into);
+    users.sort_by(|a, b| {
+        let cmp = a.id.get().cmp(&b.id.get());
+        match order {
+            Order::Asc => cmp,
+            Order::Desc => cmp.reverse(),
+        }
+    });
+    let page = aperture_storage::Page::paginate(&users, &params.to_query(), Order::Asc, |u| {
         CursorValue::Int(u.id.get())
     })?;
     Ok(Json(Page::from_storage(page, |x| x)))
