@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 pub use self::artifact::{
@@ -115,6 +115,28 @@ impl From<OrderParam> for aperture_artifacts::Order {
         match order {
             OrderParam::Asc => Self::Asc,
             OrderParam::Desc => Self::Desc,
+        }
+    }
+}
+
+/// Pagination query parameters for endpoints with no extra filters.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[serde(default)]
+#[into_params(parameter_in = Query)]
+pub struct SimpleListParams {
+    #[param(minimum = 1, maximum = 200, default = 50)]
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub order: Option<OrderParam>,
+}
+
+impl SimpleListParams {
+    /// Converts these params into a storage [`ListQuery`].
+    pub fn to_query(&self) -> aperture_artifacts::ListQuery {
+        aperture_artifacts::ListQuery {
+            limit: self.limit,
+            cursor: self.cursor.clone(),
+            order: self.order.map(Into::into),
         }
     }
 }

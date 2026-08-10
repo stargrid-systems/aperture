@@ -1,7 +1,7 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, RawApiKey, Role};
-use aperture_storage::ApiKeyId;
+use aperture_storage::{ApiKeyId, CursorValue, Order, paginate};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::dto::{Page, SimpleListParams};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -48,27 +49,32 @@ pub struct CreateApiKeyRequest {
     get,
     path = "",
     operation_id = operation_ids::LIST_API_KEYS,
-    responses((status = 200, description = "API keys", body = Vec<ApiKeyResponse>)),
+    params(SimpleListParams),
+    responses((status = 200, description = "API keys", body = Page<ApiKeyResponse>)),
 )]
 async fn list_api_keys(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<Vec<ApiKeyResponse>>, ApiError> {
+    Query(params): Query<SimpleListParams>,
+) -> Result<Json<Page<ApiKeyResponse>>, ApiError> {
     let keys = state
         .storage()
         .api_keys()?
         .list_for_actor(auth.actor.id)
         .await?;
-    Ok(Json(
-        keys.into_iter()
-            .map(|k| ApiKeyResponse {
-                id: k.id,
-                name: k.name,
-                prefix: k.prefix,
-                last_used_at: k.last_used_at,
-            })
-            .collect(),
-    ))
+    let responses: Vec<_> = keys
+        .into_iter()
+        .map(|k| ApiKeyResponse {
+            id: k.id,
+            name: k.name,
+            prefix: k.prefix,
+            last_used_at: k.last_used_at,
+        })
+        .collect();
+    let page = paginate(responses, &params.to_query(), Order::Desc, |k| {
+        CursorValue::Int(k.id.get())
+    })?;
+    Ok(Json(Page::from_storage(page, |x| x)))
 }
 
 /// Creates a new API key for the authenticated actor.

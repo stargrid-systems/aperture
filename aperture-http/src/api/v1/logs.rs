@@ -1,5 +1,7 @@
 use aperture_auth::{Action, AuthenticatedActor, Object};
-use aperture_storage::{EventFilter, SpanFilter, SpanId, SpanParentFilter};
+use aperture_storage::{
+    CursorValue, EventFilter, Order, SpanFilter, SpanId, SpanParentFilter, paginate,
+};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -9,7 +11,7 @@ use super::operation_ids;
 use crate::AppState;
 use crate::dto::{
     BootResponse, JsonQueryString, LogEventResponse, LogListParams, LogSpanDetailResponse,
-    LogSpanListParams, LogSpanResponse, LogTargetListParams, Page,
+    LogSpanListParams, LogSpanResponse, LogTargetListParams, Page, SimpleListParams,
 };
 use crate::error::ApiError;
 
@@ -65,20 +67,23 @@ async fn list_logs(
     path = "/targets",
     operation_id = operation_ids::LIST_LOG_TARGETS,
     params(LogTargetListParams),
-    responses((status = 200, description = "Target names", body = Vec<String>)),
+    responses((status = 200, description = "Target names", body = Page<String>)),
 )]
 async fn list_log_targets(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
     Query(params): Query<LogTargetListParams>,
-) -> Result<Json<Vec<String>>, ApiError> {
+) -> Result<Json<Page<String>>, ApiError> {
     state
         .auth()
         .require(&auth.subject, Object::Log, Action::Read)
         .await?;
     let logs = state.storage().logs()?;
     let targets = logs.list_targets(params.q.as_deref()).await?;
-    Ok(Json(targets))
+    let page = paginate(targets, &params.to_query(), Order::Asc, |t: &String| {
+        CursorValue::Text(t.clone())
+    })?;
+    Ok(Json(Page::from_storage(page, |x| x)))
 }
 
 /// Lists distinct boot sessions, newest first.
@@ -86,19 +91,28 @@ async fn list_log_targets(
     get,
     path = "/boots",
     operation_id = operation_ids::LIST_LOG_BOOTS,
-    responses((status = 200, description = "Boot sessions", body = Vec<BootResponse>)),
+    params(SimpleListParams),
+    responses((status = 200, description = "Boot sessions", body = Page<BootResponse>)),
 )]
 async fn list_log_boots(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<Vec<BootResponse>>, ApiError> {
+    Query(params): Query<SimpleListParams>,
+) -> Result<Json<Page<BootResponse>>, ApiError> {
     state
         .auth()
         .require(&auth.subject, Object::Log, Action::Read)
         .await?;
     let logs = state.storage().logs()?;
     let boots = logs.list_boots().await?;
-    Ok(Json(BootResponse::from_boots(boots, state.boot_id())))
+    let responses = BootResponse::from_boots(boots, state.boot_id());
+    let page = paginate(
+        responses,
+        &params.to_query(),
+        Order::Desc,
+        |b: &BootResponse| CursorValue::Int(b.first_seen.as_microsecond()),
+    )?;
+    Ok(Json(Page::from_storage(page, |x| x)))
 }
 
 /// Lists tracing spans with optional filtering.

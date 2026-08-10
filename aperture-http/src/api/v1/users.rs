@@ -1,7 +1,7 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, Password, Role, Username};
-use aperture_storage::{ActorId, UserId};
+use aperture_storage::{ActorId, CursorValue, Order, UserId, paginate};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -10,6 +10,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::dto::{Page, SimpleListParams};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -50,18 +51,29 @@ pub struct CreateUserRequest {
     get,
     path = "",
     operation_id = operation_ids::LIST_USERS,
-    responses((status = 200, description = "Users", body = Vec<UserResponse>)),
+    params(SimpleListParams),
+    responses((status = 200, description = "Users", body = Page<UserResponse>)),
 )]
 async fn list_users(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<Vec<UserResponse>>, ApiError> {
+    Query(params): Query<SimpleListParams>,
+) -> Result<Json<Page<UserResponse>>, ApiError> {
     state
         .auth()
         .require(&auth.subject, Object::User, Action::Read)
         .await?;
-    let users = state.auth().list_users().await?;
-    Ok(Json(users.into_iter().map(UserResponse::from).collect()))
+    let users: Vec<_> = state
+        .auth()
+        .list_users()
+        .await?
+        .into_iter()
+        .map(UserResponse::from)
+        .collect();
+    let page = paginate(users, &params.to_query(), Order::Asc, |u| {
+        CursorValue::Int(u.id.get())
+    })?;
+    Ok(Json(Page::from_storage(page, |x| x)))
 }
 
 /// Creates a new user.

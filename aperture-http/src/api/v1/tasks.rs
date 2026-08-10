@@ -10,7 +10,9 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::dto::{CreateTaskRequest, Page, TaskDefinitionResponse, TaskListParams, TaskResponse};
+use crate::dto::{
+    CreateTaskRequest, Page, SimpleListParams, TaskDefinitionResponse, TaskListParams, TaskResponse,
+};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -152,22 +154,30 @@ async fn cancel_task(
     get,
     path = "",
     operation_id = operation_ids::LIST_TASK_DEFINITIONS,
-    responses((status = 200, description = "Task definitions", body = Vec<TaskDefinitionResponse>)),
+    params(SimpleListParams),
+    responses((status = 200, description = "Task definitions", body = Page<TaskDefinitionResponse>)),
 )]
 async fn list_definitions(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
+    Query(params): Query<SimpleListParams>,
+) -> Result<Json<Page<TaskDefinitionResponse>>, ApiError> {
     state
         .auth()
         .require(&auth.subject, Object::TaskDefinition, Action::Read)
         .await?;
-    let definitions = state
+    let descriptors: Vec<_> = state
         .tasks()
         .registry()
         .descriptors()
         .into_iter()
         .map(TaskDefinitionResponse::from)
         .collect();
-    Ok(Json(definitions))
+    let page = aperture_storage::paginate(
+        descriptors,
+        &params.to_query(),
+        aperture_storage::Order::Asc,
+        |d| aperture_storage::CursorValue::Text(d.kind.clone()),
+    )?;
+    Ok(Json(Page::from_storage(page, |x| x)))
 }

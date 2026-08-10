@@ -272,7 +272,7 @@ async fn lists_task_definitions_with_schemas() {
 
     let (status, json) = get_json(&app, &token, "/api/v1/task-definitions").await;
     assert_eq!(status, StatusCode::OK);
-    let download = json
+    let download = json["items"]
         .as_array()
         .unwrap()
         .iter()

@@ -243,6 +243,20 @@ impl LogSpanListParams {
 pub struct LogTargetListParams {
     /// Only targets starting with this prefix.
     pub q: Option<String>,
+    #[param(minimum = 1, maximum = 200, default = 50)]
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub order: Option<OrderParam>,
+}
+
+impl LogTargetListParams {
+    pub fn to_query(&self) -> ListQuery {
+        ListQuery {
+            limit: self.limit,
+            cursor: self.cursor.clone(),
+            order: self.order.map(Into::into),
+        }
+    }
 }
 
 /// One boot session observed in the log store, returned by
