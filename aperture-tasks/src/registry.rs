@@ -5,9 +5,9 @@
 //! by kind, and the HTTP layer projects [`TaskRegistry::descriptors`] into the
 //! `OpenAPI` document.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use aperture_storage::Registry;
 use utoipa::openapi::{RefOr, Schema};
 
 use crate::definition::{Capabilities, TaskDefinition};
@@ -34,9 +34,7 @@ pub struct TaskDescriptor {
 
 /// A registry of task definitions, keyed by kind.
 #[derive(Default)]
-pub struct TaskRegistry {
-    definitions: HashMap<&'static str, Arc<dyn ErasedDefinition>>,
-}
+pub struct TaskRegistry(Registry<dyn ErasedDefinition>);
 
 impl TaskRegistry {
     /// Creates an empty registry.
@@ -47,12 +45,12 @@ impl TaskRegistry {
     /// Registers `definition` under its [`TaskDefinition::KIND`], replacing any
     /// previously registered definition for that kind.
     pub fn register<T: TaskDefinition>(&mut self, definition: T) {
-        self.definitions.insert(T::KIND, Arc::new(definition));
+        self.0.register(T::KIND, Arc::new(definition));
     }
 
     /// A schema-carrying descriptor per registered kind.
     pub fn descriptors(&self) -> Vec<TaskDescriptor> {
-        self.definitions
+        self.0
             .values()
             .map(|definition| {
                 let mut schemas = Vec::new();
@@ -71,6 +69,6 @@ impl TaskRegistry {
     }
 
     pub(crate) fn get(&self, kind: &str) -> Option<&Arc<dyn ErasedDefinition>> {
-        self.definitions.get(kind)
+        self.0.get(kind)
     }
 }

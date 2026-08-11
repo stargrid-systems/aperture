@@ -25,6 +25,7 @@ pub use self::log::{
 pub use self::media_type::{InvalidMediaType, MediaType};
 pub use self::page::{CursorValue, ListQuery, Order, Page, Paginator};
 pub use self::policy::{PolicyRule, PolicyRuleRepository, PolicyType};
+pub use self::registry::Registry;
 pub use self::secret::{ApiKeyHash, PasswordHash, TokenHash};
 pub use self::session::{Session, SessionId, SessionRepository};
 pub use self::setting::{SettingRecord, SettingRepository};
@@ -53,6 +54,7 @@ mod migration;
 mod page;
 mod policy;
 mod query;
+mod registry;
 mod secret;
 mod serde_util;
 mod session;
