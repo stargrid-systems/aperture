@@ -1,14 +1,14 @@
 //! DTOs for the structured log endpoints.
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{Event, EventId, Level, Span, SpanId};
+use aperture_storage::{Level, LogEvent, LogEventId, Span, SpanId};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use crate::dto::{JsonQueryString, OrderParam, Page, deserialize_single_or_vec_string};
+use crate::dto::{deserialize_single_or_vec_string, JsonQueryString, OrderParam, Page};
 
 /// Severity level of a log event or span.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
@@ -48,8 +48,8 @@ impl From<LevelResponse> for Level {
 /// A single log event, returned by `GET /api/v1/logs`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct LogEventResponse {
-    /// Event id.
-    pub id: EventId,
+    /// `LogEvent` id.
+    pub id: LogEventId,
     /// Span this event belongs to, if any.
     pub span_id: Option<SpanId>,
     /// Severity level.
@@ -70,8 +70,8 @@ pub struct LogEventResponse {
     pub fields: Map<String, serde_json::Value>,
 }
 
-impl From<Event> for LogEventResponse {
-    fn from(event: Event) -> Self {
+impl From<LogEvent> for LogEventResponse {
+    fn from(event: LogEvent) -> Self {
         Self {
             id: event.id,
             span_id: event.span_id,
@@ -89,7 +89,7 @@ impl From<Event> for LogEventResponse {
 
 impl LogEventResponse {
     /// Maps a storage page of events into the response envelope.
-    pub fn page(page: StoragePage<Event>) -> Page<Self> {
+    pub fn page(page: StoragePage<LogEvent>) -> Page<Self> {
         Page::from_storage(page, Self::from)
     }
 }

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use aperture_runtime::{Stop, Worker};
-use aperture_storage::{EventRecord, Level, LogRepository, SpanRecord};
+use aperture_storage::{LogEventRecord, Level, LogRepository, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
@@ -364,7 +364,7 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
                     tx.close_span(s.tracing_id, boot_id, s.ended_at).await?;
                 }
                 Record::Event(e) => {
-                    tx.insert_event(EventRecord {
+                    tx.insert_event(LogEventRecord {
                         span_tracing_id: e.span_tracing_id,
                         level: e.level,
                         target: &e.target,

@@ -19,8 +19,8 @@ pub use self::error::{Result, StorageError};
 pub use self::interval::{Interval, InvalidInterval};
 pub use self::key::{ArtifactKey, InvalidArtifactKey, MAX_LEN as ARTIFACT_KEY_MAX_LEN};
 pub use self::log::{
-    BootInfo, Event, EventFilter, EventId, EventRecord, Level, LogBatch, LogRepository, Span,
-    SpanFilter, SpanId, SpanParentFilter, SpanRecord,
+    BootInfo, Level, LogBatch, LogEvent, LogEventFilter, LogEventId, LogEventRecord, LogRepository,
+    Span, SpanFilter, SpanId, SpanParentFilter, SpanRecord,
 };
 pub use self::media_type::{InvalidMediaType, MediaType};
 pub use self::page::{CursorValue, ListQuery, Order, Page, Paginator};
