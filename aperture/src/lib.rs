@@ -16,10 +16,13 @@ use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
 use tokio::{fs, signal};
 use uuid::Uuid;
 
-use self::os::{bootstrap, register_tasks};
 use self::runtime::TasksWorker;
 
+#[cfg(feature = "os-integration")]
+use self::os::{bootstrap, register};
+
 mod logging;
+#[cfg(feature = "os-integration")]
 mod os;
 mod runtime;
 
@@ -83,17 +86,24 @@ pub async fn serve(
     // Auth: build enforcer and seed default policies.
     let auth = AuthHandle::new(storage.clone()).await?;
 
-    let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts.clone(), tls_addr);
-    let os_reg = register_tasks(os_integration, &mut registry).await?;
-    let tasks = Tasks::new(storage.tasks()?, registry);
-
+    let mut task_registry = TaskRegistry::new();
     #[cfg_attr(not(feature = "os-integration"), expect(unused_mut))]
     let mut setting_registry = SettingRegistry::new();
+
+    register_kinds(&mut task_registry, artifacts.clone(), tls_addr);
+
     #[cfg(feature = "os-integration")]
-    if os_integration {
-        register_settings(&mut setting_registry);
-    }
+    let os_reg = register(
+        os_integration,
+        &mut task_registry,
+        &mut setting_registry,
+    )
+    .await?;
+
+    #[cfg(not(feature = "os-integration"))]
+    let _ = os_integration;
+
+    let tasks = Tasks::new(storage.tasks()?, task_registry);
     let settings = Settings::new(storage.settings()?, setting_registry);
 
     let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
@@ -110,14 +120,18 @@ pub async fn serve(
         install_default_rotation_schedule(&storage).await?;
     }
 
-    let os = bootstrap(
+    #[cfg(feature = "os-integration")]
+    let (hostname, os_worker) = bootstrap(
         os_reg,
-        settings.clone(),
-        tasks.clone(),
+        &settings,
+        &tasks,
         tls_addr,
         plain_addr,
     )
     .await?;
+
+    #[cfg(not(feature = "os-integration"))]
+    let hostname: Option<String> = None;
 
     let state = AppState::new(
         VERSION,
@@ -131,14 +145,18 @@ pub async fn serve(
     let app = aperture_http::app(state);
 
     let server =
-        HttpServer::start(artifacts, tls_addr, plain_addr, os.hostname.as_deref(), app).await?;
+        HttpServer::start(artifacts, tls_addr, plain_addr, hostname.as_deref(), app).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
     supervisor.spawn("log", log_worker);
     supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
-    os.spawn(&mut supervisor);
+
+    #[cfg(feature = "os-integration")]
+    if let Some(worker) = os_worker {
+        supervisor.spawn("os", worker);
+    }
 
     supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())
@@ -204,12 +222,6 @@ fn register_kinds(
             cert_lock,
         ));
     }
-}
-
-/// Registers every setting scope the gateway supports.
-#[cfg(feature = "os-integration")]
-fn register_settings(registry: &mut SettingRegistry) {
-    registry.register(aperture_os::HostnameDef);
 }
 
 /// Resets the password for `username` and prints the new password to stdout.

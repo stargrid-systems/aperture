@@ -1,139 +1,72 @@
-//! OS integration: mDNS publishing, hostname management, and task wiring.
-//!
-//! The module is always compiled. When the `os-integration` Cargo feature is
-//! not enabled, the public functions are no-ops. When enabled but the runtime
-//! flag is off, they return empty results.
+//! OS integration: mDNS publishing and hostname management.
 
 use std::net::SocketAddr;
 
-#[cfg(feature = "os-integration")]
+use aperture_os::Connection;
+use aperture_settings::Settings;
+use aperture_tasks::Tasks;
+
 use self::worker::OsWorker;
 
-#[cfg(feature = "os-integration")]
 mod worker;
 
-/// Holds the D-Bus connection created during task registration.
+/// Holds the D-Bus connection created during registration.
 pub struct OsRegistration {
-    #[cfg(feature = "os-integration")]
-    pub(crate) conn: aperture_os::Connection,
+    conn: Connection,
 }
 
-/// Result of OS integration bootstrap.
-pub struct OsBoot {
-    /// The resolved hostname for TLS SAN provisioning, or `None` when OS
-    /// integration is inactive.
-    pub hostname: Option<String>,
-    #[cfg(feature = "os-integration")]
-    worker: Option<OsWorker>,
-}
-
-#[cfg(not(feature = "os-integration"))]
-pub async fn register_tasks(
-    _os_integration: bool,
-    _registry: &mut aperture_tasks::TaskRegistry,
-) -> anyhow::Result<Option<OsRegistration>> {
-    Ok(None)
-}
-
-#[cfg(feature = "os-integration")]
-pub async fn register_tasks(
+/// Registers OS task and setting definitions when integration is active.
+///
+/// Returns `None` when `os_integration` is false.
+pub async fn register(
     os_integration: bool,
-    registry: &mut aperture_tasks::TaskRegistry,
+    task_registry: &mut aperture_tasks::TaskRegistry,
+    setting_registry: &mut aperture_settings::SettingRegistry,
 ) -> anyhow::Result<Option<OsRegistration>> {
     if !os_integration {
         return Ok(None);
     }
-    let conn = aperture_os::Connection::system()
-        .await
-        .map_err(|e| anyhow::format_err!("failed to connect to system D-Bus: {e}"))?;
-    registry.register(aperture_os::ReadHostnameDefinition::new(conn.clone()));
-    registry.register(aperture_os::ApplyHostnameDefinition::new(conn.clone()));
+    let conn = Connection::system().await?;
+    task_registry.register(aperture_os::ApplyHostnameDefinition::new(conn.clone()));
+    setting_registry.register(aperture_os::HostnameDef);
     Ok(Some(OsRegistration { conn }))
 }
 
-#[cfg(not(feature = "os-integration"))]
-pub async fn bootstrap(
-    _registration: Option<OsRegistration>,
-    _settings: aperture_settings::Settings,
-    _tasks: aperture_tasks::Tasks,
-    _tls_addr: Option<SocketAddr>,
-    _plain_addr: Option<SocketAddr>,
-) -> anyhow::Result<OsBoot> {
-    Ok(OsBoot { hostname: None })
-}
-
-#[cfg(feature = "os-integration")]
+/// Bootstraps OS integration: applies the hostname and creates the worker.
+///
+/// Returns `(None, None)` when integration was not registered.
 pub async fn bootstrap(
     registration: Option<OsRegistration>,
-    settings: aperture_settings::Settings,
-    tasks: aperture_tasks::Tasks,
+    settings: &Settings,
+    tasks: &Tasks,
     tls_addr: Option<SocketAddr>,
     plain_addr: Option<SocketAddr>,
-) -> anyhow::Result<OsBoot> {
+) -> anyhow::Result<(Option<String>, Option<OsWorker>)> {
     let Some(reg) = registration else {
-        return Ok(OsBoot {
-            hostname: None,
-            worker: None,
-        });
+        return Ok((None, None));
     };
 
-    let hostname = resolve_hostname(&settings, &tasks).await?;
+    let hostname: aperture_os::Hostname = settings.get::<aperture_os::HostnameDef>().await?;
+    let hostname_str = hostname.as_str().to_owned();
+
+    let handle = tasks
+        .spawn::<aperture_os::ApplyHostnameDefinition>(
+            aperture_os::ApplyHostnameInput {
+                hostname: hostname_str.clone(),
+            },
+            aperture_storage::ActorId::SYSTEM,
+        )
+        .await?;
+    handle.wait().await?;
+
     let worker = OsWorker::new(
         settings.clone(),
         tasks.clone(),
         reg.conn,
-        hostname.clone(),
+        hostname_str.clone(),
         tls_addr.map(|a| a.port()),
         plain_addr.map(|a| a.port()),
     );
-    Ok(OsBoot {
-        hostname: Some(hostname),
-        worker: Some(worker),
-    })
-}
 
-impl OsBoot {
-    /// Spawns the OS worker into `supervisor` if one was created.
-    pub fn spawn(self, supervisor: &mut aperture_runtime::Supervisor) {
-        #[cfg(feature = "os-integration")]
-        if let Some(worker) = self.worker {
-            supervisor.spawn("os", worker);
-        }
-
-        #[cfg(not(feature = "os-integration"))]
-        {
-            let _ = (self, supervisor);
-        }
-    }
-}
-
-#[cfg(feature = "os-integration")]
-async fn resolve_hostname(
-    settings: &aperture_settings::Settings,
-    tasks: &aperture_tasks::Tasks,
-) -> anyhow::Result<String> {
-    use aperture_storage::ActorId;
-
-    let value: aperture_os::Hostname = settings.get::<aperture_os::HostnameDef>().await?;
-    if let Some(name) = value.as_str() {
-        let handle = tasks
-            .spawn::<aperture_os::ApplyHostnameDefinition>(
-                aperture_os::ApplyHostnameInput {
-                    hostname: name.to_owned(),
-                },
-                ActorId::SYSTEM,
-            )
-            .await?;
-        handle.wait().await?;
-        Ok(name.to_owned())
-    } else {
-        let handle = tasks
-            .spawn::<aperture_os::ReadHostnameDefinition>(
-                aperture_os::ReadHostnameInput {},
-                ActorId::SYSTEM,
-            )
-            .await?;
-        let output = handle.wait().await?;
-        Ok(output.hostname)
-    }
+    Ok((Some(hostname_str), Some(worker)))
 }

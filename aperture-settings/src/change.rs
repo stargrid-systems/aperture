@@ -13,6 +13,8 @@
 
 use serde_json::Value;
 
+use crate::definition::SettingDefinition;
+
 /// A setting was written.
 #[derive(Debug, Clone, PartialEq)]
 #[expect(clippy::derive_partial_eq_without_eq)]
@@ -21,4 +23,20 @@ pub struct SettingChange {
     pub key: String,
     /// The new value.
     pub value: Value,
+}
+
+impl SettingChange {
+    /// Decodes the change as setting `D`. Returns `Ok(None)` if the key does
+    /// not match `D::KEY`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the key matches but the value fails to deserialize.
+    pub fn decode_as<D: SettingDefinition>(&self) -> Result<Option<D::Value>, serde_json::Error> {
+        if self.key == D::KEY {
+            serde_json::from_value(self.value.clone()).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
 }

@@ -1,4 +1,4 @@
-//! The `hostname` setting: runtime hostname configuration.
+//! The `os.hostname` setting: runtime hostname configuration.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -13,64 +13,54 @@ use utoipa::{PartialSchema, ToSchema};
 
 use crate::error::HostnameError;
 
-/// A validated RFC 1123 hostname, or `None` to use the system default.
-///
-/// Construction validates the hostname per RFC 1123: 1-253 characters, labels
-/// of 1-63 alphanumeric or hyphen characters, no leading or trailing hyphens.
-/// An inner value of `None` means "use the OS default hostname."
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub struct Hostname(Option<String>);
+/// A validated RFC 1123 hostname.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Hostname(Box<str>);
 
 impl Hostname {
-    /// Creates a `Hostname` holding `name`, validating it per RFC 1123.
+    /// Creates a `Hostname` after validating `s` per RFC 1123.
     ///
     /// # Errors
     ///
-    /// Returns [`HostnameError`] if `name` fails validation.
-    pub fn new(name: impl Into<String>) -> Result<Self, HostnameError> {
-        let name = name.into();
-        validate(&name)?;
-        Ok(Self(Some(name)))
+    /// Returns [`HostnameError`] if `s` fails validation.
+    pub fn new(s: impl Into<Box<str>>) -> Result<Self, HostnameError> {
+        let s = s.into();
+        if s.is_empty() || s.len() > 253 {
+            return Err(HostnameError::InvalidLength);
+        }
+        for label in s.split('.') {
+            if label.is_empty() {
+                return Err(HostnameError::EmptyLabel);
+            }
+            if label.len() > 63 {
+                return Err(HostnameError::LabelTooLong);
+            }
+            if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return Err(HostnameError::InvalidChars);
+            }
+            if label.starts_with('-') || label.ends_with('-') {
+                return Err(HostnameError::HyphenAtEdge);
+            }
+        }
+        Ok(Self(s))
     }
 
-    /// Creates a `Hostname` representing "use the system default."
-    pub const fn unset() -> Self {
-        Self(None)
-    }
-
-    /// The validated hostname string, or `None` when unset.
-    pub fn as_str(&self) -> Option<&str> {
-        self.0.as_deref()
+    /// The validated hostname string.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-fn validate(s: &str) -> Result<(), HostnameError> {
-    if s.is_empty() || s.len() > 253 {
-        return Err(HostnameError::InvalidLength);
+impl Default for Hostname {
+    fn default() -> Self {
+        // TODO: eventually "aperture-{unique_id}"
+        Self(Box::from("aperture"))
     }
-    for label in s.split('.') {
-        if label.is_empty() {
-            return Err(HostnameError::EmptyLabel);
-        }
-        if label.len() > 63 {
-            return Err(HostnameError::LabelTooLong);
-        }
-        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(HostnameError::InvalidChars);
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            return Err(HostnameError::HyphenAtEdge);
-        }
-    }
-    Ok(())
 }
 
 impl fmt::Display for Hostname {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            Some(name) => f.write_str(name),
-            None => f.write_str("(unset)"),
-        }
+        f.write_str(&self.0)
     }
 }
 
@@ -86,7 +76,7 @@ impl Serialize for Hostname {
     where
         S: serde::Serializer,
     {
-        self.0.serialize(serializer)
+        serializer.serialize_str(&self.0)
     }
 }
 
@@ -95,11 +85,8 @@ impl<'de> Deserialize<'de> for Hostname {
     where
         D: Deserializer<'de>,
     {
-        let opt = Option::<String>::deserialize(deserializer)?;
-        match opt {
-            Some(name) => Self::new(name).map_err(de::Error::custom),
-            None => Ok(Self::unset()),
-        }
+        let s = String::deserialize(deserializer)?;
+        Self::new(s).map_err(de::Error::custom)
     }
 }
 
@@ -107,9 +94,7 @@ impl PartialSchema for Hostname {
     fn schema() -> RefOr<Schema> {
         ObjectBuilder::new()
             .schema_type(Type::String)
-            .description(Some(Cow::Borrowed(
-                "RFC 1123 hostname, or null to use the system default.",
-            )))
+            .description(Some(Cow::Borrowed("RFC 1123 hostname.")))
             .build()
             .into()
     }
@@ -121,14 +106,10 @@ impl ToSchema for Hostname {
     }
 }
 
-/// Setting definition for the `hostname` key.
+/// Setting definition for the `os.hostname` key.
 pub struct HostnameDef;
 
 impl SettingDefinition for HostnameDef {
-    const KEY: &'static str = "hostname";
+    const KEY: &'static str = "os.hostname";
     type Value = Hostname;
-
-    fn default(&self) -> Self::Value {
-        Hostname::unset()
-    }
 }

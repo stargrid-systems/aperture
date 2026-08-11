@@ -3,10 +3,10 @@
 // The zbus proxy macro generates methods that exceed clippy's argument limit.
 #![expect(clippy::too_many_arguments)]
 
-use zbus::Connection;
 use zbus::proxy;
 use zbus::zvariant::OwnedObjectPath;
 
+use crate::Connection;
 use crate::error::OsError;
 
 /// Avahi interface wildcard: any interface.
@@ -88,9 +88,10 @@ impl ServicePublisher {
         hostname: &str,
         services: &[ServiceSpec],
     ) -> Result<Self, OsError> {
-        let server = AvahiServerProxy::new(connection).await?;
+        let zbus = connection.inner();
+        let server = AvahiServerProxy::new(zbus).await?;
         let group_path = server.entry_group_new().await?;
-        let group = AvahiEntryGroupProxy::new(connection, group_path.clone()).await?;
+        let group = AvahiEntryGroupProxy::new(zbus, group_path.clone()).await?;
 
         for spec in services {
             group
@@ -121,7 +122,8 @@ impl ServicePublisher {
     ///
     /// Returns `OsError::Dbus` if the Avahi D-Bus call fails.
     pub async fn free(&self) -> Result<(), OsError> {
-        let group = AvahiEntryGroupProxy::new(&self.connection, self.group_path.clone()).await?;
+        let group =
+            AvahiEntryGroupProxy::new(self.connection.inner(), self.group_path.clone()).await?;
         group.free_group().await?;
         Ok(())
     }

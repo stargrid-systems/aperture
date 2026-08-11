@@ -1,7 +1,7 @@
 //! The setting definition trait: a typed, registered piece of configuration.
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use utoipa::ToSchema;
 
 /// A kind of setting. Each definition fixes a unique [`SettingDefinition::KEY`]
@@ -18,8 +18,5 @@ pub trait SettingDefinition: Send + Sync + 'static {
     /// The unique key string this definition is registered under.
     const KEY: &'static str;
     /// The typed value the setting holds.
-    type Value: DeserializeOwned + Serialize + ToSchema + Send;
-
-    /// The default value used when no value has been stored yet.
-    fn default(&self) -> Self::Value;
+    type Value: DeserializeOwned + Serialize + ToSchema + Default + Send;
 }

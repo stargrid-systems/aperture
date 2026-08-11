@@ -3,7 +3,7 @@ use aperture_storage::Storage;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, PartialEq)]
 struct SystemValue {
     hostname: Option<String>,
 }
@@ -13,9 +13,6 @@ struct SystemDef;
 impl SettingDefinition for SystemDef {
     const KEY: &'static str = "system";
     type Value = SystemValue;
-    fn default(&self) -> Self::Value {
-        SystemValue { hostname: None }
-    }
 }
 
 fn registry() -> SettingRegistry {

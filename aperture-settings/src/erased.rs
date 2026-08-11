@@ -6,8 +6,8 @@
 //! impl bridges every [`SettingDefinition`].
 
 use serde_json::Value;
-use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::Schema;
+use utoipa::openapi::RefOr;
 use utoipa::{PartialSchema, ToSchema};
 
 use crate::definition::SettingDefinition;
@@ -52,8 +52,7 @@ impl<T: SettingDefinition> ErasedSettingDefinition for T {
     }
 
     fn default_value(&self) -> Value {
-        serde_json::to_value(SettingDefinition::default(self))
-            .expect("default value must serialize")
+        serde_json::to_value(T::Value::default()).expect("default value must serialize")
     }
 
     fn check_value(&self, value: &Value) -> Result<(), SettingError> {

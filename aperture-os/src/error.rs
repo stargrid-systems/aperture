@@ -1,8 +1,16 @@
+use std::error::Error as StdError;
+
 /// Errors returned by OS integration operations.
 #[derive(Debug, thiserror::Error)]
 pub enum OsError {
-    #[error("D-Bus error")]
-    Dbus(#[from] zbus::Error),
+    #[error("D-Bus communication failed")]
+    Dbus(#[source] Box<dyn StdError + Send + Sync>),
+}
+
+impl From<zbus::Error> for OsError {
+    fn from(err: zbus::Error) -> Self {
+        Self::Dbus(Box::new(err))
+    }
 }
 
 /// Validation errors for a hostname.

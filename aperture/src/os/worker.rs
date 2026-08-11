@@ -5,14 +5,12 @@ use std::error::Error as StdError;
 use aperture_http::{RegenerateCertificateDefinition, RegenerateCertificateInput};
 use aperture_os::{
     ApplyHostnameDefinition, ApplyHostnameInput, Connection, Hostname, HostnameDef,
-    ReadHostnameDefinition, ReadHostnameInput, ServicePublisher, ServiceSpec,
+    ServicePublisher, ServiceSpec,
 };
 use aperture_runtime::{Stop, Worker};
-use aperture_settings::SettingDefinition;
 use aperture_settings::Settings;
 use aperture_storage::ActorId;
-use aperture_tasks::TaskDefinition;
-use aperture_tasks::Tasks;
+use aperture_tasks::{TaskDefinition, Tasks};
 use tokio::sync::broadcast::error::RecvError;
 
 pub struct OsWorker {
@@ -56,10 +54,11 @@ impl Worker for OsWorker {
                 () = stop.cancelled() => break,
                 recv = feed.recv() => {
                     match recv {
-                        Ok(change) if change.key == HostnameDef::KEY => {
-                            self.on_hostname_change(&change.value).await;
+                        Ok(change) => {
+                            if let Ok(Some(hostname)) = change.decode_as::<HostnameDef>() {
+                                self.on_hostname_change(&hostname).await;
+                            }
                         }
-                        Ok(_) => {}
                         Err(RecvError::Lagged(n)) => {
                             tracing::warn!(skipped = n, "settings change feed lagged");
                         }
@@ -111,34 +110,12 @@ impl OsWorker {
         }
     }
 
-    async fn on_hostname_change(&self, value: &serde_json::Value) {
-        let hostname: Hostname = match serde_json::from_value(value.clone()) {
-            Ok(h) => h,
-            Err(err) => {
-                tracing::warn!(
-                    error = &err as &dyn StdError,
-                    "failed to decode hostname setting"
-                );
-                return;
-            }
-        };
-
-        let new_hostname = match hostname.as_str() {
-            Some(name) => match self.spawn_task::<ApplyHostnameDefinition>(ApplyHostnameInput { hostname: name.to_owned() }).await {
-                Some(_) => name.to_owned(),
-                None => return,
-            },
-            None => {
-                match self.spawn_task::<ReadHostnameDefinition>(ReadHostnameInput {}).await {
-                    Some(output) => output.hostname,
-                    None => return,
-                }
-            }
-        };
+    async fn on_hostname_change(&self, hostname: &Hostname) {
+        let name = hostname.as_str();
 
         if self
-            .spawn_task::<RegenerateCertificateDefinition>(RegenerateCertificateInput {
-                hostname: Some(new_hostname.clone()),
+            .spawn_task::<ApplyHostnameDefinition>(ApplyHostnameInput {
+                hostname: name.to_owned(),
             })
             .await
             .is_none()
@@ -146,7 +123,12 @@ impl OsWorker {
             return;
         }
 
-        tracing::info!(hostname = %new_hostname, "hostname updated");
+        self.spawn_task::<RegenerateCertificateDefinition>(RegenerateCertificateInput {
+            hostname: Some(name.to_owned()),
+        })
+        .await;
+
+        tracing::info!(hostname = %name, "hostname updated");
     }
 
     async fn spawn_task<T: TaskDefinition>(&self, input: T::Input) -> Option<T::Output> {
