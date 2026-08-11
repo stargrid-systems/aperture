@@ -6,6 +6,8 @@ use turso::{Connection, Row, params_from_iter};
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
+use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::query::Filters;
 use crate::secret::PasswordHash;
 use crate::sql::{Columns, ToSql, get};
 
@@ -167,27 +169,37 @@ impl UserRepository {
         }
     }
 
-    /// Lists all users, ordered by username.
+    /// Lists users, paginated by username (ascending by default).
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` if the query fails or a row cannot be decoded.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn list(&self) -> Result<Vec<User>> {
+    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// cannot be decoded.
+    #[tracing::instrument(level = "info", skip(self, query))]
+    pub async fn list(&self, query: &ListQuery) -> Result<Page<User>> {
+        let paginator = Paginator::new(query, Order::Asc)?;
+        let keyset = Keyset::unique(col::USERNAME, paginator.query_order());
+
+        let mut filters = Filters::new();
+        filters.keyset(&keyset, &paginator);
+
         let sql_str = format!(
-            sql!(SELECT {cols} FROM users ORDER BY username),
-            cols = USER_COLUMNS
+            sql!(SELECT {cols} FROM users {where_clause} ORDER BY {order} LIMIT {limit}),
+            cols = USER_COLUMNS,
+            where_clause = filters.where_clause(),
+            order = keyset.order_by(),
+            limit = paginator.fetch_limit(),
         );
         let mut rows = self
             .connection
-            .query(&sql_str, ())
+            .query(&sql_str, params_from_iter(filters.into_params()))
             .await
             .map_err(StorageError::from_turso)?;
         let mut users = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             users.push(User::try_from(&row)?);
         }
-        Ok(users)
+        Ok(paginator.finish(users, |user| (CursorValue::Text(user.username.clone()), 0)))
     }
 
     /// Updates the password hash and the password-change-required timestamp.

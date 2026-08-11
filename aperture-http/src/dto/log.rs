@@ -1,7 +1,7 @@
 //! DTOs for the structured log endpoints.
 
 use aperture_artifacts::{ListQuery, Page as StoragePage};
-use aperture_storage::{BootInfo, Event, EventId, Level, Span, SpanId};
+use aperture_storage::{Event, EventId, Level, Span, SpanId};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
@@ -243,6 +243,20 @@ impl LogSpanListParams {
 pub struct LogTargetListParams {
     /// Only targets starting with this prefix.
     pub q: Option<String>,
+    #[param(minimum = 1, maximum = 200, default = 50)]
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+    pub order: Option<OrderParam>,
+}
+
+impl LogTargetListParams {
+    pub fn to_query(&self) -> ListQuery {
+        ListQuery {
+            limit: self.limit,
+            cursor: self.cursor.clone(),
+            order: self.order.map(Into::into),
+        }
+    }
 }
 
 /// One boot session observed in the log store, returned by
@@ -259,21 +273,4 @@ pub struct BootResponse {
     pub event_count: u64,
     /// True if this is the currently running gateway boot.
     pub is_current: bool,
-}
-
-impl BootResponse {
-    /// Maps a list of storage [`BootInfo`] into boot responses, marking the
-    /// current boot id.
-    pub fn from_boots(boots: Vec<BootInfo>, current_boot_id: Uuid) -> Vec<Self> {
-        boots
-            .into_iter()
-            .map(|b| Self {
-                is_current: b.boot_id == current_boot_id,
-                boot_id: b.boot_id,
-                first_seen: b.first_seen,
-                last_seen: b.last_seen,
-                event_count: b.event_count,
-            })
-            .collect()
-    }
 }

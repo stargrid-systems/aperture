@@ -351,14 +351,20 @@ async fn list_targets() {
     let storage = seeded_storage().await;
     let logs = storage.logs().unwrap();
 
-    let all = logs.list_targets(None).await.unwrap();
-    assert_eq!(all.len(), 2);
-    assert!(all.contains(&"aperture_artifacts::fetch".to_owned()));
-    assert!(all.contains(&"aperture_http::error".to_owned()));
+    let all = logs
+        .list_targets(None, &ListQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(all.items.len(), 2);
+    assert!(all.items.contains(&"aperture_artifacts::fetch".to_owned()));
+    assert!(all.items.contains(&"aperture_http::error".to_owned()));
 
-    let filtered = logs.list_targets(Some("aperture_http")).await.unwrap();
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0], "aperture_http::error");
+    let filtered = logs
+        .list_targets(Some("aperture_http"), &ListQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(filtered.items.len(), 1);
+    assert_eq!(filtered.items[0], "aperture_http::error");
 }
 
 #[tokio::test]
@@ -642,7 +648,6 @@ async fn nested_spans_preserve_parent_child() {
 
 #[tokio::test]
 async fn list_boots_groups_by_boot_id() {
-    use aperture_storage::BootInfo;
     let a = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
     let b = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
     let storage = Storage::open(":memory:").await.unwrap();
@@ -693,17 +698,17 @@ async fn list_boots_groups_by_boot_id() {
         .unwrap();
     batch.commit().await.unwrap();
 
-    let boots: Vec<BootInfo> = logs.list_boots().await.unwrap();
+    let boots = logs.list_boots(&ListQuery::default()).await.unwrap();
 
-    assert_eq!(boots.len(), 2);
-    assert_eq!(boots[0].boot_id, b);
-    assert_eq!(boots[0].event_count, 1);
-    assert_eq!(boots[0].first_seen, at(3_000));
-    assert_eq!(boots[0].last_seen, at(3_000));
-    assert_eq!(boots[1].boot_id, a);
-    assert_eq!(boots[1].event_count, 2);
-    assert_eq!(boots[1].first_seen, at(1_000));
-    assert_eq!(boots[1].last_seen, at(2_000));
+    assert_eq!(boots.items.len(), 2);
+    assert_eq!(boots.items[0].boot_id, b);
+    assert_eq!(boots.items[0].event_count, 1);
+    assert_eq!(boots.items[0].first_seen, at(3_000));
+    assert_eq!(boots.items[0].last_seen, at(3_000));
+    assert_eq!(boots.items[1].boot_id, a);
+    assert_eq!(boots.items[1].event_count, 2);
+    assert_eq!(boots.items[1].first_seen, at(1_000));
+    assert_eq!(boots.items[1].last_seen, at(2_000));
 
     let page = logs
         .list_events(

@@ -1,7 +1,7 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, RawApiKey, Role};
 use aperture_storage::ApiKeyId;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::dto::{Page, SimpleListParams};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -19,7 +20,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(delete_api_key))
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ApiKeyResponse {
     id: ApiKeyId,
     name: String,
@@ -48,27 +49,25 @@ pub struct CreateApiKeyRequest {
     get,
     path = "",
     operation_id = operation_ids::LIST_API_KEYS,
-    responses((status = 200, description = "API keys", body = Vec<ApiKeyResponse>)),
+    params(SimpleListParams),
+    responses((status = 200, description = "API keys", body = Page<ApiKeyResponse>)),
 )]
 async fn list_api_keys(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<Vec<ApiKeyResponse>>, ApiError> {
-    let keys = state
+    Query(params): Query<SimpleListParams>,
+) -> Result<Json<Page<ApiKeyResponse>>, ApiError> {
+    let page = state
         .storage()
         .api_keys()?
-        .list_for_actor(auth.actor.id)
+        .list_for_actor(auth.actor.id, &params.to_query())
         .await?;
-    Ok(Json(
-        keys.into_iter()
-            .map(|k| ApiKeyResponse {
-                id: k.id,
-                name: k.name,
-                prefix: k.prefix,
-                last_used_at: k.last_used_at,
-            })
-            .collect(),
-    ))
+    Ok(Json(Page::from_storage(page, |k| ApiKeyResponse {
+        id: k.id,
+        name: k.name,
+        prefix: k.prefix,
+        last_used_at: k.last_used_at,
+    })))
 }
 
 /// Creates a new API key for the authenticated actor.

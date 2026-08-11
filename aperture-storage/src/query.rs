@@ -101,6 +101,15 @@ impl Filters {
         );
     }
 
+    /// Adds `column LIKE ?` matching `value%` (prefix match). Wildcards in
+    /// `value` are escaped. When `value` is empty, matches everything.
+    pub(crate) fn like_prefix(&mut self, column: &str, value: &str) {
+        self.params
+            .push(Value::Text(format!("{}%", EscapeLike(value))));
+        self.separator();
+        let _ = write!(self.sql, "{column} LIKE ?{} ESCAPE '\\'", self.params.len());
+    }
+
     /// Adds `column LIKE ?` matching `value` as a literal substring (wildcards
     /// escaped).
     pub(crate) fn like(&mut self, column: &str, value: &str) {
