@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Open release PR
-        uses: stargrid-systems/calver-release@1c45aa1ec6ea7a659798dadbf33ac260c63cc350 # v2.0.0
+        uses: stargrid-systems/calver-release@33c10243a23261f1dd29483d9ac2bf2b0da97bf3 # v2.0.1
         with:
           version-file: Cargo.toml
 
@@ -48,7 +48,7 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           persist-credentials: false
       - name: Create release
-        uses: stargrid-systems/calver-release@1c45aa1ec6ea7a659798dadbf33ac260c63cc350 # v2.0.0
+        uses: stargrid-systems/calver-release@33c10243a23261f1dd29483d9ac2bf2b0da97bf3 # v2.0.1
         with:
           version-file: Cargo.toml
           mode: tag
