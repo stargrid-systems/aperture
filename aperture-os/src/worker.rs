@@ -2,23 +2,17 @@
 
 use std::error::Error as StdError;
 
+use aperture_events::EventBus;
 use aperture_runtime::{Stop, Worker};
 use aperture_settings::Settings;
 use aperture_storage::ActorId;
 use aperture_tasks::Tasks;
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::avahi::{ServicePublisher, ServiceSpec};
+use crate::event::HostnameApplied;
 use crate::hostname::{ApplyHostnameDefinition, ApplyHostnameInput};
 use crate::setting::{Hostname, HostnameSetting};
-
-/// Events emitted by the OS worker.
-#[derive(Debug, Clone)]
-pub enum OsEvent {
-    /// The system hostname was successfully applied via systemd-hostnamed.
-    HostnameApplied(Hostname),
-}
 
 /// Background worker for mDNS publishing and hostname management.
 pub struct OsWorker {
@@ -28,19 +22,19 @@ pub struct OsWorker {
     hostname: String,
     https_port: Option<u16>,
     plain_port: Option<u16>,
-    events: broadcast::Sender<OsEvent>,
+    event_bus: EventBus,
 }
 
 impl OsWorker {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         settings: Settings,
         tasks: Tasks,
         connection: zbus::Connection,
         hostname: String,
         https_port: Option<u16>,
         plain_port: Option<u16>,
+        event_bus: EventBus,
     ) -> Self {
-        let (events, _) = broadcast::channel(16);
         Self {
             settings,
             tasks,
@@ -48,13 +42,8 @@ impl OsWorker {
             hostname,
             https_port,
             plain_port,
-            events,
+            event_bus,
         }
-    }
-
-    /// Subscribes to OS events.
-    pub fn subscribe(&self) -> broadcast::Receiver<OsEvent> {
-        self.events.subscribe()
     }
 }
 
@@ -141,6 +130,20 @@ impl OsWorker {
         }
 
         tracing::info!(hostname = %hostname, "hostname updated");
-        let _ = self.events.send(OsEvent::HostnameApplied(hostname));
+        if let Err(err) = self
+            .event_bus
+            .emit(
+                HostnameApplied {
+                    hostname: hostname.as_str().to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await
+        {
+            tracing::warn!(
+                error = &err as &dyn StdError,
+                "failed to emit hostname applied event"
+            );
+        }
     }
 }

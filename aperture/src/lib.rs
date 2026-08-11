@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
+use aperture_events::{EventBus, EventRegistry};
 use aperture_http::{
     AppState, HttpServer, OpenApiSpec, RegenerateCertificateDefinition, RotateCertificateDefinition,
     Spectra, SpectraConfig, SpectraWorker, install_default_rotation_schedule,
@@ -12,20 +13,12 @@ use aperture_http::{
 use aperture_runtime::Supervisor;
 use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
-use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
+use aperture_tasks::{Automation, TaskDefinition, TaskRegistry, Tasks};
+use serde_json::json;
 use tokio::{fs, signal};
 use uuid::Uuid;
 
-use self::runtime::TasksWorker;
-
-#[cfg(feature = "os-integration")]
-use self::automation::AutomationWorker;
-
 mod logging;
-mod runtime;
-
-#[cfg(feature = "os-integration")]
-mod automation;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -57,6 +50,7 @@ fn init_crypto_provider() {
 /// # Panics
 ///
 /// Panics if the rustls crypto provider is already installed.
+#[expect(clippy::too_many_lines)]
 pub async fn serve(
     tls_addr: Option<SocketAddr>,
     plain_addr: Option<SocketAddr>,
@@ -90,12 +84,19 @@ pub async fn serve(
     let mut task_registry = TaskRegistry::new();
     #[cfg_attr(not(feature = "os-integration"), expect(unused_mut))]
     let mut setting_registry = SettingRegistry::new();
+    #[cfg_attr(not(feature = "os-integration"), expect(unused_mut))]
+    let mut event_registry = EventRegistry::new();
 
     register_kinds(&mut task_registry, artifacts.clone(), tls_addr);
 
     #[cfg(feature = "os-integration")]
     let os_reg = if os_integration {
-        Some(aperture_os::register(&mut task_registry, &mut setting_registry).await?)
+        Some(aperture_os::register(
+            &mut task_registry,
+            &mut setting_registry,
+            &mut event_registry,
+        )
+        .await?)
     } else {
         None
     };
@@ -106,7 +107,21 @@ pub async fn serve(
     let tasks = Tasks::new(storage.tasks()?, task_registry);
     let settings = Settings::new(storage.settings()?, setting_registry);
 
-    let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
+    let event_bus = EventBus::new(storage.events()?);
+
+    let mut automation = Automation::new(
+        tasks.clone(),
+        storage.task_schedules()?,
+        event_bus.subscribe(),
+    );
+
+    if tls_addr.is_some() {
+        automation.on_event(
+            "os.hostname_applied",
+            RegenerateCertificateDefinition::KIND,
+            |data| json!({ "hostname": data["hostname"] }),
+        );
+    }
 
     let spectra = Spectra::new(
         artifacts.clone(),
@@ -129,6 +144,7 @@ pub async fn serve(
                 &tasks,
                 tls_addr.map(|a| a.port()),
                 plain_addr.map(|a| a.port()),
+                event_bus.clone(),
             )
             .await?;
             (Some(h), Some(w))
@@ -138,6 +154,8 @@ pub async fn serve(
 
     #[cfg(not(feature = "os-integration"))]
     let hostname: Option<String> = None;
+
+    let _ = event_registry;
 
     let state = AppState::new(
         VERSION,
@@ -155,20 +173,13 @@ pub async fn serve(
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
-    supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
+    supervisor.spawn("automation", automation);
     supervisor.spawn("log", log_worker);
     supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
 
     #[cfg(feature = "os-integration")]
     if let Some(worker) = os_worker {
-        let event_rx = worker.subscribe();
         supervisor.spawn("os", worker);
-        if tls_addr.is_some() {
-            supervisor.spawn(
-                "automation",
-                AutomationWorker::new(event_rx, tasks.clone()),
-            );
-        }
     }
 
     supervisor.run_until_signal(shutdown_signal()).await;

@@ -5,24 +5,27 @@
 //! OS integration lifecycle (D-Bus connection, worker loop, settings feed)
 //! and exposes a simple register/bootstrap API.
 //!
-//! Events emitted during operation (e.g. hostname applied) are available via
-//! [`OsWorker::subscribe`] for consumers that need to react to OS state changes.
+//! Domain events (e.g. hostname applied) are emitted through the central
+//! [`EventBus`].
 
 use std::error::Error as StdError;
 
 use anyhow::Context;
+use aperture_events::{EventBus, EventRegistry};
 use aperture_settings::{SettingRegistry, Settings};
 use aperture_tasks::{TaskRegistry, Tasks};
 
+use self::event::HostnameApplied;
 use self::hostname::{ApplyHostnameDefinition, ApplyHostnameInput};
 use self::setting::HostnameSetting;
 
 pub use self::error::HostnameError;
 pub use self::setting::Hostname;
-pub use self::worker::{OsEvent, OsWorker};
+pub use self::worker::OsWorker;
 
 mod avahi;
 mod error;
+mod event;
 mod hostname;
 mod setting;
 mod worker;
@@ -32,10 +35,10 @@ pub struct OsRegistration {
     conn: zbus::Connection,
 }
 
-/// Registers OS task and setting definitions.
+/// Registers OS task, setting, and event definitions.
 ///
-/// Connects to the system D-Bus and registers the `apply-hostname` task kind
-/// and the `os.hostname` setting.
+/// Connects to the system D-Bus and registers the `apply-hostname` task kind,
+/// the `os.hostname` setting, and the `os.hostname_applied` event.
 ///
 /// # Errors
 ///
@@ -43,12 +46,14 @@ pub struct OsRegistration {
 pub async fn register(
     task_registry: &mut TaskRegistry,
     setting_registry: &mut SettingRegistry,
+    event_registry: &mut EventRegistry,
 ) -> anyhow::Result<OsRegistration> {
     let conn = zbus::Connection::system()
         .await
         .context("failed to connect to system D-Bus")?;
     task_registry.register(ApplyHostnameDefinition::new(conn.clone()));
     setting_registry.register(HostnameSetting::default());
+    event_registry.register(HostnameApplied::default());
     Ok(OsRegistration { conn })
 }
 
@@ -67,6 +72,7 @@ pub async fn bootstrap(
     tasks: &Tasks,
     https_port: Option<u16>,
     plain_port: Option<u16>,
+    event_bus: EventBus,
 ) -> anyhow::Result<(String, OsWorker)> {
     let setting: HostnameSetting = settings.get().await?;
     let hostname = setting.hostname().clone();
@@ -104,6 +110,7 @@ pub async fn bootstrap(
         hostname_str.clone(),
         https_port,
         plain_port,
+        event_bus,
     );
 
     Ok((hostname_str, worker))

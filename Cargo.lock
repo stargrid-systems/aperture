@@ -132,6 +132,7 @@ dependencies = [
  "anyhow",
  "aperture-artifacts",
  "aperture-auth",
+ "aperture-events",
  "aperture-http",
  "aperture-os",
  "aperture-runtime",
@@ -250,6 +251,7 @@ name = "aperture-os"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aperture-events",
  "aperture-runtime",
  "aperture-settings",
  "aperture-storage",

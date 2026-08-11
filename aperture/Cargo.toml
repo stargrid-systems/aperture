@@ -17,6 +17,7 @@ os-integration = ["dep:aperture-os"]
 [dependencies]
 aperture-artifacts = { workspace = true }
 aperture-auth = { workspace = true }
+aperture-events = { workspace = true }
 aperture-http = { workspace = true }
 aperture-os = { workspace = true, optional = true }
 aperture-runtime = { workspace = true }

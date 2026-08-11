@@ -13,6 +13,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+aperture-events = { workspace = true }
 aperture-runtime = { workspace = true }
 aperture-settings = { workspace = true }
 aperture-storage = { workspace = true }
