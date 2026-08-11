@@ -36,27 +36,27 @@ impl<T: SettingDefinition> ErasedSettingDefinition for T {
     }
 
     fn value_name(&self) -> String {
-        <T::Value as ToSchema>::name().into_owned()
+        <T as ToSchema>::name().into_owned()
     }
 
     fn value_schema(&self) -> RefOr<Schema> {
-        <T::Value as PartialSchema>::schema()
+        <T as PartialSchema>::schema()
     }
 
     fn collect_schemas(&self, out: &mut Vec<(String, RefOr<Schema>)>) {
         out.push((
-            <T::Value as ToSchema>::name().into_owned(),
-            <T::Value as PartialSchema>::schema(),
+            <T as ToSchema>::name().into_owned(),
+            <T as PartialSchema>::schema(),
         ));
-        <T::Value as ToSchema>::schemas(out);
+        <T as ToSchema>::schemas(out);
     }
 
     fn default_value(&self) -> Value {
-        serde_json::to_value(T::Value::default()).expect("default value must serialize")
+        serde_json::to_value(T::default()).expect("default value must serialize")
     }
 
     fn check_value(&self, value: &Value) -> Result<(), SettingError> {
-        serde_json::from_value::<T::Value>(value.clone()).map_err(SettingError::Decode)?;
+        serde_json::from_value::<T>(value.clone()).map_err(SettingError::Decode)?;
         Ok(())
     }
 }

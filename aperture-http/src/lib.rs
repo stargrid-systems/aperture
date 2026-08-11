@@ -24,7 +24,7 @@ use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
 pub use self::tls::{
     RegenerateCertificateDefinition, RegenerateCertificateInput, RotateCertificateDefinition,
-    install_default_rotation_schedule, regenerate_leaf_for_identity,
+    install_default_rotation_schedule,
 };
 
 mod api;

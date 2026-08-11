@@ -235,11 +235,14 @@ dependencies = [
 name = "aperture-os"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "aperture-runtime",
  "aperture-settings",
+ "aperture-storage",
  "aperture-tasks",
  "serde",
- "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "tracing",
  "utoipa",
  "zbus",

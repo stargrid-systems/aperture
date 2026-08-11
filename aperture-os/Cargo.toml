@@ -13,12 +13,14 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+aperture-runtime = { workspace = true }
 aperture-settings = { workspace = true }
+aperture-storage = { workspace = true }
 aperture-tasks = { workspace = true }
-
+anyhow = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }
-serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 utoipa = { workspace = true, features = ["macros"] }
 zbus = { workspace = true, features = ["tokio"] }

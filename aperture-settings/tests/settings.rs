@@ -8,16 +8,13 @@ struct SystemValue {
     hostname: Option<String>,
 }
 
-struct SystemDef;
-
-impl SettingDefinition for SystemDef {
+impl SettingDefinition for SystemValue {
     const KEY: &'static str = "system";
-    type Value = SystemValue;
 }
 
 fn registry() -> SettingRegistry {
     let mut registry = SettingRegistry::new();
-    registry.register(SystemDef);
+    registry.register(SystemValue::default());
     registry
 }
 
@@ -35,7 +32,7 @@ async fn get_typed_returns_default_when_nothing_stored() {
     let storage = Storage::open(":memory:").await.unwrap();
     let settings = Settings::new(storage.settings().unwrap(), registry());
 
-    let value: SystemValue = settings.get::<SystemDef>().await.unwrap();
+    let value = settings.get::<SystemValue>().await.unwrap();
     assert_eq!(value, SystemValue { hostname: None });
 }
 

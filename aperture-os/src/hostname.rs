@@ -1,12 +1,12 @@
 //! systemd-hostnamed integration: applying the system hostname.
 
+use anyhow::Context;
 use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use zbus::proxy;
 
-use crate::Connection;
-use crate::error::OsError;
+use crate::setting::Hostname;
 
 #[proxy(
     interface = "org.freedesktop.hostname1",
@@ -20,31 +20,31 @@ trait Hostname1 {
     fn hostname(&self) -> zbus::Result<String>;
 }
 
-/// Applies `name` as the static hostname via systemd-hostnamed.
-///
-/// # Errors
-///
-/// Returns [`OsError::Dbus`] if the D-Bus call fails.
-pub async fn apply_hostname(connection: &Connection, name: &str) -> Result<(), OsError> {
-    let proxy = Hostname1Proxy::new(connection.inner()).await?;
-    proxy.set_hostname(name, false).await?;
+async fn apply_hostname(connection: &zbus::Connection, name: &str) -> anyhow::Result<()> {
+    let proxy = Hostname1Proxy::new(connection)
+        .await
+        .context("failed to create hostname1 proxy")?;
+    proxy
+        .set_hostname(name, false)
+        .await
+        .context("failed to set static hostname")?;
     Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ApplyHostnameInput {
-    pub hostname: String,
+    pub hostname: Hostname,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct ApplyHostnameOutput {}
 
 pub struct ApplyHostnameDefinition {
-    connection: Connection,
+    connection: zbus::Connection,
 }
 
 impl ApplyHostnameDefinition {
-    pub const fn new(connection: Connection) -> Self {
+    pub const fn new(connection: zbus::Connection) -> Self {
         Self { connection }
     }
 }
@@ -55,10 +55,7 @@ impl TaskDefinition for ApplyHostnameDefinition {
     type Output = ApplyHostnameOutput;
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            cancellable: false,
-            resumable: true,
-        }
+        Capabilities::NONE
     }
 
     async fn run(
@@ -66,9 +63,9 @@ impl TaskDefinition for ApplyHostnameDefinition {
         input: ApplyHostnameInput,
         _ctx: TaskContext,
     ) -> Result<ApplyHostnameOutput, RunError> {
-        apply_hostname(&self.connection, &input.hostname)
+        apply_hostname(&self.connection, input.hostname.as_str())
             .await
-            .map_err(|e| RunError::Failed(e.into()))?;
+            .map_err(RunError::Failed)?;
         Ok(ApplyHostnameOutput {})
     }
 }

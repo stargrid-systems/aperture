@@ -19,12 +19,13 @@ use uuid::Uuid;
 use self::runtime::TasksWorker;
 
 #[cfg(feature = "os-integration")]
-use self::os::{bootstrap, register};
+use self::automation::AutomationWorker;
 
 mod logging;
-#[cfg(feature = "os-integration")]
-mod os;
 mod runtime;
+
+#[cfg(feature = "os-integration")]
+mod automation;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -93,12 +94,11 @@ pub async fn serve(
     register_kinds(&mut task_registry, artifacts.clone(), tls_addr);
 
     #[cfg(feature = "os-integration")]
-    let os_reg = register(
-        os_integration,
-        &mut task_registry,
-        &mut setting_registry,
-    )
-    .await?;
+    let os_reg = if os_integration {
+        Some(aperture_os::register(&mut task_registry, &mut setting_registry).await?)
+    } else {
+        None
+    };
 
     #[cfg(not(feature = "os-integration"))]
     let _ = os_integration;
@@ -121,14 +121,20 @@ pub async fn serve(
     }
 
     #[cfg(feature = "os-integration")]
-    let (hostname, os_worker) = bootstrap(
-        os_reg,
-        &settings,
-        &tasks,
-        tls_addr,
-        plain_addr,
-    )
-    .await?;
+    let (hostname, os_worker) = match os_reg {
+        Some(reg) => {
+            let (h, w) = aperture_os::bootstrap(
+                reg,
+                &settings,
+                &tasks,
+                tls_addr.map(|a| a.port()),
+                plain_addr.map(|a| a.port()),
+            )
+            .await?;
+            (Some(h), Some(w))
+        }
+        None => (None, None),
+    };
 
     #[cfg(not(feature = "os-integration"))]
     let hostname: Option<String> = None;
@@ -155,7 +161,14 @@ pub async fn serve(
 
     #[cfg(feature = "os-integration")]
     if let Some(worker) = os_worker {
+        let event_rx = worker.subscribe();
         supervisor.spawn("os", worker);
+        if tls_addr.is_some() {
+            supervisor.spawn(
+                "automation",
+                AutomationWorker::new(event_rx, tasks.clone()),
+            );
+        }
     }
 
     supervisor.run_until_signal(shutdown_signal()).await;

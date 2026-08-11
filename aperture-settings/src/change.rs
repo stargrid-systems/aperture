@@ -26,17 +26,24 @@ pub struct SettingChange {
 }
 
 impl SettingChange {
-    /// Decodes the change as setting `D`. Returns `Ok(None)` if the key does
-    /// not match `D::KEY`.
+    /// Decodes the change as setting `D`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.key` does not match `D::KEY`. Check the key before
+    /// calling this method.
     ///
     /// # Errors
     ///
-    /// Returns `Err` if the key matches but the value fails to deserialize.
-    pub fn decode_as<D: SettingDefinition>(&self) -> Result<Option<D::Value>, serde_json::Error> {
-        if self.key == D::KEY {
-            serde_json::from_value(self.value.clone()).map(Some)
-        } else {
-            Ok(None)
-        }
+    /// Returns `Err` if the value fails to deserialize into `D`.
+    pub fn decode<D: SettingDefinition>(&self) -> Result<D, serde_json::Error> {
+        assert_eq!(
+            self.key,
+            D::KEY,
+            "key mismatch: expected {}, got {}",
+            D::KEY,
+            self.key
+        );
+        serde_json::from_value(self.value.clone())
     }
 }

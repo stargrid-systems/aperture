@@ -84,7 +84,7 @@ impl Settings {
     /// Returns `SettingError::NotRegistered` if the key is unknown,
     /// `SettingError::Decode` if the stored value cannot be decoded, or a
     /// storage error if the read fails.
-    pub async fn get<D>(&self) -> Result<D::Value, SettingError>
+    pub async fn get<D>(&self) -> Result<D, SettingError>
     where
         D: SettingDefinition,
     {
