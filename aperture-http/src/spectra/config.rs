@@ -2,7 +2,7 @@
 
 use aperture_storage::{ArtifactKey, MediaType};
 
-const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:0.5.0";
+const SOURCE: &str = "ghcr.io/stargrid-systems/spectra:2026.8.3";
 const MEDIA_TYPE: &str = "application/vnd.spectra.squashfs";
 
 const SPECTRA_KEY: ArtifactKey = ArtifactKey::from_static("spectra");
