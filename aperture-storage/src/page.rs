@@ -103,6 +103,11 @@ pub struct Cursor {
 }
 
 impl Cursor {
+    /// The sort value carried by this cursor.
+    pub const fn value(&self) -> &CursorValue {
+        &self.value
+    }
+
     fn encode(value: CursorValue, id: i64, step: Step) -> String {
         let mut flags = 0u8;
         if matches!(value, CursorValue::Text(_)) {
@@ -233,7 +238,13 @@ pub struct Paginator {
 }
 
 impl Paginator {
-    pub(crate) fn new(query: &ListQuery, default_order: Order) -> Result<Self> {
+    /// Creates a paginator from query parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::InvalidCursor` if `query.cursor` is not a valid
+    /// cursor string.
+    pub fn new(query: &ListQuery, default_order: Order) -> Result<Self> {
         let cursor = match &query.cursor {
             Some(encoded) => Some(Cursor::decode(encoded)?),
             None => None,
@@ -248,13 +259,13 @@ impl Paginator {
     }
 
     /// The decoded cursor position, if any.
-    pub(crate) const fn cursor(&self) -> Option<&Cursor> {
+    pub const fn cursor(&self) -> Option<&Cursor> {
         self.cursor.as_ref()
     }
 
     /// The order to run the query in. Backward paging queries in the flipped
     /// order, then [`Paginator::finish`] reverses the rows back to base order.
-    pub(crate) const fn query_order(&self) -> Order {
+    pub const fn query_order(&self) -> Order {
         match self.step {
             Step::After => self.base_order,
             Step::Before => self.base_order.flip(),
@@ -262,13 +273,13 @@ impl Paginator {
     }
 
     /// One more than the page size, so an extra row means another page exists.
-    pub(crate) const fn fetch_limit(&self) -> u32 {
+    pub const fn fetch_limit(&self) -> u32 {
         self.limit + 1
     }
 
     /// Trims `rows` to the page size, restores base order, and derives the
     /// neighbouring cursors. `key_of` reads a row's sort value and id.
-    pub(crate) fn finish<T>(
+    pub fn finish<T>(
         &self,
         mut rows: Vec<T>,
         key_of: impl Fn(&T) -> (CursorValue, i64),

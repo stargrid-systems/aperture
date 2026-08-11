@@ -23,7 +23,7 @@ pub use self::log::{
     SpanFilter, SpanId, SpanParentFilter, SpanRecord,
 };
 pub use self::media_type::{InvalidMediaType, MediaType};
-pub use self::page::{ListQuery, Order, Page};
+pub use self::page::{CursorValue, ListQuery, Order, Page, Paginator};
 pub use self::policy::{PolicyRule, PolicyRuleRepository, PolicyType};
 pub use self::secret::{ApiKeyHash, PasswordHash, TokenHash};
 pub use self::session::{Session, SessionId, SessionRepository};

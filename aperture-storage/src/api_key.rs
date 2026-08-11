@@ -8,6 +8,8 @@ use turso::{Connection, Row, params_from_iter};
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
+use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::query::Filters;
 use crate::secret::ApiKeyHash;
 use crate::sql::{Columns, ToSql};
 
@@ -157,27 +159,44 @@ impl ApiKeyRepository {
         }
     }
 
-    /// Lists API keys for `actor_id`, ordered by creation time descending.
+    /// Lists API keys for `actor_id`, paginated by id (newest first by
+    /// default).
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` if the query fails or a row cannot be decoded.
-    #[tracing::instrument(level = "info", skip(self))]
-    pub async fn list_for_actor(&self, actor_id: ActorId) -> Result<Vec<ApiKey>> {
+    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// cannot be decoded.
+    #[tracing::instrument(level = "info", skip(self, query))]
+    pub async fn list_for_actor(
+        &self,
+        actor_id: ActorId,
+        query: &ListQuery,
+    ) -> Result<Page<ApiKey>> {
+        let paginator = Paginator::new(query, Order::Desc)?;
+        let keyset = Keyset::unique(col::ID, paginator.query_order());
+
+        let mut filters = Filters::new();
+        filters.eq_int(col::ACTOR_ID, actor_id.get());
+        filters.keyset(&keyset, &paginator);
+
         let sql_str = format!(
-            sql!(SELECT {cols} FROM api_keys WHERE actor_id = ?1 ORDER BY created_at DESC),
-            cols = API_KEY_COLUMNS
+            sql!(SELECT {cols} FROM api_keys {where_clause} ORDER BY {order} LIMIT {limit}),
+            cols = API_KEY_COLUMNS,
+            where_clause = filters.where_clause(),
+            order = keyset.order_by(),
+            limit = paginator.fetch_limit(),
         );
+
         let mut rows = self
             .connection
-            .query(&sql_str, params_from_iter([actor_id.to_sql()]))
+            .query(&sql_str, params_from_iter(filters.into_params()))
             .await
             .map_err(StorageError::from_turso)?;
         let mut keys = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             keys.push(ApiKey::try_from(&row)?);
         }
-        Ok(keys)
+        Ok(paginator.finish(keys, |key| (CursorValue::Int(key.id.get()), key.id.get())))
     }
 
     /// Updates the last-used timestamp only if it is unset or older than the
