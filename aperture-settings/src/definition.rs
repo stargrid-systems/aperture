@@ -1,7 +1,7 @@
 //! The setting definition trait: a typed, registered piece of configuration.
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use utoipa::ToSchema;
 
 /// A kind of setting. The implementing type IS the value: it carries its
