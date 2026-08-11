@@ -117,6 +117,7 @@ impl Settings {
         let _ = self.inner.changes.send(SettingChange {
             key: key.to_owned(),
             value,
+            actor: updated_by,
         });
         Ok(())
     }
