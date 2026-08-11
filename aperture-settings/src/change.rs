@@ -12,6 +12,7 @@
 //! [`Receiver`]: tokio::sync::broadcast::Receiver
 
 use aperture_storage::ActorId;
+use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::definition::SettingDefinition;
@@ -23,6 +24,7 @@ pub struct SettingChange {
     pub(crate) key: String,
     pub(crate) value: Value,
     pub(crate) actor: ActorId,
+    pub(crate) timestamp: Timestamp,
 }
 
 impl SettingChange {
@@ -36,6 +38,11 @@ impl SettingChange {
         self.actor
     }
 
+    /// When the change was written.
+    pub const fn timestamp(&self) -> Timestamp {
+        self.timestamp
+    }
+
     /// Decodes the change as setting `D`.
     ///
     /// Returns `None` if the key does not match `D::KEY`. If the key matches,
@@ -46,13 +53,13 @@ impl SettingChange {
     ///
     /// Panics if the key matches but the value fails to deserialize.
     pub fn decode<D: SettingDefinition>(&self) -> Option<D> {
-        if self.key != D::KEY {
-            return None;
+        match self.try_decode::<D>() {
+            Ok(value) => Some(value),
+            Err(SettingChangeError::KeyMismatch) => None,
+            Err(SettingChangeError::Decode(err)) => {
+                panic!("setting value must decode when key matches: {err}")
+            }
         }
-        Some(
-            serde_json::from_value(self.value.clone())
-                .expect("setting value must decode when key matches"),
-        )
     }
 
     /// Attempts to decode the change as setting `D`.

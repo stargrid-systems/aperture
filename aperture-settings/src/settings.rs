@@ -118,6 +118,7 @@ impl Settings {
             key: key.to_owned(),
             value,
             actor: updated_by,
+            timestamp: now,
         });
         Ok(())
     }
