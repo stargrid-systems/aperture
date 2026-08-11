@@ -11,6 +11,7 @@ pub use self::artifact::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, VersionListParams,
     VersionSortParam,
 };
+pub use self::event::{EventListParams, EventResponse};
 pub use self::log::{
     BootResponse, LevelResponse, LogEventResponse, LogListParams, LogSpanDetailResponse,
     LogSpanListParams, LogSpanResponse, LogTargetListParams,
@@ -26,6 +27,7 @@ pub use self::task_schedule::{
 };
 
 mod artifact;
+mod event;
 mod log;
 mod page;
 mod settings;
