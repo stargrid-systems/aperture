@@ -16,7 +16,7 @@ pub use self::log::{
     LogSpanListParams, LogSpanResponse, LogTargetListParams,
 };
 pub use self::page::Page;
-pub use self::settings::{SettingListParams, SettingResponse, UpdateSettingRequest};
+pub use self::settings::{SettingResponse, UpdateSettingRequest};
 pub use self::task::{
     CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
 };

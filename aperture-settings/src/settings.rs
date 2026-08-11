@@ -7,9 +7,7 @@
 
 use std::sync::Arc;
 
-use aperture_storage::{
-    ActorId, CursorValue, ListQuery, Order, Page, Paginator, SettingRepository,
-};
+use aperture_storage::{ActorId, SettingRepository};
 use jiff::Timestamp;
 use serde_json::Value;
 
@@ -103,41 +101,20 @@ impl Settings {
         Ok(())
     }
 
-    /// Lists registered keys with their current values (or defaults),
-    /// paginated by key.
+    /// Returns every registered key with its current value (or default).
+    /// Ordered by key.
     ///
     /// # Errors
     ///
-    /// Returns `SettingError::Storage` if the cursor is invalid or a read
-    /// fails.
-    pub async fn list(&self, query: &ListQuery) -> Result<Page<(String, Value)>, SettingError> {
-        let paginator = Paginator::new(query, Order::Asc)?;
-        let order = paginator.query_order();
-
-        let mut keys: Vec<String> = self.inner.registry.keys().map(String::from).collect();
-        match order {
-            Order::Asc => keys.sort_unstable(),
-            Order::Desc => keys.sort_unstable_by(|a, b| b.cmp(a)),
-        }
-
-        if let Some(cursor) = paginator.cursor()
-            && let CursorValue::Text(cursor_key) = cursor.value()
-        {
-            match order {
-                Order::Asc => keys.retain(|k| k > cursor_key),
-                Order::Desc => keys.retain(|k| k < cursor_key),
-            }
-        }
-
-        let limit = paginator.fetch_limit() as usize;
-        let page_keys: Vec<String> = keys.into_iter().take(limit).collect();
-
-        let mut entries = Vec::with_capacity(page_keys.len());
-        for key in &page_keys {
+    /// Returns a storage error if any read fails.
+    pub async fn list(&self) -> Result<Vec<(String, Value)>, SettingError> {
+        let mut keys: Vec<&'static str> = self.inner.registry.keys().collect();
+        keys.sort_unstable();
+        let mut result = Vec::with_capacity(keys.len());
+        for key in keys {
             let value = self.get_value(key).await?;
-            entries.push((key.clone(), value));
+            result.push((key.to_owned(), value));
         }
-
-        Ok(paginator.finish(entries, |(key, _)| (CursorValue::Text(key.clone()), 0)))
+        Ok(result)
     }
 }
