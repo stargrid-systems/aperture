@@ -55,6 +55,10 @@ impl HttpServer {
     /// Both set: HTTPS + HTTP redirect. HTTPS only: full API over TLS.
     /// HTTP only: full API (recovery mode). Neither: no listeners.
     ///
+    /// `hostname` is the advertised mDNS hostname. When set, it is baked into
+    /// the leaf cert as a `<hostname>.local` SAN. Pass `None` when OS
+    /// integration is disabled.
+    ///
     /// # Errors
     ///
     /// Returns an error if TLS setup, certificate provisioning, or listener
@@ -63,6 +67,7 @@ impl HttpServer {
         artifacts: Artifacts,
         tls_addr: Option<SocketAddr>,
         plain_addr: Option<SocketAddr>,
+        hostname: Option<&str>,
         app: Router,
     ) -> anyhow::Result<Self> {
         let mut server = Self::new();
@@ -71,7 +76,7 @@ impl HttpServer {
         let mut https_port: Option<u16> = None;
 
         if let Some(tls_addr) = tls_addr {
-            ensure_certificates(&artifacts, tls_addr).await?;
+            ensure_certificates(&artifacts, tls_addr, hostname).await?;
             let tcp_listener = TcpListener::bind(tls_addr).await?;
             // Log the actual bound address so an OS-assigned port (":0")
             // surfaces in the startup banner instead of the requested one.

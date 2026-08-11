@@ -40,6 +40,10 @@ struct RunArgs {
     /// Directory for runtime data and cached components.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
+    /// Enable OS integration (mDNS publishing, hostname management).
+    #[cfg(feature = "os-integration")]
+    #[arg(long, env = "APERTURE_OS_INTEGRATION", default_value_t = false)]
+    os_integration: bool,
 }
 
 #[derive(Debug, Args)]
@@ -85,11 +89,18 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Openapi => block_on(emit_openapi()),
-        Command::Run(args) => block_on(aperture::serve(
-            args.https_addr.0,
-            args.http_addr.0,
-            args.data_dir,
-        )),
+        Command::Run(args) => {
+            #[cfg(feature = "os-integration")]
+            let os_integration = args.os_integration;
+            #[cfg(not(feature = "os-integration"))]
+            let os_integration = false;
+            block_on(aperture::serve(
+                args.https_addr.0,
+                args.http_addr.0,
+                args.data_dir,
+                os_integration,
+            ))
+        }
         Command::ResetPassword(args) => {
             block_on(aperture::reset_password(&args.user, &args.data_dir))
         }

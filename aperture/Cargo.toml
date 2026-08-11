@@ -11,10 +11,14 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+os-integration = ["dep:aperture-os"]
+
 [dependencies]
 aperture-artifacts = { workspace = true }
 aperture-auth = { workspace = true }
 aperture-http = { workspace = true }
+aperture-os = { workspace = true, optional = true }
 aperture-runtime = { workspace = true }
 aperture-settings = { workspace = true }
 aperture-storage = { workspace = true }

@@ -5,6 +5,7 @@ members = [
     "aperture-artifacts",
     "aperture-auth",
     "aperture-http",
+    "aperture-os",
     "aperture-runtime",
     "aperture-settings",
     "aperture-storage",
@@ -24,6 +25,7 @@ version = "0.1.0"
 aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
 aperture-auth = { version = "0.1.0", path = "aperture-auth" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
+aperture-os = { version = "0.1.0", path = "aperture-os" }
 aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
 aperture-settings = { version = "0.1.0", path = "aperture-settings" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
@@ -72,6 +74,7 @@ uuid = { version = "1", default-features = false }
 utoipa = { version = "5", default-features = false }
 utoipa-axum = { version = "0.2", default-features = false }
 x509-parser = { version = "0.18", default-features = false }
+zbus = { version = "5", default-features = false }
 
 [workspace.lints.clippy]
 cargo = { level = "warn", priority = -1 }
