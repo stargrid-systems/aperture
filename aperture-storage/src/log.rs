@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
-use crate::query::{EscapeLike, Filters};
+use crate::query::Filters;
 use crate::sql::{Columns, ToSql, get};
 
 db_id! {
@@ -92,6 +92,17 @@ const SQL_UPDATE_SPAN_FIELDS: &str = sql!(
     UPDATE log_spans
     SET fields = json_patch(fields, ?1)
     WHERE tracing_id = ?2 AND boot_id = ?3
+);
+
+/// Aggregate query that collapses events into one row per boot session.
+const BOOT_AGGREGATE_SQL: &str = sql!(
+    SELECT boot_id,
+           MIN(timestamp) AS first_seen,
+           MAX(timestamp) AS last_seen,
+           COUNT(*) AS event_count
+    FROM log_events
+    WHERE boot_id IS NOT NULL
+    GROUP BY boot_id
 );
 
 /// Severity level of a tracing event or span.
@@ -380,40 +391,35 @@ impl LogRepository {
     /// Returns `StorageError` if the query or cursor is invalid, or a target
     /// cannot be read.
     #[tracing::instrument(level = "info", skip(self, query))]
+    /// Lists distinct targets across both events and spans, optionally
+    /// filtered by prefix, paginated by target (ascending by default).
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError` if the query or cursor is invalid, or a target
+    /// cannot be read.
+    #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_targets(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<String>> {
         let paginator = Paginator::new(query, Order::Asc)?;
-        let keyset = Keyset::unique("target", paginator.query_order());
+        let keyset = Keyset::unique(col::TARGET, paginator.query_order());
 
-        let (inner, mut all_params): (&str, Vec<Value>) = match q {
-            Some(prefix) => (
-                r"SELECT target FROM log_events WHERE target LIKE ?1 ESCAPE '\'
-                 UNION
-                 SELECT target FROM log_spans WHERE target LIKE ?1 ESCAPE '\'",
-                vec![Value::Text(format!("{}%", EscapeLike(prefix)))],
-            ),
-            None => (
-                "SELECT target FROM log_events UNION SELECT target FROM log_spans",
-                vec![],
-            ),
-        };
+        let mut filters = Filters::new();
+        filters.like_prefix(col::TARGET, q.unwrap_or(""));
+        filters.keyset(&keyset, &paginator);
 
-        let (cond, cond_params) = keyset.condition(paginator.cursor(), all_params.len() + 1);
-        let where_clause = if cond.is_empty() {
-            String::new()
-        } else {
-            all_params.extend(cond_params);
-            format!(" WHERE {cond}")
-        };
-
+        let where_clause = filters.where_clause();
         let sql = format!(
-            "SELECT target FROM ({inner}){where_clause} ORDER BY {order} LIMIT {limit}",
+            "SELECT {col} FROM log_events {where_clause} UNION SELECT {col} FROM log_spans \
+             {where_clause} ORDER BY {order} LIMIT {limit}",
+            col = col::TARGET,
+            where_clause = where_clause,
             order = keyset.order_by(),
             limit = paginator.fetch_limit(),
         );
 
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter(all_params))
+            .query(&sql, params_from_iter(filters.into_params()))
             .await
             .map_err(StorageError::from_turso)?;
         let mut targets = Vec::new();
@@ -589,32 +595,20 @@ impl LogRepository {
         let paginator = Paginator::new(query, Order::Desc)?;
         let keyset = Keyset::unique("first_seen", paginator.query_order());
 
-        let inner = concat!(
-            "SELECT boot_id,",
-            " MIN(timestamp) AS first_seen,",
-            " MAX(timestamp) AS last_seen,",
-            " COUNT(*) AS event_count",
-            " FROM log_events",
-            " WHERE boot_id IS NOT NULL",
-            " GROUP BY boot_id",
-        );
-
-        let (cond, cond_params) = keyset.condition(paginator.cursor(), 1);
-        let (where_clause, params) = if cond.is_empty() {
-            (String::new(), Vec::<Value>::new())
-        } else {
-            (format!(" WHERE {cond}"), cond_params)
-        };
+        let mut filters = Filters::new();
+        filters.keyset(&keyset, &paginator);
 
         let sql = format!(
-            "SELECT * FROM ({inner}){where_clause} ORDER BY {order} LIMIT {limit}",
+            "SELECT * FROM ({inner}) {where_clause} ORDER BY {order} LIMIT {limit}",
+            inner = BOOT_AGGREGATE_SQL,
+            where_clause = filters.where_clause(),
             order = keyset.order_by(),
             limit = paginator.fetch_limit(),
         );
 
         let mut rows = self
             .connection
-            .query(&sql, params_from_iter(params))
+            .query(&sql, params_from_iter(filters.into_params()))
             .await
             .map_err(StorageError::from_turso)?;
         let mut boots = Vec::new();
