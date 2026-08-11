@@ -17,6 +17,7 @@ pub use aperture_storage::{
     Page, ParentFilter, StatusFilter, TaskInvocation, TaskSchedulePatch, TaskStatus,
 };
 
+pub use self::automation::Automation;
 pub use self::context::TaskContext;
 pub use self::definition::{Capabilities, TaskDefinition};
 pub use self::error::{RunError, TaskError};
@@ -25,6 +26,7 @@ pub use self::registry::{TaskDescriptor, TaskRegistry};
 pub use self::scheduler::{Scheduler, SchedulerError};
 pub use self::tasks::{ActiveTask, TaskHandle, Tasks};
 
+mod automation;
 mod context;
 mod definition;
 mod erased;
