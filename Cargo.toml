@@ -6,6 +6,7 @@ members = [
     "aperture-auth",
     "aperture-http",
     "aperture-runtime",
+    "aperture-settings",
     "aperture-storage",
     "aperture-tasks",
 ]
@@ -24,6 +25,7 @@ aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
 aperture-auth = { version = "0.1.0", path = "aperture-auth" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
 aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
+aperture-settings = { version = "0.1.0", path = "aperture-settings" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
 aperture-tasks = { version = "0.1.0", path = "aperture-tasks" }
 

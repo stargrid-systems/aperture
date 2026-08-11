@@ -5,6 +5,7 @@ use std::error::Error as StdError;
 
 use aperture_artifacts::ArtifactError;
 use aperture_auth::AuthError;
+use aperture_settings::SettingError;
 use aperture_storage::StorageError;
 use aperture_tasks::TaskError;
 use axum::http::{Error as HttpError, StatusCode};
@@ -74,6 +75,20 @@ impl From<TaskError> for ApiError {
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = &err as &dyn StdError, "task request failed");
+        }
+        Self(status)
+    }
+}
+
+impl From<SettingError> for ApiError {
+    fn from(err: SettingError) -> Self {
+        let status = match &err {
+            SettingError::NotRegistered(_) => StatusCode::NOT_FOUND,
+            SettingError::Decode(_) => StatusCode::BAD_REQUEST,
+            SettingError::Storage(_) | SettingError::Encode(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(error = &err as &dyn StdError, "setting request failed");
         }
         Self(status)
     }

@@ -1,5 +1,5 @@
 //! Migration 0001: artifact catalog, actors, auth, task invocations, task
-//! schedules, and structured logs.
+//! schedules, structured logs, and settings.
 
 use crate::macros::sql;
 
@@ -113,6 +113,13 @@ const TABLES: &str = sql!(
     ) STRICT;
     CREATE INDEX idx_task_schedules_kind ON task_schedules (kind);
     CREATE INDEX idx_task_schedules_next_run ON task_schedules (next_run_at) WHERE enabled = TRUE;
+
+    CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value jsonb NOT NULL,
+        updated_at timestamp_us NOT NULL,
+        updated_by INTEGER NOT NULL REFERENCES actors (id)
+    ) STRICT;
 
     CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,

@@ -16,6 +16,7 @@ pub use self::log::{
     LogSpanListParams, LogSpanResponse, LogTargetListParams,
 };
 pub use self::page::Page;
+pub use self::settings::{SettingResponse, UpdateSettingRequest};
 pub use self::task::{
     CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
 };
@@ -27,6 +28,7 @@ pub use self::task_schedule::{
 mod artifact;
 mod log;
 mod page;
+mod settings;
 mod task;
 mod task_schedule;
 

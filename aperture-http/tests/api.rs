@@ -3,6 +3,7 @@ use std::{env, fs, process};
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, Role, Username};
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
+use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, ArtifactId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
@@ -80,7 +81,16 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, Role::Admin).await.unwrap();
 
-    let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks, auth);
+    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        spectra,
+        tasks,
+        settings,
+        auth,
+    );
     (app(state), artifacts, storage, raw_key.as_str().to_owned())
 }
 
@@ -794,7 +804,16 @@ async fn app_with_role(role: Role) -> (Router, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, role).await.unwrap();
 
-    let state = AppState::new("test", Uuid::nil(), storage.clone(), spectra, tasks, auth);
+    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        spectra,
+        tasks,
+        settings,
+        auth,
+    );
     (app(state), raw_key.as_str().to_owned())
 }
 
@@ -865,12 +884,14 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         ActorId::SYSTEM,
     );
 
+    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
     let state = AppState::new(
         "test",
         Uuid::nil(),
         storage.clone(),
         spectra,
         tasks,
+        settings,
         auth.clone(),
     );
     (app(state), auth, storage)
