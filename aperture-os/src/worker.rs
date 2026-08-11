@@ -3,7 +3,7 @@
 use std::error::Error as StdError;
 
 use aperture_runtime::{Stop, Worker};
-use aperture_settings::{SettingDefinition, Settings};
+use aperture_settings::Settings;
 use aperture_storage::ActorId;
 use aperture_tasks::Tasks;
 use tokio::sync::broadcast;
@@ -71,18 +71,8 @@ impl Worker for OsWorker {
                 recv = feed.recv() => {
                     match recv {
                         Ok(change) => {
-                            if change.key == HostnameSetting::KEY {
-                                match change.decode::<HostnameSetting>() {
-                                    Ok(setting) => {
-                                        self.on_hostname_change(setting.hostname().clone()).await;
-                                    }
-                                    Err(err) => {
-                                        tracing::warn!(
-                                            error = &err as &dyn StdError,
-                                            "failed to decode hostname setting change"
-                                        );
-                                    }
-                                }
+                            if let Some(setting) = change.decode::<HostnameSetting>() {
+                                self.on_hostname_change(setting.hostname().clone()).await;
                             }
                         }
                         Err(RecvError::Lagged(n)) => {
