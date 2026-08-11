@@ -16,6 +16,7 @@ pub use self::api_key::{ApiKey, ApiKeyId, ApiKeyRepository};
 pub use self::artifact::{Artifact, ArtifactId, ArtifactKeyEntry, ArtifactRepository, VersionSort};
 pub use self::digest::{Digest, DigestAlgorithm, InvalidDigest};
 pub use self::error::{Result, StorageError};
+pub use self::event::{Event, EventFilter, EventId, EventRepository, NewEvent};
 pub use self::interval::{Interval, InvalidInterval};
 pub use self::key::{ArtifactKey, InvalidArtifactKey, MAX_LEN as ARTIFACT_KEY_MAX_LEN};
 pub use self::log::{
@@ -45,6 +46,7 @@ mod api_key;
 mod artifact;
 mod digest;
 mod error;
+mod event;
 mod interval;
 mod key;
 mod log;
@@ -148,6 +150,15 @@ impl Storage {
     /// Returns `StorageError::Database` if a new connection cannot be opened.
     pub fn settings(&self) -> Result<SettingRepository> {
         Ok(SettingRepository::new(self.connect()?))
+    }
+
+    /// Returns the repository over the `events` table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Database` if a new connection cannot be opened.
+    pub fn events(&self) -> Result<EventRepository> {
+        Ok(EventRepository::new(self.connect()?))
     }
 
     /// Returns the repository over the structured log tables.

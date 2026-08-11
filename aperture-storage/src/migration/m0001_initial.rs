@@ -1,5 +1,5 @@
 //! Migration 0001: artifact catalog, actors, auth, task invocations, task
-//! schedules, structured logs, and settings.
+//! schedules, structured logs, settings, and events.
 
 use crate::macros::sql;
 
@@ -120,6 +120,16 @@ const TABLES: &str = sql!(
         updated_at timestamp_us NOT NULL,
         updated_by INTEGER NOT NULL REFERENCES actors (id)
     ) STRICT;
+
+    CREATE TABLE events (
+        id INTEGER PRIMARY KEY,
+        key TEXT NOT NULL,
+        data jsonb NOT NULL,
+        actor INTEGER NOT NULL REFERENCES actors (id),
+        timestamp timestamp_us NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_events_key ON events (key);
+    CREATE INDEX idx_events_timestamp ON events (timestamp);
 
     CREATE TABLE log_spans (
         id INTEGER PRIMARY KEY,
