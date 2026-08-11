@@ -10,14 +10,20 @@ use std::sync::Arc;
 use aperture_storage::{ActorId, SettingRepository};
 use jiff::Timestamp;
 use serde_json::Value;
+use tokio::sync::broadcast;
 
+use crate::change::SettingChange;
 use crate::definition::SettingDefinition;
 use crate::error::SettingError;
 use crate::registry::SettingRegistry;
 
+/// Capacity of the in-process change feed.
+const CHANGE_FEED_CAPACITY: usize = 64;
+
 struct SettingsInner {
     repo: SettingRepository,
     registry: SettingRegistry,
+    changes: broadcast::Sender<SettingChange>,
 }
 
 /// Reads and writes setting values. Cheap to clone: all clones share one
@@ -31,9 +37,19 @@ impl Settings {
     /// Creates a settings service backed by `repo` and the keys in
     /// `registry`.
     pub fn new(repo: SettingRepository, registry: SettingRegistry) -> Self {
+        let (changes, _) = broadcast::channel(CHANGE_FEED_CAPACITY);
         Self {
-            inner: Arc::new(SettingsInner { repo, registry }),
+            inner: Arc::new(SettingsInner {
+                repo,
+                registry,
+                changes,
+            }),
         }
+    }
+
+    /// Subscribes to setting changes.
+    pub fn subscribe(&self) -> broadcast::Receiver<SettingChange> {
+        self.inner.changes.subscribe()
     }
 
     /// The registry of keys, for projecting schemas.
@@ -68,7 +84,7 @@ impl Settings {
     /// Returns `SettingError::NotRegistered` if the key is unknown,
     /// `SettingError::Decode` if the stored value cannot be decoded, or a
     /// storage error if the read fails.
-    pub async fn get<D>(&self) -> Result<D::Value, SettingError>
+    pub async fn get<D>(&self) -> Result<D, SettingError>
     where
         D: SettingDefinition,
     {
@@ -98,6 +114,12 @@ impl Settings {
         definition.check_value(&value)?;
         let now = Timestamp::now();
         self.inner.repo.put(key, &value, updated_by, now).await?;
+        let _ = self.inner.changes.send(SettingChange {
+            key: key.to_owned(),
+            value,
+            actor: updated_by,
+            timestamp: now,
+        });
         Ok(())
     }
 

@@ -3,24 +3,18 @@ use aperture_storage::Storage;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, PartialEq)]
 struct SystemValue {
     hostname: Option<String>,
 }
 
-struct SystemDef;
-
-impl SettingDefinition for SystemDef {
+impl SettingDefinition for SystemValue {
     const KEY: &'static str = "system";
-    type Value = SystemValue;
-    fn default(&self) -> Self::Value {
-        SystemValue { hostname: None }
-    }
 }
 
 fn registry() -> SettingRegistry {
     let mut registry = SettingRegistry::new();
-    registry.register(SystemDef);
+    registry.register(SystemValue::default());
     registry
 }
 
@@ -38,7 +32,7 @@ async fn get_typed_returns_default_when_nothing_stored() {
     let storage = Storage::open(":memory:").await.unwrap();
     let settings = Settings::new(storage.settings().unwrap(), registry());
 
-    let value: SystemValue = settings.get::<SystemDef>().await.unwrap();
+    let value = settings.get::<SystemValue>().await.unwrap();
     assert_eq!(value, SystemValue { hostname: None });
 }
 
