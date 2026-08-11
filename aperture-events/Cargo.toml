@@ -1,0 +1,23 @@
+[package]
+name = "aperture-events"
+version.workspace = true
+description = "Domain event system for Aperture: definitions, registry, and bus."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aperture-storage = { workspace = true }
+jiff = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
+utoipa = { workspace = true, features = ["macros"] }
