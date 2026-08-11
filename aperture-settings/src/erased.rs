@@ -6,8 +6,8 @@
 //! impl bridges every [`SettingDefinition`].
 
 use serde_json::Value;
-use utoipa::openapi::schema::Schema;
 use utoipa::openapi::RefOr;
+use utoipa::openapi::schema::Schema;
 use utoipa::{PartialSchema, ToSchema};
 
 use crate::definition::SettingDefinition;
