@@ -1,12 +1,14 @@
 //! Certificate tasks: periodic rotation and identity regeneration.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
 use aperture_tasks::{Capabilities, Interval, RunError, TaskContext, TaskDefinition};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use utoipa::ToSchema;
 
 use super::pki;
@@ -26,11 +28,12 @@ pub struct RotateCertificateOutput {
 /// Task definition for periodic certificate rotation.
 pub struct RotateCertificateDefinition {
     artifacts: Artifacts,
+    cert_lock: Arc<Mutex<()>>,
 }
 
 impl RotateCertificateDefinition {
-    pub const fn new(artifacts: Artifacts) -> Self {
-        Self { artifacts }
+    pub const fn new(artifacts: Artifacts, cert_lock: Arc<Mutex<()>>) -> Self {
+        Self { artifacts, cert_lock }
     }
 }
 
@@ -50,6 +53,7 @@ impl TaskDefinition for RotateCertificateDefinition {
         _input: RotateCertificateInput,
         _ctx: TaskContext,
     ) -> Result<RotateCertificateOutput, RunError> {
+        let _guard = self.cert_lock.lock().await;
         let artifacts = self.artifacts.clone();
         let rotated = pki::rotate_if_due(&artifacts)
             .await
@@ -96,11 +100,20 @@ pub struct RegenerateCertificateOutput {}
 pub struct RegenerateCertificateDefinition {
     artifacts: Artifacts,
     bind_addr: SocketAddr,
+    cert_lock: Arc<Mutex<()>>,
 }
 
 impl RegenerateCertificateDefinition {
-    pub const fn new(artifacts: Artifacts, bind_addr: SocketAddr) -> Self {
-        Self { artifacts, bind_addr }
+    pub const fn new(
+        artifacts: Artifacts,
+        bind_addr: SocketAddr,
+        cert_lock: Arc<Mutex<()>>,
+    ) -> Self {
+        Self {
+            artifacts,
+            bind_addr,
+            cert_lock,
+        }
     }
 }
 
@@ -118,6 +131,7 @@ impl TaskDefinition for RegenerateCertificateDefinition {
         input: RegenerateCertificateInput,
         _ctx: TaskContext,
     ) -> Result<RegenerateCertificateOutput, RunError> {
+        let _guard = self.cert_lock.lock().await;
         pki::regenerate_leaf_for_identity(
             &self.artifacts,
             self.bind_addr,
@@ -167,7 +181,8 @@ mod tests {
     #[tokio::test]
     async fn rotation_capabilities_are_none() {
         let artifacts = fresh_store().await;
-        let def = RotateCertificateDefinition::new(artifacts);
+        let lock = Arc::new(Mutex::new(()));
+        let def = RotateCertificateDefinition::new(artifacts, lock);
         assert_eq!(def.capabilities(), Capabilities::NONE);
     }
 }

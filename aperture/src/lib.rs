@@ -187,10 +187,22 @@ fn register_kinds(
     artifacts: Artifacts,
     tls_addr: Option<SocketAddr>,
 ) {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
     registry.register(DownloadDefinition::new(artifacts.clone()));
-    registry.register(RotateCertificateDefinition::new(artifacts.clone()));
+
+    let cert_lock = Arc::new(Mutex::new(()));
+    registry.register(RotateCertificateDefinition::new(
+        artifacts.clone(),
+        cert_lock.clone(),
+    ));
     if let Some(addr) = tls_addr {
-        registry.register(RegenerateCertificateDefinition::new(artifacts, addr));
+        registry.register(RegenerateCertificateDefinition::new(
+            artifacts,
+            addr,
+            cert_lock,
+        ));
     }
 }
 

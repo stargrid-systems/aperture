@@ -1,4 +1,4 @@
-//! OsWorker: background worker for mDNS publishing and hostname change reactions.
+//! `OsWorker`: background worker for mDNS publishing and hostname change reactions.
 
 use std::error::Error as StdError;
 

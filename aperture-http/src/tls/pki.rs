@@ -34,9 +34,6 @@ const LEAF_VALIDITY_DAYS: u32 = 14;
 const LEAF_COMMON_NAME: &str = "Aperture Gateway";
 const CA_COMMON_NAME: &str = "Aperture Gateway CA";
 
-/// Write-lock scope for certificate mutations.
-const CERT_SCOPE: &str = "certificate";
-
 struct Pki {
     ca_cert: CertificateDer<'static>,
     ca_key: PrivatePkcs8KeyDer<'static>,
@@ -247,7 +244,6 @@ pub async fn ensure_certificates(
 
     if !ca_present {
         tracing::info!("generating initial PKI");
-        let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
         let hostname = hostname.map(str::to_owned);
         let pki = spawn_blocking(move || generate_pki(bind_addr, hostname.as_deref())).await??;
         store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
@@ -258,7 +254,6 @@ pub async fn ensure_certificates(
     }
 
     tracing::info!("regenerating leaf certificate against existing CA");
-    let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
     let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr, hostname).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
     store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
@@ -280,7 +275,6 @@ pub async fn regenerate_leaf_for_identity(
     bind_addr: SocketAddr,
     hostname: Option<&str>,
 ) -> Result<(), TlsError> {
-    let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
     let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr, hostname).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
     store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
@@ -333,7 +327,6 @@ async fn rotate_certificate(artifacts: &Artifacts) -> Result<(), TlsError> {
 /// Rotates the leaf if due. Live reload is triggered separately by the change
 /// feed (see [`crate::tls::TlsReload`]).
 pub(super) async fn rotate_if_due(artifacts: &Artifacts) -> Result<bool, TlsError> {
-    let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
     if !needs_rotation(artifacts).await? {
         return Ok(false);
     }

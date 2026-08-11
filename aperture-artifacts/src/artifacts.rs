@@ -18,7 +18,7 @@ use jiff::{SignedDuration, Timestamp};
 use oci_client::Reference;
 use tokio::fs;
 use tokio::io::AsyncRead;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast};
+use tokio::sync::{Mutex as AsyncMutex, broadcast};
 
 use crate::blob::BlobStore;
 use crate::change::{ArtifactChange, ChangeKind};
@@ -118,9 +118,6 @@ struct Inner {
     /// One lock per content digest, so concurrent downloads of the same content
     /// collapse onto a single transfer instead of each pulling it.
     pull_locks: Mutex<HashMap<Digest, Weak<AsyncMutex<()>>>>,
-    /// Named write locks for multi-artifact atomic updates. Keyed by scope
-    /// string (e.g. `"certificate"`).
-    write_locks: Mutex<HashMap<String, Weak<AsyncMutex<()>>>>,
     /// Best-effort feed of artifact changes. See [`ArtifactChange`].
     changes: broadcast::Sender<ArtifactChange>,
 }
@@ -136,7 +133,6 @@ impl Artifacts {
                 oci: OciFetcher::new(),
                 resolutions: Mutex::new(HashMap::new()),
                 pull_locks: Mutex::new(HashMap::new()),
-                write_locks: Mutex::new(HashMap::new()),
                 changes,
             }),
         }
@@ -145,31 +141,6 @@ impl Artifacts {
     /// Subscribes to artifact changes.
     pub fn subscribe(&self) -> broadcast::Receiver<ArtifactChange> {
         self.inner.changes.subscribe()
-    }
-
-    /// Acquires an exclusive write lock named `scope`.
-    ///
-    /// All callers using the same scope string are serialized. Use this when
-    /// performing multi-artifact writes that must be atomic (e.g. writing a
-    /// certificate and its key together).
-    pub async fn write_lock(&self, scope: &str) -> OwnedMutexGuard<()> {
-        self.inner.write_lock(scope).await
-    }
-
-    /// Acquires exclusive write locks for multiple scopes, sorted to prevent
-    /// deadlock. Drop the returned `Vec` to release all locks.
-    ///
-    /// Always use this instead of calling [`Artifacts::write_lock`] multiple
-    /// times in sequence, which can deadlock if another caller locks the same
-    /// scopes in a different order.
-    pub async fn write_locks(&self, scopes: &[&str]) -> Vec<OwnedMutexGuard<()>> {
-        let mut sorted: Vec<&str> = scopes.to_vec();
-        sorted.sort_unstable();
-        let mut guards = Vec::with_capacity(sorted.len());
-        for scope in sorted {
-            guards.push(self.inner.write_lock(scope).await);
-        }
-        guards
     }
 
     /// Returns the blob of the newest stored version of `key`, if present on
@@ -525,22 +496,6 @@ impl Inner {
         let lock = Arc::new(AsyncMutex::new(()));
         locks.insert(digest.clone(), Arc::downgrade(&lock));
         lock
-    }
-
-    /// The named write lock for `scope`, shared across callers. A dead entry is
-    /// replaced, so the map only holds locks that are still in use.
-    async fn write_lock(&self, scope: &str) -> OwnedMutexGuard<()> {
-        let lock = {
-            let mut locks = self.write_locks.lock().expect("write_locks poisoned");
-            if let Some(lock) = locks.get(scope).and_then(Weak::upgrade) {
-                lock
-            } else {
-                let lock = Arc::new(AsyncMutex::new(()));
-                locks.insert(scope.to_owned(), Arc::downgrade(&lock));
-                lock
-            }
-        };
-        lock.lock_owned().await
     }
 
     /// Dispatches a fetch to the right fetcher for its source.

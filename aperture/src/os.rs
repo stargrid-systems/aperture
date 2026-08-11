@@ -115,28 +115,25 @@ async fn resolve_hostname(
     use aperture_storage::ActorId;
 
     let value: aperture_os::Hostname = settings.get::<aperture_os::HostnameDef>().await?;
-    match value.as_str() {
-        Some(name) => {
-            let handle = tasks
-                .spawn::<aperture_os::ApplyHostnameDefinition>(
-                    aperture_os::ApplyHostnameInput {
-                        hostname: name.to_owned(),
-                    },
-                    ActorId::SYSTEM,
-                )
-                .await?;
-            handle.wait().await?;
-            Ok(name.to_owned())
-        }
-        None => {
-            let handle = tasks
-                .spawn::<aperture_os::ReadHostnameDefinition>(
-                    aperture_os::ReadHostnameInput {},
-                    ActorId::SYSTEM,
-                )
-                .await?;
-            let output = handle.wait().await?;
-            Ok(output.hostname)
-        }
+    if let Some(name) = value.as_str() {
+        let handle = tasks
+            .spawn::<aperture_os::ApplyHostnameDefinition>(
+                aperture_os::ApplyHostnameInput {
+                    hostname: name.to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await?;
+        handle.wait().await?;
+        Ok(name.to_owned())
+    } else {
+        let handle = tasks
+            .spawn::<aperture_os::ReadHostnameDefinition>(
+                aperture_os::ReadHostnameInput {},
+                ActorId::SYSTEM,
+            )
+            .await?;
+        let output = handle.wait().await?;
+        Ok(output.hostname)
     }
 }
