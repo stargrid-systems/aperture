@@ -1,0 +1,62 @@
+name: OpenAPI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openapi-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Generate spec
+        run: cargo run -- openapi > "$RUNNER_TEMP/openapi.json"
+
+      - name: Fetch published spec
+        run: |
+          if git fetch origin openapi:refs/remotes/origin/openapi 2>/dev/null; then
+            git show origin/openapi:openapi.json > "$RUNNER_TEMP/old.json"
+          else
+            : > "$RUNNER_TEMP/old.json"
+          fi
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if diff -q "$RUNNER_TEMP/old.json" "$RUNNER_TEMP/openapi.json" >/dev/null; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish spec
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          if git show-ref --verify --quiet refs/remotes/origin/openapi; then
+            git checkout -B openapi origin/openapi
+          else
+            git checkout --orphan openapi
+            git read-tree --empty
+          fi
+          cp "$RUNNER_TEMP/openapi.json" openapi.json
+          git add openapi.json
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git commit -m "chore: update openapi spec"
+          git push origin openapi
