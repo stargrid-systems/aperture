@@ -1,4 +1,6 @@
-//! Certificate rotation task: re-issues the leaf cert when it nears expiry.
+//! Certificate tasks: periodic rotation and identity regeneration.
+
+use std::net::SocketAddr;
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
@@ -81,6 +83,50 @@ pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Res
     })
     .await?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RegenerateCertificateInput {
+    pub hostname: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct RegenerateCertificateOutput {}
+
+pub struct RegenerateCertificateDefinition {
+    artifacts: Artifacts,
+    bind_addr: SocketAddr,
+}
+
+impl RegenerateCertificateDefinition {
+    pub const fn new(artifacts: Artifacts, bind_addr: SocketAddr) -> Self {
+        Self { artifacts, bind_addr }
+    }
+}
+
+impl TaskDefinition for RegenerateCertificateDefinition {
+    const KIND: &'static str = "regenerate-certificate";
+    type Input = RegenerateCertificateInput;
+    type Output = RegenerateCertificateOutput;
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::NONE
+    }
+
+    async fn run(
+        &self,
+        input: RegenerateCertificateInput,
+        _ctx: TaskContext,
+    ) -> Result<RegenerateCertificateOutput, RunError> {
+        pki::regenerate_leaf_for_identity(
+            &self.artifacts,
+            self.bind_addr,
+            input.hostname.as_deref(),
+        )
+        .await
+        .map_err(|err| RunError::Failed(anyhow::Error::from(err)))?;
+        Ok(RegenerateCertificateOutput {})
+    }
 }
 
 #[cfg(test)]

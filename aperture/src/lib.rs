@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
 use aperture_http::{
-    AppState, HttpServer, OpenApiSpec, RotateCertificateDefinition, Spectra, SpectraConfig,
-    SpectraWorker, install_default_rotation_schedule,
+    AppState, HttpServer, OpenApiSpec, RegenerateCertificateDefinition, RotateCertificateDefinition,
+    Spectra, SpectraConfig, SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
 use aperture_settings::{SettingRegistry, Settings};
@@ -16,15 +16,10 @@ use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
 use tokio::{fs, signal};
 use uuid::Uuid;
 
+use self::os::{bootstrap, register_tasks};
 use self::runtime::TasksWorker;
 
-#[cfg(feature = "os-integration")]
-use aperture_os::SystemDef;
-#[cfg(feature = "os-integration")]
-use self::os::OsWorker;
-
 mod logging;
-#[cfg(feature = "os-integration")]
 mod os;
 mod runtime;
 
@@ -89,7 +84,8 @@ pub async fn serve(
     let auth = AuthHandle::new(storage.clone()).await?;
 
     let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts.clone());
+    register_kinds(&mut registry, artifacts.clone(), tls_addr);
+    let os_reg = register_tasks(os_integration, &mut registry).await?;
     let tasks = Tasks::new(storage.tasks()?, registry);
 
     #[cfg_attr(not(feature = "os-integration"), expect(unused_mut))]
@@ -98,8 +94,6 @@ pub async fn serve(
     if os_integration {
         register_settings(&mut setting_registry);
     }
-    #[cfg(not(feature = "os-integration"))]
-    let _ = os_integration;
     let settings = Settings::new(storage.settings()?, setting_registry);
 
     let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
@@ -116,37 +110,14 @@ pub async fn serve(
         install_default_rotation_schedule(&storage).await?;
     }
 
-    // OS integration: connect to the system bus and resolve the hostname.
-    #[cfg(feature = "os-integration")]
-    let (hostname, os_worker) = if os_integration {
-        let conn = aperture_os::Connection::system()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to connect to system D-Bus: {e}"))?;
-        let value: aperture_os::SystemValue =
-            settings.get::<aperture_os::SystemDef>().await?;
-        let hostname = match value.hostname {
-            Some(name) => {
-                aperture_os::apply_hostname(&conn, &name).await?;
-                name
-            }
-            None => aperture_os::read_hostname(&conn).await?,
-        };
-        let worker = OsWorker::new(
-            settings.clone(),
-            artifacts.clone(),
-            conn,
-            hostname.clone(),
-            tls_addr,
-            tls_addr.map(|a| a.port()),
-            plain_addr.map(|a| a.port()),
-        );
-        (Some(hostname), Some(worker))
-    } else {
-        (None, None)
-    };
-
-    #[cfg(not(feature = "os-integration"))]
-    let hostname: Option<String> = None;
+    let os = bootstrap(
+        os_reg,
+        settings.clone(),
+        tasks.clone(),
+        tls_addr,
+        plain_addr,
+    )
+    .await?;
 
     let state = AppState::new(
         VERSION,
@@ -159,18 +130,15 @@ pub async fn serve(
     );
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(artifacts, tls_addr, plain_addr, hostname.as_deref(), app).await?;
+    let server =
+        HttpServer::start(artifacts, tls_addr, plain_addr, os.hostname.as_deref(), app).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
     supervisor.spawn("log", log_worker);
     supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
-
-    #[cfg(feature = "os-integration")]
-    if let Some(worker) = os_worker {
-        supervisor.spawn("os", worker);
-    }
+    os.spawn(&mut supervisor);
 
     supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())
@@ -209,20 +177,27 @@ pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
     let storage = Storage::open(":memory:").await?;
     let artifacts = Artifacts::new(storage, PathBuf::from("."));
     let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts);
+    register_kinds(&mut registry, artifacts, None);
     Ok(aperture_http::openapi(&registry.descriptors()))
 }
 
 /// Registers every task kind the gateway supports.
-fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
+fn register_kinds(
+    registry: &mut TaskRegistry,
+    artifacts: Artifacts,
+    tls_addr: Option<SocketAddr>,
+) {
     registry.register(DownloadDefinition::new(artifacts.clone()));
-    registry.register(RotateCertificateDefinition::new(artifacts));
+    registry.register(RotateCertificateDefinition::new(artifacts.clone()));
+    if let Some(addr) = tls_addr {
+        registry.register(RegenerateCertificateDefinition::new(artifacts, addr));
+    }
 }
 
 /// Registers every setting scope the gateway supports.
 #[cfg(feature = "os-integration")]
 fn register_settings(registry: &mut SettingRegistry) {
-    registry.register(SystemDef);
+    registry.register(aperture_os::HostnameDef);
 }
 
 /// Resets the password for `username` and prints the new password to stdout.

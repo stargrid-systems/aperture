@@ -236,6 +236,7 @@ name = "aperture-os"
 version = "0.1.0"
 dependencies = [
  "aperture-settings",
+ "aperture-tasks",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

@@ -17,7 +17,6 @@ use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::fs;
 use tokio::io::AsyncReadExt;
-use tokio::sync::Mutex;
 use tokio::task::spawn_blocking;
 use x509_parser::extensions::GeneralName;
 use x509_parser::x509::X509Name;
@@ -35,9 +34,8 @@ const LEAF_VALIDITY_DAYS: u32 = 14;
 const LEAF_COMMON_NAME: &str = "Aperture Gateway";
 const CA_COMMON_NAME: &str = "Aperture Gateway CA";
 
-/// Serializes cert mutations so identity-regen and periodic rotation can't
-/// race on the artifact store.
-static CERT_LOCK: Mutex<()> = Mutex::const_new(());
+/// Write-lock scope for certificate mutations.
+const CERT_SCOPE: &str = "certificate";
 
 struct Pki {
     ca_cert: CertificateDer<'static>,
@@ -152,7 +150,7 @@ fn compute_sans(bind_addr: SocketAddr, hostname: Option<&str>) -> Vec<SanType> {
         SanType::IpAddress(IpAddr::V6(Ipv6Addr::LOCALHOST)),
     ];
 
-    if let Some(host) = hostname_filter(hostname) {
+    if let Some(host) = hostname {
         let mdns = format!("{host}.local");
         if let Ok(dns) = mdns.try_into() {
             sans.push(SanType::DnsName(dns));
@@ -167,15 +165,6 @@ fn compute_sans(bind_addr: SocketAddr, hostname: Option<&str>) -> Vec<SanType> {
         sans.push(SanType::IpAddress(bind_ip));
     }
     sans
-}
-
-/// Returns the hostname if it is non-empty and not `"localhost"`.
-fn hostname_filter(hostname: Option<&str>) -> Option<&str> {
-    let host = hostname?;
-    if host.is_empty() || host == "localhost" {
-        return None;
-    }
-    Some(host)
 }
 
 /// Extracts subject DN and SANs from an existing leaf cert.
@@ -258,17 +247,18 @@ pub async fn ensure_certificates(
 
     if !ca_present {
         tracing::info!("generating initial PKI");
+        let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
         let hostname = hostname.map(str::to_owned);
         let pki = spawn_blocking(move || generate_pki(bind_addr, hostname.as_deref())).await??;
         store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
         store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
-        // CA pair rotated. Regenerate leaf against the new CA.
         store_key_artifact(artifacts, &SERVER_KEY, &pki.server_key).await?;
         store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
         return Ok(());
     }
 
     tracing::info!("regenerating leaf certificate against existing CA");
+    let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
     let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr, hostname).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
     store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
@@ -290,7 +280,7 @@ pub async fn regenerate_leaf_for_identity(
     bind_addr: SocketAddr,
     hostname: Option<&str>,
 ) -> Result<(), TlsError> {
-    let _guard = CERT_LOCK.lock().await;
+    let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
     let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr, hostname).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
     store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
@@ -343,7 +333,7 @@ async fn rotate_certificate(artifacts: &Artifacts) -> Result<(), TlsError> {
 /// Rotates the leaf if due. Live reload is triggered separately by the change
 /// feed (see [`crate::tls::TlsReload`]).
 pub(super) async fn rotate_if_due(artifacts: &Artifacts) -> Result<bool, TlsError> {
-    let _guard = CERT_LOCK.lock().await;
+    let _guards = artifacts.write_locks(&[CERT_SCOPE]).await;
     if !needs_rotation(artifacts).await? {
         return Ok(false);
     }

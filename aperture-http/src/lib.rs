@@ -23,7 +23,8 @@ pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
 pub use self::tls::{
-    RotateCertificateDefinition, install_default_rotation_schedule, regenerate_leaf_for_identity,
+    RegenerateCertificateDefinition, RegenerateCertificateInput, RotateCertificateDefinition,
+    install_default_rotation_schedule, regenerate_leaf_for_identity,
 };
 
 mod api;

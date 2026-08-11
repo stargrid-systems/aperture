@@ -1,165 +1,142 @@
-//! OS integration worker: mDNS publishing and hostname management.
+//! OS integration: mDNS publishing, hostname management, and task wiring.
 //!
-//! Active only when the `os-integration` Cargo feature is compiled in and the
-//! runtime `--os-integration` flag is set.
+//! The module is always compiled. When the `os-integration` Cargo feature is
+//! not enabled, the public functions are no-ops. When enabled but the runtime
+//! flag is off, they return empty results.
 
-use std::error::Error as StdError;
 use std::net::SocketAddr;
 
-use aperture_artifacts::Artifacts;
-use aperture_http::regenerate_leaf_for_identity;
-use aperture_os::{
-    Connection, ServicePublisher, ServiceSpec, SystemDef, SystemValue, apply_hostname,
-    read_hostname,
-};
-use aperture_runtime::{Stop, Worker};
-use aperture_settings::{SettingDefinition, Settings};
-use tokio::sync::broadcast::error::RecvError;
+#[cfg(feature = "os-integration")]
+use self::worker::OsWorker;
 
-pub struct OsWorker {
-    settings: Settings,
-    artifacts: Artifacts,
-    connection: Connection,
-    hostname: String,
+#[cfg(feature = "os-integration")]
+mod worker;
+
+/// Holds the D-Bus connection created during task registration.
+pub struct OsRegistration {
+    #[cfg(feature = "os-integration")]
+    pub(crate) conn: aperture_os::Connection,
+}
+
+/// Result of OS integration bootstrap.
+pub struct OsBoot {
+    /// The resolved hostname for TLS SAN provisioning, or `None` when OS
+    /// integration is inactive.
+    pub hostname: Option<String>,
+    #[cfg(feature = "os-integration")]
+    worker: Option<OsWorker>,
+}
+
+#[cfg(not(feature = "os-integration"))]
+pub async fn register_tasks(
+    _os_integration: bool,
+    _registry: &mut aperture_tasks::TaskRegistry,
+) -> anyhow::Result<Option<OsRegistration>> {
+    Ok(None)
+}
+
+#[cfg(feature = "os-integration")]
+pub async fn register_tasks(
+    os_integration: bool,
+    registry: &mut aperture_tasks::TaskRegistry,
+) -> anyhow::Result<Option<OsRegistration>> {
+    if !os_integration {
+        return Ok(None);
+    }
+    let conn = aperture_os::Connection::system()
+        .await
+        .map_err(|e| anyhow::format_err!("failed to connect to system D-Bus: {e}"))?;
+    registry.register(aperture_os::ReadHostnameDefinition::new(conn.clone()));
+    registry.register(aperture_os::ApplyHostnameDefinition::new(conn.clone()));
+    Ok(Some(OsRegistration { conn }))
+}
+
+#[cfg(not(feature = "os-integration"))]
+pub async fn bootstrap(
+    _registration: Option<OsRegistration>,
+    _settings: aperture_settings::Settings,
+    _tasks: aperture_tasks::Tasks,
+    _tls_addr: Option<SocketAddr>,
+    _plain_addr: Option<SocketAddr>,
+) -> anyhow::Result<OsBoot> {
+    Ok(OsBoot { hostname: None })
+}
+
+#[cfg(feature = "os-integration")]
+pub async fn bootstrap(
+    registration: Option<OsRegistration>,
+    settings: aperture_settings::Settings,
+    tasks: aperture_tasks::Tasks,
     tls_addr: Option<SocketAddr>,
-    https_port: Option<u16>,
-    plain_port: Option<u16>,
+    plain_addr: Option<SocketAddr>,
+) -> anyhow::Result<OsBoot> {
+    let Some(reg) = registration else {
+        return Ok(OsBoot {
+            hostname: None,
+            worker: None,
+        });
+    };
+
+    let hostname = resolve_hostname(&settings, &tasks).await?;
+    let worker = OsWorker::new(
+        settings.clone(),
+        tasks.clone(),
+        reg.conn,
+        hostname.clone(),
+        tls_addr.map(|a| a.port()),
+        plain_addr.map(|a| a.port()),
+    );
+    Ok(OsBoot {
+        hostname: Some(hostname),
+        worker: Some(worker),
+    })
 }
 
-impl OsWorker {
-    pub(crate) const fn new(
-        settings: Settings,
-        artifacts: Artifacts,
-        connection: Connection,
-        hostname: String,
-        tls_addr: Option<SocketAddr>,
-        https_port: Option<u16>,
-        plain_port: Option<u16>,
-    ) -> Self {
-        Self {
-            settings,
-            artifacts,
-            connection,
-            hostname,
-            tls_addr,
-            https_port,
-            plain_port,
-        }
-    }
-}
-
-impl Worker for OsWorker {
-    async fn run(self, stop: Stop) {
-        let publisher = self.publish_services().await;
-
-        let mut feed = self.settings.subscribe();
-
-        loop {
-            tokio::select! {
-                biased;
-                () = stop.cancelled() => break,
-                recv = feed.recv() => {
-                    match recv {
-                        Ok(change) if change.key == SystemDef::KEY => {
-                            self.on_hostname_change(change.value).await;
-                        }
-                        Ok(_) => {}
-                        Err(RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "settings change feed lagged");
-                        }
-                        Err(RecvError::Closed) => break,
-                    }
-                }
-            }
+impl OsBoot {
+    /// Spawns the OS worker into `supervisor` if one was created.
+    pub fn spawn(self, supervisor: &mut aperture_runtime::Supervisor) {
+        #[cfg(feature = "os-integration")]
+        if let Some(worker) = self.worker {
+            supervisor.spawn("os", worker);
         }
 
-        if let Some(publisher) = publisher
-            && let Err(err) = publisher.free().await
+        #[cfg(not(feature = "os-integration"))]
         {
-            tracing::warn!(
-                error = &err as &dyn StdError,
-                "failed to free avahi entry group"
-            );
+            let _ = (self, supervisor);
         }
     }
 }
 
-impl OsWorker {
-    async fn publish_services(&self) -> Option<ServicePublisher> {
-        let mut services = Vec::new();
-        if let Some(port) = self.https_port {
-            services.push(ServiceSpec {
-                service_type: "_https._tcp".to_owned(),
-                port,
-            });
+#[cfg(feature = "os-integration")]
+async fn resolve_hostname(
+    settings: &aperture_settings::Settings,
+    tasks: &aperture_tasks::Tasks,
+) -> anyhow::Result<String> {
+    use aperture_storage::ActorId;
+
+    let value: aperture_os::Hostname = settings.get::<aperture_os::HostnameDef>().await?;
+    match value.as_str() {
+        Some(name) => {
+            let handle = tasks
+                .spawn::<aperture_os::ApplyHostnameDefinition>(
+                    aperture_os::ApplyHostnameInput {
+                        hostname: name.to_owned(),
+                    },
+                    ActorId::SYSTEM,
+                )
+                .await?;
+            handle.wait().await?;
+            Ok(name.to_owned())
         }
-        if let Some(port) = self.plain_port {
-            services.push(ServiceSpec {
-                service_type: "_http._tcp".to_owned(),
-                port,
-            });
+        None => {
+            let handle = tasks
+                .spawn::<aperture_os::ReadHostnameDefinition>(
+                    aperture_os::ReadHostnameInput {},
+                    ActorId::SYSTEM,
+                )
+                .await?;
+            let output = handle.wait().await?;
+            Ok(output.hostname)
         }
-
-        match ServicePublisher::start(&self.connection, &self.hostname, &services).await {
-            Ok(publisher) => {
-                tracing::info!(hostname = %self.hostname, "mDNS services published");
-                Some(publisher)
-            }
-            Err(err) => {
-                tracing::warn!(
-                    error = &err as &dyn StdError,
-                    "failed to publish mDNS services"
-                );
-                None
-            }
-        }
-    }
-
-    async fn on_hostname_change(&self, value: serde_json::Value) {
-        let value: SystemValue = match serde_json::from_value(value) {
-            Ok(v) => v,
-            Err(err) => {
-                tracing::warn!(
-                    error = &err as &dyn StdError,
-                    "failed to decode system setting"
-                );
-                return;
-            }
-        };
-
-        let new_hostname = match value.hostname {
-            Some(name) => {
-                if let Err(err) = apply_hostname(&self.connection, &name).await {
-                    tracing::error!(
-                        error = &err as &dyn StdError,
-                        "failed to apply hostname"
-                    );
-                    return;
-                }
-                name
-            }
-            None => match read_hostname(&self.connection).await {
-                Ok(h) => h,
-                Err(err) => {
-                    tracing::error!(
-                        error = &err as &dyn StdError,
-                        "failed to read hostname"
-                    );
-                    return;
-                }
-            },
-        };
-
-        if let Some(addr) = self.tls_addr
-            && let Err(err) =
-                regenerate_leaf_for_identity(&self.artifacts, addr, Some(&new_hostname)).await
-        {
-            tracing::error!(
-                error = &err as &dyn StdError,
-                "failed to regenerate TLS leaf for new hostname"
-            );
-        }
-
-        tracing::info!(hostname = %new_hostname, "hostname updated");
     }
 }

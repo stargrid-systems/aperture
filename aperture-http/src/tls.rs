@@ -15,7 +15,10 @@ pub use self::listener::TlsListener;
 pub use self::pki::{ensure_certificates, load_server_config, regenerate_leaf_for_identity};
 pub use self::redirect::redirect_router;
 pub use self::reload::TlsReload;
-pub use self::rotate::{RotateCertificateDefinition, install_default_rotation_schedule};
+pub use self::rotate::{
+    RegenerateCertificateDefinition, RegenerateCertificateInput, RotateCertificateDefinition,
+    install_default_rotation_schedule,
+};
 
 mod error;
 mod listener;
