@@ -1,0 +1,3587 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Aperture API",
+    "description": "",
+    "contact": {
+      "name": "Simon Berger",
+      "email": "simon@siku2.io"
+    },
+    "license": {
+      "name": "AGPL-3.0-or-later",
+      "identifier": "AGPL-3.0-or-later"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/api-keys": {
+      "get": {
+        "summary": "Lists API keys for the authenticated actor.",
+        "operationId": "listApiKeys",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ApiKeyResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new API key for the authenticated actor.",
+        "operationId": "createApiKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "API key created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateApiKeyResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/api-keys/{id}": {
+      "delete": {
+        "summary": "Deletes an API key.",
+        "operationId": "deleteApiKey",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "API key id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ApiKeyId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "API key deleted"
+          },
+          "404": {
+            "description": "Unknown API key"
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts": {
+      "get": {
+        "summary": "Lists stored artifact keys, each with its newest version.",
+        "operationId": "listArtifacts",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows to return. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Match keys containing this substring.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifacts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ArtifactSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{key}": {
+      "get": {
+        "summary": "Returns one artifact key with its newest version.",
+        "operationId": "getArtifact",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Artifact key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactKey"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactSummaryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown artifact"
+          }
+        }
+      },
+      "put": {
+        "summary": "Uploads a new artifact version.",
+        "description": "The request body is stored as a content-addressed blob. Subsequent uploads\nof identical bytes do not replace the prior version. Instead, a new\n`(key, digest)` row is recorded when the digest differs. This matches the\ncontent-addressed storage model but is not a strict RFC 9110 PUT (which\nwould replace prior state). Treat this endpoint as \"store these bytes under\nthis key\" rather than \"set this key to these bytes\".",
+        "operationId": "uploadArtifact",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Artifact key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactKey"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Raw artifact bytes to store",
+          "content": {
+            "application/octet-stream": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Version stored",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Path to the newly stored version"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactVersionResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeded the maximum upload size"
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{key}/versions": {
+      "get": {
+        "summary": "Lists the stored versions of an artifact.",
+        "operationId": "listArtifactVersions",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Artifact key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactKey"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows to return. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Field to sort by. Defaults to downloaded time.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/VersionSortParam"
+            }
+          },
+          {
+            "name": "media_type",
+            "in": "query",
+            "description": "Only versions with this exact media type.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MediaType"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Only versions with this exact version string.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ArtifactVersionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{key}/versions/{digest}": {
+      "get": {
+        "summary": "Returns one stored version.",
+        "operationId": "getArtifactVersion",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Artifact key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactKey"
+            }
+          },
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "Content digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Digest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactVersionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown version"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Evicts one stored version and its blob, if no other version needs it.",
+        "operationId": "deleteArtifactVersion",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Artifact key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactKey"
+            }
+          },
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "Content digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Digest"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Version evicted"
+          },
+          "404": {
+            "description": "Unknown version"
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{key}/versions/{digest}/blob": {
+      "get": {
+        "summary": "Downloads the blob content of one stored version.",
+        "operationId": "downloadArtifactBlob",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Artifact key",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactKey"
+            }
+          },
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "Content digest",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Digest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Blob content",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Immutable caching directive"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Quoted content digest"
+              },
+              "Last-Modified": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "HTTP timestamp of the upload"
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Always `nosniff`"
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified"
+          },
+          "404": {
+            "description": "Unknown version"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "summary": "Changes the password for the authenticated user.",
+        "operationId": "changePassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed"
+          },
+          "401": {
+            "description": "Current password is incorrect"
+          },
+          "403": {
+            "description": "API-key authenticated callers cannot change a password"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "summary": "Authenticates a user and creates a session.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials"
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "summary": "Destroys the current session.",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Logged out"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "summary": "Returns the authenticated caller's identity and role.",
+        "operationId": "getCurrentUser",
+        "responses": {
+          "200": {
+            "description": "Current caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUserResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/setup": {
+      "post": {
+        "summary": "Creates the initial admin user. Only available when no users exist.",
+        "operationId": "setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Setup complete, session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup already complete"
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/auth/setup-status": {
+      "get": {
+        "summary": "Returns whether initial setup (creating the first admin user) is needed.",
+        "operationId": "getSetupStatus",
+        "responses": {
+          "200": {
+            "description": "Setup status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/logs": {
+      "get": {
+        "summary": "Lists log events with optional filtering.",
+        "operationId": "listLogs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows to return. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to descending (newest first).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          },
+          {
+            "name": "min_level",
+            "in": "query",
+            "description": "Only events at this severity or higher.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LevelResponse"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "description": "Only events whose target is one of these (comma-separated). Example:\n`aperture,aperture_http`.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Substring search across message and target.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "description": "Only events belonging to this span.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SpanId"
+            }
+          },
+          {
+            "name": "boot_id",
+            "in": "query",
+            "description": "Only events from this boot session.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only events at or after this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only events at or before this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Structured field filter as a JSON object, e.g. `{\"key\":\"value\"}`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/JsonQueryString"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_LogEventResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logs/boots": {
+      "get": {
+        "summary": "Lists distinct boot sessions, newest first.",
+        "operationId": "listLogBoots",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Boot sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_BootResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logs/spans": {
+      "get": {
+        "summary": "Lists tracing spans with optional filtering.",
+        "operationId": "listSpans",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows to return. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to descending (newest first).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          },
+          {
+            "name": "min_level",
+            "in": "query",
+            "description": "Only spans at this severity or higher.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/LevelResponse"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "description": "Only spans whose target is one of these (comma-separated). Example:\n`aperture,aperture_storage`.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "boot_id",
+            "in": "query",
+            "description": "Only spans from this boot session.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only spans started at or after this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only spans started at or before this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "parent_id",
+            "in": "query",
+            "description": "Only direct children of this span id.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SpanId"
+            }
+          },
+          {
+            "name": "parent_null",
+            "in": "query",
+            "description": "When true, only root spans (no parent) are returned.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Structured field filter as a JSON object, e.g. `{\"key\":\"value\"}`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/JsonQueryString"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Spans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_LogSpanResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/logs/spans/{id}": {
+      "get": {
+        "summary": "Returns a single span with its events.",
+        "operationId": "getSpan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Span id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SpanId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Span with events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogSpanDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown span"
+          }
+        }
+      }
+    },
+    "/api/v1/logs/targets": {
+      "get": {
+        "summary": "Lists distinct log targets for autocomplete.",
+        "operationId": "listLogTargets",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Only targets starting with this prefix.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Target names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_String"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "summary": "Lists every setting key with its current value.",
+        "operationId": "listSettings",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SettingResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/{key}": {
+      "get": {
+        "summary": "Returns the value of one setting key.",
+        "operationId": "getSetting",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Setting key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Setting value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown setting key"
+          }
+        }
+      },
+      "put": {
+        "summary": "Replaces the value of one setting key.",
+        "operationId": "updateSetting",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Setting key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Setting updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid value"
+          },
+          "404": {
+            "description": "Unknown setting key"
+          }
+        }
+      }
+    },
+    "/api/v1/task-definitions": {
+      "get": {
+        "summary": "Lists the registered task kinds with their capabilities and JSON Schemas.",
+        "operationId": "listTaskDefinitions",
+        "responses": {
+          "200": {
+            "description": "Task definitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskDefinitionResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/task-schedules": {
+      "get": {
+        "summary": "Lists every periodic task schedule.",
+        "operationId": "listTaskSchedules",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task schedules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_TaskScheduleResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new periodic task schedule.",
+        "operationId": "createTaskSchedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTaskScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Task schedule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskScheduleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/api/v1/task-schedules/{id}": {
+      "get": {
+        "summary": "Returns one task schedule.",
+        "operationId": "getTaskSchedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task schedule id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskScheduleId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskScheduleResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown task schedule"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Deletes a task schedule.",
+        "operationId": "deleteTaskSchedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task schedule id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskScheduleId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Task schedule deleted"
+          },
+          "404": {
+            "description": "Unknown task schedule"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Updates a task schedule's interval and/or enabled flag.",
+        "operationId": "updateTaskSchedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task schedule id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskScheduleId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTaskScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Task schedule updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskScheduleResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown task schedule"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks": {
+      "get": {
+        "summary": "Lists task invocations, optionally filtered by status, kind, and parent.\nRunning tasks carry live progress.",
+        "operationId": "listTasks",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows to return. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only tasks in this state, or the `active`/`finished` groups.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TaskStatusParam"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only tasks of this kind.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "parent",
+            "in": "query",
+            "description": "Only children of this task.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TaskId"
+            }
+          },
+          {
+            "name": "root",
+            "in": "query",
+            "description": "Only top-level tasks (no parent). Ignored when `parent` is set.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "input_path",
+            "in": "query",
+            "description": "Only tasks whose input JSON has `input_value` at this path, for example\n`key` or `source.reference`. Requires `input_value`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "input_value",
+            "in": "query",
+            "description": "The value the field at `input_path` must equal.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "output_path",
+            "in": "query",
+            "description": "Only tasks whose output JSON has `output_value` at this path. Requires\n`output_value`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "output_value",
+            "in": "query",
+            "description": "The value the field at `output_path` must equal.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_TaskResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a task of the given kind and starts it.",
+        "description": "The body input is validated against the kind's input schema.",
+        "operationId": "createTask",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTaskInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Task created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown kind or invalid input"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}": {
+      "get": {
+        "summary": "Returns one task invocation.",
+        "operationId": "getTask",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown task"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/cancel": {
+      "post": {
+        "summary": "Requests cooperative cancellation of a running task.",
+        "operationId": "cancelTask",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Task id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskId"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation requested"
+          },
+          "404": {
+            "description": "Unknown task"
+          },
+          "409": {
+            "description": "Task kind cannot be cancelled"
+          },
+          "410": {
+            "description": "Task has already finished"
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "summary": "Lists all users.",
+        "operationId": "listUsers",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_UserResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Creates a new user.",
+        "operationId": "createUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "User created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "summary": "Returns one user.",
+        "operationId": "getUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown user"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Deletes a user.",
+        "operationId": "deleteUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User deleted"
+          },
+          "404": {
+            "description": "Unknown user"
+          }
+        }
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "summary": "Returns version information about the gateway.",
+        "operationId": "getGatewayVersion",
+        "responses": {
+          "200": {
+            "description": "Gateway version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActorId": {
+        "type": "string",
+        "description": "Primary key of a row in the `actors` table.\n\nUsed wherever an actor is referenced: `users.actor_id`,\n`sessions.actor_id`, `api_keys.actor_id`, `tasks.initiator_id`."
+      },
+      "ApiKeyId": {
+        "type": "string",
+        "description": "Primary key of a row in the `api_keys` table."
+      },
+      "ApiKeyResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "prefix"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ApiKeyId"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        }
+      },
+      "ArtifactKey": {
+        "type": "string",
+        "description": "Logical artifact identifier, for example `spectra` or `tls_server-cert`.",
+        "maxLength": 1024
+      },
+      "ArtifactSummaryResponse": {
+        "type": "object",
+        "description": "A distinct artifact key with its newest version, for `GET\n/api/v1/artifacts`.",
+        "required": [
+          "key",
+          "version_count",
+          "source",
+          "digest",
+          "size_bytes",
+          "downloaded_at"
+        ],
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/Digest",
+            "description": "Content digest of the newest version."
+          },
+          "downloaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the newest version was downloaded."
+          },
+          "key": {
+            "type": "string",
+            "description": "Logical artifact key."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stored blob size of the newest version, in bytes.",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the newest version came from."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable version of the newest version, if known."
+          },
+          "version_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many versions of this key are stored.",
+            "minimum": 0
+          }
+        }
+      },
+      "ArtifactVersionResponse": {
+        "type": "object",
+        "description": "One stored version of an artifact.",
+        "required": [
+          "key",
+          "digest",
+          "source",
+          "size_bytes",
+          "downloaded_at"
+        ],
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/Digest",
+            "description": "Content digest of the stored blob."
+          },
+          "downloaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this version was downloaded."
+          },
+          "key": {
+            "type": "string",
+            "description": "Logical artifact key."
+          },
+          "media_type": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MediaType",
+                "description": "OCI media type, if applicable."
+              }
+            ]
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stored blob size in bytes.",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string",
+            "description": "Where this version came from."
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this version was last verified, if ever."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable version, if known."
+          }
+        }
+      },
+      "BootResponse": {
+        "type": "object",
+        "description": "One boot session observed in the log store, returned by\n`GET /api/v1/logs/boots`.",
+        "required": [
+          "boot_id",
+          "first_seen",
+          "last_seen",
+          "event_count",
+          "is_current"
+        ],
+        "properties": {
+          "boot_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique boot id (UUID)."
+          },
+          "event_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of events recorded so far in this boot.",
+            "minimum": 0
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the earliest event in this boot."
+          },
+          "is_current": {
+            "type": "boolean",
+            "description": "True if this is the currently running gateway boot."
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the latest event in this boot."
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "$ref": "#/components/schemas/Password"
+          },
+          "new_password": {
+            "$ref": "#/components/schemas/Password"
+          }
+        }
+      },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Role",
+                "description": "Optional role to assign to this key's casbin subject."
+              }
+            ]
+          }
+        }
+      },
+      "CreateApiKeyResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "key"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ApiKeyId"
+          },
+          "key": {
+            "$ref": "#/components/schemas/RawApiKey",
+            "description": "The full key. Only visible at creation time."
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTaskInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "$ref": "#/components/schemas/RotateCertificateInput"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "rotate-certificate"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "$ref": "#/components/schemas/DownloadInput"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download"
+                ]
+              }
+            }
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind"
+        }
+      },
+      "CreateTaskRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/tasks`.",
+        "required": [
+          "kind",
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "description": "The task input, matching the kind's input schema."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The kind of task to create."
+          }
+        }
+      },
+      "CreateTaskScheduleRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/task-schedules`.",
+        "required": [
+          "kind",
+          "input",
+          "interval"
+        ],
+        "properties": {
+          "input": {},
+          "interval": {
+            "$ref": "#/components/schemas/Interval"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateUserRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "$ref": "#/components/schemas/Password"
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Role"
+              }
+            ]
+          },
+          "username": {
+            "$ref": "#/components/schemas/Username"
+          }
+        }
+      },
+      "CurrentUserResponse": {
+        "type": "object",
+        "required": [
+          "actor_id",
+          "display_name",
+          "roles",
+          "must_change_password"
+        ],
+        "properties": {
+          "actor_id": {
+            "$ref": "#/components/schemas/ActorId"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "must_change_password": {
+            "type": "boolean"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            }
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Digest": {
+        "type": "string",
+        "description": "Content digest, e.g. `sha256:hex`."
+      },
+      "DownloadInput": {
+        "type": "object",
+        "description": "Input for a download task: what to fetch and where from.",
+        "required": [
+          "key",
+          "source"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/ArtifactKey",
+            "description": "Logical key to record the artifact under."
+          },
+          "source": {
+            "$ref": "#/components/schemas/DownloadSource",
+            "description": "Where and how to fetch it from."
+          }
+        }
+      },
+      "DownloadOutput": {
+        "type": "object",
+        "description": "Output of a download task: the stored version that resulted.",
+        "required": [
+          "digest",
+          "size_bytes"
+        ],
+        "properties": {
+          "digest": {
+            "$ref": "#/components/schemas/Digest",
+            "description": "Content digest of the stored blob."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stored blob size in bytes.",
+            "minimum": 0
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable version, if known."
+          }
+        }
+      },
+      "DownloadSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A layer of an OCI image.",
+            "required": [
+              "reference",
+              "media_type",
+              "type"
+            ],
+            "properties": {
+              "media_type": {
+                "$ref": "#/components/schemas/MediaType",
+                "description": "The media type of the layer to pull."
+              },
+              "reference": {
+                "type": "string",
+                "description": "The image reference, for example `ghcr.io/org/image:tag`."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "oci"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where a download fetches from."
+      },
+      "EventId": {
+        "type": "string",
+        "description": "Primary key of a row in the `log_events` table."
+      },
+      "Interval": {
+        "type": "string",
+        "format": "duration",
+        "description": "A strictly-positive span of time, stored as a whole number of microseconds.\n\nOn the wire an interval is an ISO 8601 duration such as `PT5M`. Jiff also\naccepts its friendlier form (`5m`) on input.",
+        "example": "PT5M"
+      },
+      "JsonQueryString": {
+        "type": "string",
+        "description": "A structured field filter passed as a string-encoded JSON object in a\nquery parameter, e.g. `{\"key\":\"value\"}`.\n\nThe raw string is parsed into key-value pairs during deserialization.",
+        "example": "{\"status\":\"ok\"}"
+      },
+      "LevelResponse": {
+        "type": "string",
+        "description": "Severity level of a log event or span.",
+        "enum": [
+          "trace",
+          "debug",
+          "info",
+          "warn",
+          "error"
+        ]
+      },
+      "LogEventResponse": {
+        "type": "object",
+        "description": "A single log event, returned by `GET /api/v1/logs`.",
+        "required": [
+          "id",
+          "level",
+          "target",
+          "timestamp",
+          "boot_id",
+          "fields"
+        ],
+        "properties": {
+          "boot_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Boot session this event belongs to, if known."
+          },
+          "fields": {
+            "type": "object",
+            "description": "Structured fields as a JSON object, if any.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source file, if available."
+          },
+          "id": {
+            "$ref": "#/components/schemas/EventId",
+            "description": "Event id."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LevelResponse",
+            "description": "Severity level."
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Source line, if available.",
+            "minimum": 0
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable message, if any."
+          },
+          "span_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId",
+                "description": "Span this event belongs to, if any."
+              }
+            ]
+          },
+          "target": {
+            "type": "string",
+            "description": "Module path that emitted the event."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the event was emitted."
+          }
+        }
+      },
+      "LogSpanDetailResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LogSpanResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "events"
+            ],
+            "properties": {
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LogEventResponse"
+                },
+                "description": "Events belonging to this span, ordered by timestamp."
+              }
+            }
+          }
+        ],
+        "description": "A span with its child events, returned by `GET /api/v1/logs/spans/{id}`."
+      },
+      "LogSpanResponse": {
+        "type": "object",
+        "description": "A tracing span, returned by `GET /api/v1/logs/spans`.",
+        "required": [
+          "id",
+          "name",
+          "level",
+          "target",
+          "started_at",
+          "fields"
+        ],
+        "properties": {
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the span ended, if it did."
+          },
+          "fields": {
+            "type": "object",
+            "description": "Span fields as a JSON object, if any.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source file, if available."
+          },
+          "id": {
+            "$ref": "#/components/schemas/SpanId",
+            "description": "Span id."
+          },
+          "level": {
+            "$ref": "#/components/schemas/LevelResponse",
+            "description": "Severity level."
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Source line, if available.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Span name."
+          },
+          "parent_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId",
+                "description": "Parent span id, if any."
+              }
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the span started."
+          },
+          "target": {
+            "type": "string",
+            "description": "Module path that created the span."
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "$ref": "#/components/schemas/Password"
+          },
+          "username": {
+            "$ref": "#/components/schemas/Username"
+          }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "required": [
+          "must_change_password"
+        ],
+        "properties": {
+          "must_change_password": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MediaType": {
+        "type": "string",
+        "description": "A bare 'type/subtype' media type with no parameters."
+      },
+      "OrderParam": {
+        "type": "string",
+        "description": "Sort direction shared by list endpoints.",
+        "enum": [
+          "asc",
+          "desc"
+        ]
+      },
+      "Page_ApiKeyResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "prefix"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/ApiKeyId"
+                },
+                "last_used_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "prefix": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_ArtifactSummaryResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A distinct artifact key with its newest version, for `GET\n/api/v1/artifacts`.",
+              "required": [
+                "key",
+                "version_count",
+                "source",
+                "digest",
+                "size_bytes",
+                "downloaded_at"
+              ],
+              "properties": {
+                "digest": {
+                  "$ref": "#/components/schemas/Digest",
+                  "description": "Content digest of the newest version."
+                },
+                "downloaded_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the newest version was downloaded."
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Logical artifact key."
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Stored blob size of the newest version, in bytes.",
+                  "minimum": 0
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Where the newest version came from."
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Human-readable version of the newest version, if known."
+                },
+                "version_count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "How many versions of this key are stored.",
+                  "minimum": 0
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_ArtifactVersionResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One stored version of an artifact.",
+              "required": [
+                "key",
+                "digest",
+                "source",
+                "size_bytes",
+                "downloaded_at"
+              ],
+              "properties": {
+                "digest": {
+                  "$ref": "#/components/schemas/Digest",
+                  "description": "Content digest of the stored blob."
+                },
+                "downloaded_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When this version was downloaded."
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Logical artifact key."
+                },
+                "media_type": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MediaType",
+                      "description": "OCI media type, if applicable."
+                    }
+                  ]
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Stored blob size in bytes.",
+                  "minimum": 0
+                },
+                "source": {
+                  "type": "string",
+                  "description": "Where this version came from."
+                },
+                "verified_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When this version was last verified, if ever."
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Human-readable version, if known."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_BootResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One boot session observed in the log store, returned by\n`GET /api/v1/logs/boots`.",
+              "required": [
+                "boot_id",
+                "first_seen",
+                "last_seen",
+                "event_count",
+                "is_current"
+              ],
+              "properties": {
+                "boot_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Unique boot id (UUID)."
+                },
+                "event_count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Number of events recorded so far in this boot.",
+                  "minimum": 0
+                },
+                "first_seen": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Timestamp of the earliest event in this boot."
+                },
+                "is_current": {
+                  "type": "boolean",
+                  "description": "True if this is the currently running gateway boot."
+                },
+                "last_seen": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Timestamp of the latest event in this boot."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_LogEventResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A single log event, returned by `GET /api/v1/logs`.",
+              "required": [
+                "id",
+                "level",
+                "target",
+                "timestamp",
+                "boot_id",
+                "fields"
+              ],
+              "properties": {
+                "boot_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "Boot session this event belongs to, if known."
+                },
+                "fields": {
+                  "type": "object",
+                  "description": "Structured fields as a JSON object, if any.",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "file": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Source file, if available."
+                },
+                "id": {
+                  "$ref": "#/components/schemas/EventId",
+                  "description": "Event id."
+                },
+                "level": {
+                  "$ref": "#/components/schemas/LevelResponse",
+                  "description": "Severity level."
+                },
+                "line": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "Source line, if available.",
+                  "minimum": 0
+                },
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Human-readable message, if any."
+                },
+                "span_id": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpanId",
+                      "description": "Span this event belongs to, if any."
+                    }
+                  ]
+                },
+                "target": {
+                  "type": "string",
+                  "description": "Module path that emitted the event."
+                },
+                "timestamp": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the event was emitted."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_LogSpanResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A tracing span, returned by `GET /api/v1/logs/spans`.",
+              "required": [
+                "id",
+                "name",
+                "level",
+                "target",
+                "started_at",
+                "fields"
+              ],
+              "properties": {
+                "ended_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When the span ended, if it did."
+                },
+                "fields": {
+                  "type": "object",
+                  "description": "Span fields as a JSON object, if any.",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "file": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Source file, if available."
+                },
+                "id": {
+                  "$ref": "#/components/schemas/SpanId",
+                  "description": "Span id."
+                },
+                "level": {
+                  "$ref": "#/components/schemas/LevelResponse",
+                  "description": "Severity level."
+                },
+                "line": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "Source line, if available.",
+                  "minimum": 0
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Span name."
+                },
+                "parent_id": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpanId",
+                      "description": "Parent span id, if any."
+                    }
+                  ]
+                },
+                "started_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the span started."
+                },
+                "target": {
+                  "type": "string",
+                  "description": "Module path that created the span."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_String": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_TaskResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One task invocation, returned by the task endpoints.",
+              "required": [
+                "id",
+                "kind",
+                "status",
+                "input",
+                "created_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the invocation was recorded."
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Failure detail, if any."
+                },
+                "finished_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When it finished, if it did."
+                },
+                "id": {
+                  "$ref": "#/components/schemas/TaskId",
+                  "description": "Invocation id."
+                },
+                "input": {
+                  "description": "The input the task was created with."
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "The kind of task."
+                },
+                "output": {
+                  "description": "The output, once the task succeeds."
+                },
+                "parent_id": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TaskId",
+                      "description": "The parent invocation, if this task was spawned by another."
+                    }
+                  ]
+                },
+                "progress": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProgressResponse",
+                      "description": "Live progress, present only while running."
+                    }
+                  ]
+                },
+                "started_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time",
+                  "description": "When it started running, if it did."
+                },
+                "status": {
+                  "$ref": "#/components/schemas/TaskStatusResponse",
+                  "description": "Lifecycle state."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_TaskScheduleResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "kind",
+                "input",
+                "interval",
+                "next_run_at",
+                "enabled",
+                "created_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "$ref": "#/components/schemas/TaskScheduleId"
+                },
+                "input": {},
+                "interval": {
+                  "$ref": "#/components/schemas/Interval"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "last_run_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "last_task_id": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TaskId"
+                    }
+                  ]
+                },
+                "next_run_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_UserResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "actor_id",
+                "username",
+                "must_change_password"
+              ],
+              "properties": {
+                "actor_id": {
+                  "$ref": "#/components/schemas/ActorId"
+                },
+                "id": {
+                  "$ref": "#/components/schemas/UserId"
+                },
+                "must_change_password": {
+                  "type": "boolean"
+                },
+                "username": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Password": {
+        "type": "string",
+        "description": "A plaintext password. Redacts in Debug output to avoid accidental leakage.\n\nUnlike [`Username`](crate::Username), `Password` does NOT validate on\nconstruction or deserialization. This is deliberate: the login handler must\naccept any password string (even one below the minimum length) so the\nrequest reaches the handler body where the rate limiter is consulted.\nValidating at deserialization would let an attacker bypass rate limiting\nby sending short passwords (they would be rejected with a 400 before the\nhandler runs). Password validation happens in\n[`AuthHandle`](crate::AuthHandle) methods (`create_user`,\n`change_password`, `setup_admin`) instead."
+      },
+      "ProgressMessageResponse": {
+        "type": "object",
+        "description": "A localizable progress message: a translation key and its arguments.",
+        "required": [
+          "key",
+          "args"
+        ],
+        "properties": {
+          "args": {
+            "type": "object",
+            "description": "Arguments to interpolate into the resolved message.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "key": {
+            "type": "string",
+            "description": "Translation key for the current step."
+          }
+        }
+      },
+      "ProgressResponse": {
+        "type": "object",
+        "description": "Live progress of a running task.",
+        "properties": {
+          "done": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Units of work completed so far.",
+            "minimum": 0
+          },
+          "message": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProgressMessageResponse",
+                "description": "A localizable description of the current step."
+              }
+            ]
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Total units of work expected, if known.",
+            "minimum": 0
+          }
+        }
+      },
+      "RawApiKey": {
+        "type": "string",
+        "description": "A raw API key. Redacts in Debug output."
+      },
+      "Role": {
+        "type": "string",
+        "description": "A built-in role. Stored as its lowercase name in casbin grouping rules.",
+        "enum": [
+          "admin",
+          "operator",
+          "viewer"
+        ]
+      },
+      "RotateCertificateInput": {
+        "type": "object",
+        "description": "Rotation takes no parameters (identity-preserving)."
+      },
+      "RotateCertificateOutput": {
+        "type": "object",
+        "required": [
+          "rotated"
+        ],
+        "properties": {
+          "rotated": {
+            "type": "boolean",
+            "description": "Whether the leaf was actually re-issued."
+          }
+        }
+      },
+      "SettingResponse": {
+        "type": "object",
+        "description": "One setting key and its current value.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {}
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "$ref": "#/components/schemas/Password"
+          },
+          "username": {
+            "$ref": "#/components/schemas/Username"
+          }
+        }
+      },
+      "SetupStatusResponse": {
+        "type": "object",
+        "required": [
+          "setup_required"
+        ],
+        "properties": {
+          "setup_required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SpanId": {
+        "type": "string",
+        "description": "Primary key of a row in the `log_spans` table."
+      },
+      "TaskDefinitionResponse": {
+        "type": "object",
+        "description": "A registered task kind, with its capabilities and JSON Schemas.",
+        "required": [
+          "kind",
+          "cancellable",
+          "resumable",
+          "input_schema",
+          "output_schema"
+        ],
+        "properties": {
+          "cancellable": {
+            "type": "boolean",
+            "description": "Whether the kind can be cancelled."
+          },
+          "input_schema": {
+            "description": "JSON Schema of the kind's input."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The kind string."
+          },
+          "output_schema": {
+            "description": "JSON Schema of the kind's output."
+          },
+          "resumable": {
+            "type": "boolean",
+            "description": "Whether the kind is safe to interrupt across a restart."
+          }
+        }
+      },
+      "TaskId": {
+        "type": "string",
+        "description": "Primary key of a row in the `tasks` table."
+      },
+      "TaskResponse": {
+        "type": "object",
+        "description": "One task invocation, returned by the task endpoints.",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "input",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the invocation was recorded."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Failure detail, if any."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it finished, if it did."
+          },
+          "id": {
+            "$ref": "#/components/schemas/TaskId",
+            "description": "Invocation id."
+          },
+          "input": {
+            "description": "The input the task was created with."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The kind of task."
+          },
+          "output": {
+            "description": "The output, once the task succeeds."
+          },
+          "parent_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TaskId",
+                "description": "The parent invocation, if this task was spawned by another."
+              }
+            ]
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProgressResponse",
+                "description": "Live progress, present only while running."
+              }
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it started running, if it did."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatusResponse",
+            "description": "Lifecycle state."
+          }
+        }
+      },
+      "TaskScheduleId": {
+        "type": "string",
+        "description": "Primary key of a row in the `task_schedules` table."
+      },
+      "TaskScheduleResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "input",
+          "interval",
+          "next_run_at",
+          "enabled",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/TaskScheduleId"
+          },
+          "input": {},
+          "interval": {
+            "$ref": "#/components/schemas/Interval"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_task_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TaskId"
+              }
+            ]
+          },
+          "next_run_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TaskStatusParam": {
+        "type": "string",
+        "description": "Filter for task status, including the `active` and `finished` groups.",
+        "enum": [
+          "active",
+          "finished",
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "interrupted"
+        ]
+      },
+      "TaskStatusResponse": {
+        "type": "string",
+        "description": "Lifecycle state of a task invocation.",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "interrupted"
+        ]
+      },
+      "UpdateSettingRequest": {
+        "type": "object",
+        "description": "Body for `PUT /api/v1/settings/{key}`.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {}
+        }
+      },
+      "UpdateTaskScheduleRequest": {
+        "type": "object",
+        "description": "Body for `PATCH /api/v1/task-schedules/{id}`.",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "interval": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Interval"
+              }
+            ]
+          }
+        }
+      },
+      "UserId": {
+        "type": "string",
+        "description": "Primary key of a row in the `users` table."
+      },
+      "UserResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "actor_id",
+          "username",
+          "must_change_password"
+        ],
+        "properties": {
+          "actor_id": {
+            "$ref": "#/components/schemas/ActorId"
+          },
+          "id": {
+            "$ref": "#/components/schemas/UserId"
+          },
+          "must_change_password": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "Username": {
+        "type": "string",
+        "description": "A login name that is guaranteed valid by construction.\n\nAllowed characters are ASCII letters, digits, and `_`, `-`, `.`. The length\nis bounded to 1..=64 characters. Because validation runs in [`TryFrom`] (and\ntherefore during deserialization), a request body with an invalid username\nis rejected at the extractor boundary with a `400` before any handler runs."
+      },
+      "VersionResponse": {
+        "type": "object",
+        "description": "Version information returned by `GET /api/v1/version`.",
+        "required": [
+          "aperture",
+          "boot_id"
+        ],
+        "properties": {
+          "aperture": {
+            "type": "string",
+            "description": "Version of the Aperture gateway."
+          },
+          "boot_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique id of this gateway boot session."
+          }
+        }
+      },
+      "VersionSortParam": {
+        "type": "string",
+        "description": "Field a version listing is sorted by.",
+        "enum": [
+          "downloaded_at",
+          "size_bytes"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "SessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "aperture_session"
+      }
+    }
+  },
+  "security": [
+    {
+      "SessionCookie": []
+    },
+    {
+      "BearerAuth": []
+    }
+  ]
+}
