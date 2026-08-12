@@ -26,7 +26,6 @@ pub use self::tls::{RotateCertificateDefinition, install_default_rotation_schedu
 
 mod api;
 mod auth;
-mod avatar;
 mod conditional;
 mod dto;
 mod error;

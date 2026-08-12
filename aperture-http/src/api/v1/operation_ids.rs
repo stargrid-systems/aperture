@@ -104,6 +104,9 @@ pub const GET_USER: &str = "getUser";
 /// `DELETE /api/v1/users/{id}`
 pub const DELETE_USER: &str = "deleteUser";
 
+/// `GET /api/v1/users/{id}/avatar`
+pub const GET_USER_AVATAR: &str = "getUserAvatar";
+
 /// `GET /api/v1/api-keys`
 pub const LIST_API_KEYS: &str = "listApiKeys";
 
@@ -121,6 +124,3 @@ pub const GET_SETTING: &str = "getSetting";
 
 /// `PUT /api/v1/settings/{scope}`
 pub const UPDATE_SETTING: &str = "updateSetting";
-
-/// `GET /api/v1/avatars/{actor_id}`
-pub const GET_AVATAR: &str = "getAvatar";

@@ -9,6 +9,7 @@ members = [
     "aperture-settings",
     "aperture-storage",
     "aperture-tasks",
+    "dicebear-lite",
 ]
 
 [workspace.package]
@@ -23,6 +24,7 @@ version = "0.1.0"
 [workspace.dependencies]
 aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
 aperture-auth = { version = "0.1.0", path = "aperture-auth" }
+dicebear-lite = { version = "0.1.0", path = "dicebear-lite" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
 aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
 aperture-settings = { version = "0.1.0", path = "aperture-settings" }

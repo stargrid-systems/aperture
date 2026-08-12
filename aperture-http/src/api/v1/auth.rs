@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use aperture_auth::{AuthenticatedActor, Password, Role, SessionToken, Username};
-use aperture_storage::ActorId;
+use aperture_storage::{ActorId, UserId};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -13,9 +13,9 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::operation_ids;
+use crate::AppState;
 use crate::auth::{build_session_cookie, clear_session_cookie, extract_session_token};
 use crate::error::ApiError;
-use crate::{AppState, avatar};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -91,11 +91,11 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
 #[derive(Debug, Serialize, ToSchema)]
 pub struct CurrentUserResponse {
     actor_id: ActorId,
+    id: Option<UserId>,
     username: Option<String>,
     display_name: String,
     roles: Vec<Role>,
     must_change_password: bool,
-    avatar_url: String,
 }
 
 /// Returns the authenticated caller's identity and role.
@@ -109,24 +109,25 @@ async fn current_user(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
 ) -> Result<Json<CurrentUserResponse>, ApiError> {
-    let username = if auth.actor.kind == aperture_storage::ActorKind::User {
+    let user = if auth.actor.kind == aperture_storage::ActorKind::User {
         state
             .storage()
             .users()?
             .find_by_actor_id(auth.actor.id)
             .await?
-            .map(|u| u.username)
     } else {
         None
     };
+    let id = user.as_ref().map(|u| u.id);
+    let username = user.map(|u| u.username);
     let roles = state.auth().roles_for(&auth.subject).await?;
     Ok(Json(CurrentUserResponse {
         actor_id: auth.actor.id,
+        id,
         username,
         display_name: auth.actor.display_name,
         roles,
         must_change_password: auth.must_change_password,
-        avatar_url: avatar::avatar_url(auth.actor.id),
     }))
 }
 

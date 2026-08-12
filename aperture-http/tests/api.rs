@@ -1292,20 +1292,25 @@ async fn change_password_rejected_for_api_key_auth() {
 
 #[tokio::test]
 async fn current_user_returns_identity_and_role() {
-    let (app, auth, _storage) = fresh_app().await;
+    let (app, auth, storage) = fresh_app().await;
 
     // API-key caller: resolves to its owning user actor, carries the key's role.
     let (api_actor, token) = key_for_role(&auth, "alice", Role::Operator).await;
+    let alice_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(api_actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
     let (status, json) = get_json(&app, &token, "/api/v1/auth/me").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["actor_id"], api_actor.get().to_string());
+    assert_eq!(json["id"], alice_id.get().to_string());
     assert_eq!(json["username"], "alice");
     assert_eq!(json["roles"], serde_json::json!(["operator"]));
     assert_eq!(json["must_change_password"], false);
-    assert_eq!(
-        json["avatar_url"],
-        format!("/api/v1/avatars/{}", api_actor.get())
-    );
 
     // Session caller: the user's username and role are populated.
     let pw = test_password();
@@ -1316,6 +1321,14 @@ async fn current_user_returns_identity_and_role() {
     auth.assign_role(&aperture_auth::actor_subject(actor.id), Role::Admin)
         .await
         .unwrap();
+    let carol_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(actor.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
     let cookie = login(&app, "carol", &pw).await.expect("login");
 
     let response = app
@@ -1331,13 +1344,10 @@ async fn current_user_returns_identity_and_role() {
         .unwrap();
     let (status, json) = read_json(response).await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["id"], carol_id.get().to_string());
     assert_eq!(json["username"], "carol");
     assert_eq!(json["display_name"], "carol");
     assert_eq!(json["roles"], serde_json::json!(["admin"]));
-    assert_eq!(
-        json["avatar_url"],
-        format!("/api/v1/avatars/{}", actor.id.get())
-    );
 }
 
 #[tokio::test]
@@ -1359,10 +1369,18 @@ async fn current_user_requires_authentication() {
 }
 
 #[tokio::test]
-async fn avatar_returns_svg_and_requires_auth() {
-    let (app, auth, _storage) = fresh_app().await;
+async fn user_avatar_returns_svg_and_requires_auth() {
+    let (app, auth, storage) = fresh_app().await;
     let (actor, token) = key_for_role(&auth, "dave", Role::Viewer).await;
-    let uri = format!("/api/v1/avatars/{}", actor.get());
+    let user_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let uri = format!("/api/v1/users/{}/avatar", user_id.get());
 
     // Unauthenticated requests are rejected.
     let status = app
@@ -1399,7 +1417,7 @@ async fn avatar_returns_svg_and_requires_auth() {
     assert!(svg.starts_with("<svg "), "got: {svg}");
     assert!(svg.ends_with("</svg>"));
 
-    // The same actor always renders the same avatar.
+    // The same user always renders the same avatar.
     let again = get_bytes(&app, &token, &uri).await;
     assert_eq!(again, body);
 }
