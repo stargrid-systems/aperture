@@ -1,4 +1,4 @@
-use std::{env, fs, process};
+use std::{env, fs, process, str};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, Role, Username};
@@ -8,7 +8,7 @@ use aperture_storage::{ActorId, ArtifactId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION, SET_COOKIE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION, SET_COOKIE};
 use axum::http::{HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use jiff::Timestamp;
@@ -1302,6 +1302,10 @@ async fn current_user_returns_identity_and_role() {
     assert_eq!(json["username"], "alice");
     assert_eq!(json["roles"], serde_json::json!(["operator"]));
     assert_eq!(json["must_change_password"], false);
+    assert_eq!(
+        json["avatar_url"],
+        format!("/api/v1/avatars/{}", api_actor.get())
+    );
 
     // Session caller: the user's username and role are populated.
     let pw = test_password();
@@ -1330,6 +1334,10 @@ async fn current_user_returns_identity_and_role() {
     assert_eq!(json["username"], "carol");
     assert_eq!(json["display_name"], "carol");
     assert_eq!(json["roles"], serde_json::json!(["admin"]));
+    assert_eq!(
+        json["avatar_url"],
+        format!("/api/v1/avatars/{}", actor.id.get())
+    );
 }
 
 #[tokio::test]
@@ -1348,4 +1356,66 @@ async fn current_user_requires_authentication() {
         .unwrap()
         .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn avatar_returns_svg_and_requires_auth() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (actor, token) = key_for_role(&auth, "dave", Role::Viewer).await;
+    let uri = format!("/api/v1/avatars/{}", actor.get());
+
+    // Unauthenticated requests are rejected.
+    let status = app
+        .clone()
+        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Authenticated requests get immutable inline SVG.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        "image/svg+xml"
+    );
+    assert_eq!(
+        response.headers().get(CACHE_CONTROL).unwrap(),
+        "public, max-age=31536000, immutable"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let svg = str::from_utf8(&body).unwrap();
+    assert!(svg.starts_with("<svg "), "got: {svg}");
+    assert!(svg.ends_with("</svg>"));
+
+    // The same actor always renders the same avatar.
+    let again = get_bytes(&app, &token, &uri).await;
+    assert_eq!(again, body);
+}
+
+async fn get_bytes(app: &Router, token: &str, uri: &str) -> bytes::Bytes {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    to_bytes(response.into_body(), usize::MAX).await.unwrap()
 }

@@ -121,3 +121,6 @@ pub const GET_SETTING: &str = "getSetting";
 
 /// `PUT /api/v1/settings/{scope}`
 pub const UPDATE_SETTING: &str = "updateSetting";
+
+/// `GET /api/v1/avatars/{actor_id}`
+pub const GET_AVATAR: &str = "getAvatar";

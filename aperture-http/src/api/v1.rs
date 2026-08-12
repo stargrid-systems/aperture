@@ -9,6 +9,7 @@ use crate::dto::VersionResponse;
 mod api_keys;
 mod artifacts;
 mod auth;
+mod avatars;
 mod logs;
 pub mod operation_ids;
 mod settings;
@@ -28,6 +29,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .nest("/settings", settings::router())
         .nest("/users", users::router())
         .nest("/api-keys", api_keys::router())
+        .nest("/avatars", avatars::router())
 }
 
 /// Returns version information about the gateway.

@@ -13,9 +13,9 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::operation_ids;
-use crate::AppState;
 use crate::auth::{build_session_cookie, clear_session_cookie, extract_session_token};
 use crate::error::ApiError;
+use crate::{AppState, avatar};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -95,6 +95,7 @@ pub struct CurrentUserResponse {
     display_name: String,
     roles: Vec<Role>,
     must_change_password: bool,
+    avatar_url: String,
 }
 
 /// Returns the authenticated caller's identity and role.
@@ -125,6 +126,7 @@ async fn current_user(
         display_name: auth.actor.display_name,
         roles,
         must_change_password: auth.must_change_password,
+        avatar_url: avatar::avatar_url(auth.actor.id),
     }))
 }
 

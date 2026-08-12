@@ -9,9 +9,9 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::operation_ids;
-use crate::AppState;
 use crate::dto::{Page, SimpleListParams};
 use crate::error::ApiError;
+use crate::{AppState, avatar};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -26,6 +26,7 @@ pub struct UserResponse {
     actor_id: ActorId,
     username: String,
     must_change_password: bool,
+    avatar_url: String,
 }
 
 impl From<aperture_storage::User> for UserResponse {
@@ -35,6 +36,7 @@ impl From<aperture_storage::User> for UserResponse {
             actor_id: user.actor_id,
             username: user.username,
             must_change_password: user.password_change_required_at.is_some(),
+            avatar_url: avatar::avatar_url(user.actor_id),
         }
     }
 }
