@@ -2,6 +2,7 @@ use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, Role, Username};
+use aperture_events::EventBus;
 use aperture_http::{AppState, Spectra, SpectraConfig, app};
 use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, ArtifactId};
@@ -44,7 +45,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root);
+    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new(storage.events().unwrap()));
 
     let repo = storage.artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:ffff", 1_000))
@@ -81,7 +82,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, Role::Admin).await.unwrap();
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new(), EventBus::new(storage.events().unwrap()));
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -778,7 +779,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root);
+    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new(storage.events().unwrap()));
 
     let mut registry = TaskRegistry::new();
     registry.register(DownloadDefinition::new(artifacts.clone()));
@@ -804,7 +805,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, role).await.unwrap();
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new(), EventBus::new(storage.events().unwrap()));
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -867,7 +868,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root);
+    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new(storage.events().unwrap()));
 
     let mut registry = TaskRegistry::new();
     registry.register(DownloadDefinition::new(artifacts.clone()));
@@ -884,7 +885,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         ActorId::SYSTEM,
     );
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new(), EventBus::new(storage.events().unwrap()));
     let state = AppState::new(
         "test",
         Uuid::nil(),

@@ -3,11 +3,10 @@
 use std::error::Error as StdError;
 use std::time::Duration;
 
+use aperture_events::EventBus;
 use aperture_runtime::{Stop, Worker};
 use aperture_storage::{ActorId, Event, TaskScheduleRepository};
 use serde_json::Value;
-use tokio::sync::broadcast;
-use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{MissedTickBehavior, interval};
 
 use crate::scheduler::Scheduler;
@@ -31,7 +30,7 @@ struct EventRule {
 pub struct Automation {
     tasks: Tasks,
     scheduler: Scheduler,
-    events: broadcast::Receiver<Event>,
+    events: aperture_events::EventStream,
     rules: Vec<EventRule>,
 }
 
@@ -43,13 +42,13 @@ impl Automation {
     pub fn new(
         tasks: Tasks,
         schedule_repo: TaskScheduleRepository,
-        events: broadcast::Receiver<Event>,
+        event_bus: &EventBus,
     ) -> Self {
         let scheduler = Scheduler::new(schedule_repo, tasks.clone());
         Self {
             tasks,
             scheduler,
-            events,
+            events: event_bus.subscribe_all(),
             rules: Vec::new(),
         }
     }
@@ -88,13 +87,10 @@ impl Worker for Automation {
                         tracing::error!(error = &err as &dyn StdError, "scheduler tick failed");
                     }
                 }
-                recv = self.events.recv() => {
-                    match recv {
-                        Ok(event) => self.handle_event(&event).await,
-                        Err(RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "event feed lagged");
-                        }
-                        Err(RecvError::Closed) => break,
+                event = self.events.recv() => {
+                    match event {
+                        Some(event) => self.handle_event(&event).await,
+                        None => break,
                     }
                 }
             }

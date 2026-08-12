@@ -2,12 +2,11 @@
 
 use std::error::Error as StdError;
 
-use aperture_events::EventBus;
+use aperture_events::{EventBus, TypedEventStream};
 use aperture_runtime::{Stop, Worker};
-use aperture_settings::Settings;
+use aperture_settings::SettingChange;
 use aperture_storage::ActorId;
 use aperture_tasks::Tasks;
-use tokio::sync::broadcast::error::RecvError;
 
 use crate::avahi::{ServicePublisher, ServiceSpec};
 use crate::event::HostnameApplied;
@@ -16,58 +15,53 @@ use crate::setting::{Hostname, HostnameSetting};
 
 /// Background worker for mDNS publishing and hostname management.
 pub struct OsWorker {
-    settings: Settings,
     tasks: Tasks,
     connection: zbus::Connection,
     hostname: String,
     https_port: Option<u16>,
     plain_port: Option<u16>,
     event_bus: EventBus,
+    setting_changes: TypedEventStream<SettingChange>,
 }
 
 impl OsWorker {
     pub(crate) const fn new(
-        settings: Settings,
         tasks: Tasks,
         connection: zbus::Connection,
         hostname: String,
         https_port: Option<u16>,
         plain_port: Option<u16>,
         event_bus: EventBus,
+        setting_changes: TypedEventStream<SettingChange>,
     ) -> Self {
         Self {
-            settings,
             tasks,
             connection,
             hostname,
             https_port,
             plain_port,
             event_bus,
+            setting_changes,
         }
     }
 }
 
 impl Worker for OsWorker {
-    async fn run(self, stop: Stop) {
+    async fn run(mut self, stop: Stop) {
         let publisher = self.publish_services().await;
-
-        let mut feed = self.settings.subscribe();
 
         loop {
             tokio::select! {
                 biased;
                 () = stop.cancelled() => break,
-                recv = feed.recv() => {
-                    match recv {
-                        Ok(change) => {
-                            if let Some(setting) = change.decode::<HostnameSetting>() {
+                event = self.setting_changes.recv() => {
+                    match event {
+                        Some(event) => {
+                            if let Some(setting) = event.payload.decode::<HostnameSetting>() {
                                 self.on_hostname_change(setting.hostname().clone()).await;
                             }
                         }
-                        Err(RecvError::Lagged(n)) => {
-                            tracing::warn!(skipped = n, "settings change feed lagged");
-                        }
-                        Err(RecvError::Closed) => break,
+                        None => break,
                     }
                 }
             }

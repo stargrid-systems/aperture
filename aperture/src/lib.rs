@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use aperture_artifacts::{Artifacts, DownloadDefinition};
+use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
 use aperture_events::{EventBus, EventRegistry};
 use aperture_http::{
@@ -11,7 +11,7 @@ use aperture_http::{
     Spectra, SpectraConfig, SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
-use aperture_settings::{SettingRegistry, Settings};
+use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
 use aperture_tasks::{Automation, TaskDefinition, TaskRegistry, Tasks};
 use serde_json::json;
@@ -72,7 +72,13 @@ pub async fn serve(
 
     init_crypto_provider();
     let boot_id = Uuid::new_v4();
-    let (artifacts, storage) = open_artifacts(&data_dir).await?;
+    let storage = open_storage(&data_dir).await?;
+    let event_bus = EventBus::new(storage.events()?);
+    let artifacts = Artifacts::new(
+        storage.clone(),
+        data_dir.join("store"),
+        event_bus.clone(),
+    );
 
     let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
 
@@ -84,7 +90,6 @@ pub async fn serve(
     let mut task_registry = TaskRegistry::new();
     #[cfg_attr(not(feature = "os-integration"), expect(unused_mut))]
     let mut setting_registry = SettingRegistry::new();
-    #[cfg_attr(not(feature = "os-integration"), expect(unused_mut))]
     let mut event_registry = EventRegistry::new();
 
     register_kinds(&mut task_registry, artifacts.clone(), tls_addr);
@@ -104,15 +109,17 @@ pub async fn serve(
     #[cfg(not(feature = "os-integration"))]
     let _ = os_integration;
 
-    let tasks = Tasks::new(storage.tasks()?, task_registry);
-    let settings = Settings::new(storage.settings()?, setting_registry);
+    event_registry.register(SettingChange::default());
+    event_registry.register(ArtifactWritten::default());
+    event_registry.register(ArtifactRemoved::default());
 
-    let event_bus = EventBus::new(storage.events()?);
+    let tasks = Tasks::new(storage.tasks()?, task_registry);
+    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
 
     let mut automation = Automation::new(
         tasks.clone(),
         storage.task_schedules()?,
-        event_bus.subscribe(),
+        &event_bus,
     );
 
     if tls_addr.is_some() {
@@ -168,8 +175,15 @@ pub async fn serve(
     );
     let app = aperture_http::app(state);
 
-    let server =
-        HttpServer::start(artifacts, tls_addr, plain_addr, hostname.as_deref(), app).await?;
+    let server = HttpServer::start(
+        artifacts,
+        tls_addr,
+        plain_addr,
+        hostname.as_deref(),
+        app,
+        &event_bus,
+    )
+    .await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
@@ -217,7 +231,8 @@ async fn shutdown_signal() {
 /// Returns an error if the in-memory storage cannot be opened.
 pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
     let storage = Storage::open(":memory:").await?;
-    let artifacts = Artifacts::new(storage, PathBuf::from("."));
+    let event_bus = EventBus::new(storage.events()?);
+    let artifacts = Artifacts::new(storage, PathBuf::from("."), event_bus);
     let mut registry = TaskRegistry::new();
     register_kinds(&mut registry, artifacts, None);
     Ok(aperture_http::openapi(&registry.descriptors()))
@@ -278,19 +293,15 @@ pub async fn reset_password(username: &str, data_dir: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-/// Opens the storage database and blob store under `data_dir`.
-///
-/// Returns the artifact manager and the storage handle so callers can build
-/// their own repositories alongside it.
-async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Artifacts, Storage)> {
+/// Opens the storage database under `data_dir`.
+async fn open_storage(data_dir: &Path) -> anyhow::Result<Storage> {
     fs::create_dir_all(data_dir).await?;
     let db_path = data_dir.join("aperture.db");
     let db_path = db_path.to_str().ok_or_else(|| {
         anyhow::format_err!("data dir is not valid UTF-8: {}", data_dir.display())
     })?;
     let storage = Storage::open(db_path).await?;
-    let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"));
-    Ok((artifacts, storage))
+    Ok(storage)
 }
 
 #[cfg(test)]

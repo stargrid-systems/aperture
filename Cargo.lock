@@ -156,6 +156,7 @@ name = "aperture-artifacts"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aperture-events",
  "aperture-storage",
  "aperture-tasks",
  "jiff",
@@ -212,6 +213,7 @@ dependencies = [
  "anyhow",
  "aperture-artifacts",
  "aperture-auth",
+ "aperture-events",
  "aperture-runtime",
  "aperture-settings",
  "aperture-storage",
@@ -278,6 +280,7 @@ dependencies = [
 name = "aperture-settings"
 version = "0.1.0"
 dependencies = [
+ "aperture-events",
  "aperture-storage",
  "jiff",
  "serde",
@@ -312,6 +315,7 @@ name = "aperture-tasks"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aperture-events",
  "aperture-runtime",
  "aperture-storage",
  "futures-util",

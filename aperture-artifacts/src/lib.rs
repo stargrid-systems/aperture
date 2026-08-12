@@ -11,15 +11,15 @@ pub use aperture_storage::{
 
 pub use self::artifacts::{Artifacts, FetchRequest, FetchSource, Located, SyncReport};
 pub use self::blob::BlobStore;
-pub use self::change::{ArtifactChange, ChangeKind};
 pub use self::download::{DownloadDefinition, DownloadInput, DownloadOutput, DownloadSource};
 pub use self::error::{ArtifactError, Result};
+pub use self::event::{ArtifactRemoved, ArtifactWritten};
 
 mod artifacts;
 mod blob;
-mod change;
 mod download;
 mod error;
+mod event;
 mod fetch;
 mod hash_writer;
 mod progress;

@@ -5,30 +5,29 @@
 //! system (see [`crate::DownloadDefinition`]) drives it, tracks progress, and
 //! records each invocation. This layer just does the work.
 
+use std::error::Error as StdError;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
+use aperture_events::EventBus;
 use aperture_storage::{
-    Artifact, ArtifactId, ArtifactKey, ArtifactKeyEntry, Digest, ListQuery, MediaType, Page,
-    Storage, VersionSort,
+    ActorId, Artifact, ArtifactId, ArtifactKey, ArtifactKeyEntry, Digest, ListQuery, MediaType,
+    Page, Storage, VersionSort,
 };
 use aperture_tasks::ProgressHandle;
 use jiff::{SignedDuration, Timestamp};
 use oci_client::Reference;
 use tokio::fs;
 use tokio::io::AsyncRead;
-use tokio::sync::{Mutex as AsyncMutex, broadcast};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::blob::BlobStore;
-use crate::change::{ArtifactChange, ChangeKind};
 use crate::error::{ArtifactError, Result};
+use crate::event::{ArtifactRemoved, ArtifactWritten};
 use crate::fetch::{FetchMeta, Fetched, OciFetcher, Resolved};
 use crate::hash_writer::HashWriter;
 use crate::progress::ProgressWriter;
-
-/// Capacity of the in-process change feed.
-const CHANGE_FEED_CAPACITY: usize = 64;
 
 /// How long a resolved reference stays cached before it is re-checked against
 /// the registry.
@@ -118,14 +117,13 @@ struct Inner {
     /// One lock per content digest, so concurrent downloads of the same content
     /// collapse onto a single transfer instead of each pulling it.
     pull_locks: Mutex<HashMap<Digest, Weak<AsyncMutex<()>>>>,
-    /// Best-effort feed of artifact changes. See [`ArtifactChange`].
-    changes: broadcast::Sender<ArtifactChange>,
+    event_bus: EventBus,
 }
 
 impl Artifacts {
     /// Creates a store backed by `storage`, keeping blobs under `store_root`.
-    pub fn new(storage: Storage, store_root: PathBuf) -> Self {
-        let (changes, _) = broadcast::channel(CHANGE_FEED_CAPACITY);
+    /// Events are emitted through `event_bus`.
+    pub fn new(storage: Storage, store_root: PathBuf, event_bus: EventBus) -> Self {
         Self {
             inner: Arc::new(Inner {
                 storage,
@@ -133,14 +131,9 @@ impl Artifacts {
                 oci: OciFetcher::new(),
                 resolutions: Mutex::new(HashMap::new()),
                 pull_locks: Mutex::new(HashMap::new()),
-                changes,
+                event_bus,
             }),
         }
-    }
-
-    /// Subscribes to artifact changes.
-    pub fn subscribe(&self) -> broadcast::Receiver<ArtifactChange> {
-        self.inner.changes.subscribe()
     }
 
     /// Returns the blob of the newest stored version of `key`, if present on
@@ -234,11 +227,11 @@ impl Artifacts {
     pub async fn evict_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<bool> {
         let removed = self.inner.evict_version(key, digest).await?;
         if removed {
-            self.inner.notify(ArtifactChange {
-                key: key.clone(),
-                kind: ChangeKind::Removed,
-                digest: None,
-            });
+            self.inner
+                .emit_event(ArtifactRemoved {
+                    key: key.as_str().to_owned(),
+                })
+                .await;
         }
         Ok(removed)
     }
@@ -284,11 +277,12 @@ impl Artifacts {
             .artifacts()?
             .record_version(&artifact)
             .await?;
-        self.inner.notify(ArtifactChange {
-            key: key.clone(),
-            kind: ChangeKind::Written,
-            digest: Some(digest.clone()),
-        });
+        self.inner
+            .emit_event(ArtifactWritten {
+                key: key.as_str().to_owned(),
+                digest: Some(digest.to_string()),
+            })
+            .await;
         Ok(artifact)
     }
 
@@ -310,11 +304,12 @@ impl Artifacts {
     ) -> Result<Artifact> {
         let (artifact, written) = self.inner.download(&request, &progress).await?;
         if written {
-            self.inner.notify(ArtifactChange {
-                key: artifact.key.clone(),
-                kind: ChangeKind::Written,
-                digest: Some(artifact.digest.clone()),
-            });
+            self.inner
+                .emit_event(ArtifactWritten {
+                    key: artifact.key.as_str().to_owned(),
+                    digest: Some(artifact.digest.to_string()),
+                })
+                .await;
         }
         Ok(artifact)
     }
@@ -334,12 +329,14 @@ impl Artifacts {
 }
 
 impl Inner {
-    /// Publishes `change` to the feed.
-    ///
-    /// Late or lagging receivers are dropped. A send error here is expected
-    /// and silently ignored.
-    fn notify(&self, change: ArtifactChange) {
-        let _ = self.changes.send(change);
+    /// Emits an event through the bus, logging and ignoring failures.
+    async fn emit_event<D: aperture_events::EventDefinition>(&self, payload: D) {
+        if let Err(err) = self.event_bus.emit(payload, ActorId::SYSTEM).await {
+            tracing::warn!(
+                error = &err as &dyn StdError,
+                "failed to emit artifact event"
+            );
+        }
     }
 
     async fn locate(&self, key: &ArtifactKey) -> Result<Option<Located>> {
@@ -651,15 +648,16 @@ mod tests {
     }
 
     /// Builds an in-memory artifacts store rooted at a fresh temp dir.
-    async fn fresh_store() -> (Artifacts, PathBuf) {
+    async fn fresh_store() -> (Artifacts, EventBus, PathBuf) {
         let dir = env::temp_dir().join(format!(
             "aperture-artifacts-tests-{}-{}",
             process::id(),
             uuid::Uuid::new_v4()
         ));
         let storage = Storage::open(":memory:").await.unwrap();
-        let artifacts = Artifacts::new(storage, dir.clone());
-        (artifacts, dir)
+        let event_bus = EventBus::new(storage.events().unwrap());
+        let artifacts = Artifacts::new(storage, dir.clone(), event_bus.clone());
+        (artifacts, event_bus, dir)
     }
 
     /// Removes the temp dir created by [`fresh_store`]. Best-effort.
@@ -669,8 +667,8 @@ mod tests {
 
     #[tokio::test]
     async fn put_publishes_written_event() {
-        let (artifacts, dir) = fresh_store().await;
-        let mut rx = artifacts.subscribe();
+        let (artifacts, bus, dir) = fresh_store().await;
+        let mut rx = bus.subscribe_typed::<ArtifactWritten>();
         let key = ArtifactKey::new("firmware").unwrap();
         let artifact = artifacts
             .put(
@@ -680,11 +678,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let change = rx.recv().await.expect("feed emitted an event");
-        assert_eq!(change.key, key);
-        assert_eq!(change.kind, ChangeKind::Written);
+        let event = rx.recv().await.expect("bus emitted an event");
+        assert_eq!(event.payload.key, key.as_str());
         assert_eq!(
-            change.digest.map(|d| d.to_string()),
+            event.payload.digest,
             Some(artifact.digest.to_string()),
             "Written events must carry the new digest",
         );
@@ -696,7 +693,7 @@ mod tests {
         // Artifacts::put no longer sanitises the media type. The HTTP layer
         // validates upstream via FromStr, so anything reaching the store is
         // already known good and is stored verbatim.
-        let (artifacts, dir) = fresh_store().await;
+        let (artifacts, _bus, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
         let artifact = artifacts
             .put(
@@ -719,33 +716,28 @@ mod tests {
 
     #[tokio::test]
     async fn evict_version_publishes_removed_event() {
-        let (artifacts, dir) = fresh_store().await;
+        let (artifacts, bus, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
         let artifact = artifacts.put(&key, None, &b"bytes"[..]).await.unwrap();
 
-        let mut rx = artifacts.subscribe();
+        let mut rx = bus.subscribe_typed::<ArtifactRemoved>();
         artifacts
             .evict_version(&key, &artifact.digest)
             .await
             .unwrap();
-        let change = rx.recv().await.expect("feed emitted an event");
-        assert_eq!(change.key, key);
-        assert_eq!(change.kind, ChangeKind::Removed);
-        assert!(
-            change.digest.is_none(),
-            "Removed events do not carry a digest"
-        );
+        let event = rx.recv().await.expect("bus emitted an event");
+        assert_eq!(event.payload.key, key.as_str());
         cleanup(&dir);
     }
 
     #[tokio::test]
     async fn late_subscriber_misses_earlier_events() {
-        let (artifacts, dir) = fresh_store().await;
+        let (artifacts, bus, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
         artifacts.put(&key, None, &b"first"[..]).await.unwrap();
 
         // Subscribe after the write completed. No event should arrive.
-        let mut rx = artifacts.subscribe();
+        let mut rx = bus.subscribe_typed::<ArtifactWritten>();
         let outcome = timeout(Duration::from_millis(50), rx.recv()).await;
         assert!(
             outcome.is_err(),

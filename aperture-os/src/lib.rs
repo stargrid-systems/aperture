@@ -12,7 +12,7 @@ use std::error::Error as StdError;
 
 use anyhow::Context;
 use aperture_events::{EventBus, EventRegistry};
-use aperture_settings::{SettingRegistry, Settings};
+use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_tasks::{TaskRegistry, Tasks};
 
 use self::event::HostnameApplied;
@@ -103,14 +103,15 @@ pub async fn bootstrap(
         }
     }
 
+    let setting_changes = event_bus.subscribe_typed::<SettingChange>();
     let worker = OsWorker::new(
-        settings.clone(),
         tasks.clone(),
         reg.conn,
         hostname_str.clone(),
         https_port,
         plain_port,
         event_bus,
+        setting_changes,
     );
 
     Ok((hostname_str, worker))
