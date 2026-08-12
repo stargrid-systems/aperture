@@ -114,9 +114,7 @@ pub async fn serve(
     event_registry.register(ArtifactRemoved::default());
 
     let tasks = Tasks::new(storage.tasks()?, task_registry);
-    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
-
-    let mut automation = Automation::new(
+    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());    let mut automation = Automation::new(
         tasks.clone(),
         storage.task_schedules()?,
         &event_bus,
@@ -162,7 +160,7 @@ pub async fn serve(
     #[cfg(not(feature = "os-integration"))]
     let hostname: Option<String> = None;
 
-    let _ = event_registry;
+    let event_descriptors = event_registry.descriptors().collect::<Vec<_>>();
 
     let state = AppState::new(
         VERSION,
@@ -173,7 +171,7 @@ pub async fn serve(
         settings,
         auth,
     );
-    let app = aperture_http::app(state);
+    let app = aperture_http::app(state, &event_descriptors);
 
     let server = HttpServer::start(
         artifacts,
@@ -233,9 +231,18 @@ pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
     let storage = Storage::open(":memory:").await?;
     let event_bus = EventBus::new(storage.events()?);
     let artifacts = Artifacts::new(storage, PathBuf::from("."), event_bus);
-    let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts, None);
-    Ok(aperture_http::openapi(&registry.descriptors()))
+    let mut task_registry = TaskRegistry::new();
+    register_kinds(&mut task_registry, artifacts, None);
+
+    let mut event_registry = EventRegistry::new();
+    event_registry.register(SettingChange::default());
+    event_registry.register(ArtifactWritten::default());
+    event_registry.register(ArtifactRemoved::default());
+
+    Ok(aperture_http::openapi(
+        &task_registry.descriptors(),
+        &event_registry.descriptors().collect::<Vec<_>>(),
+    ))
 }
 
 /// Registers every task kind the gateway supports.

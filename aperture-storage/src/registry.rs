@@ -5,7 +5,7 @@
 //! domain-specific methods for schema projection and registration with typed
 //! bounds.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// A registry of definitions keyed by a static string.
@@ -13,8 +13,11 @@ use std::sync::Arc;
 /// Stores type-erased definition objects behind [`Arc`]. Each domain wraps
 /// this in a newtype (e.g. `SettingRegistry`, `TaskRegistry`) and adds
 /// domain-specific `register` and `descriptors` methods.
+///
+/// Iteration order is deterministic (sorted by key) so that generated output
+/// like the `OpenAPI` spec is reproducible across runs.
 pub struct Registry<T: ?Sized + Send + Sync + 'static> {
-    map: HashMap<&'static str, Arc<T>>,
+    map: BTreeMap<&'static str, Arc<T>>,
 }
 
 impl<T: ?Sized + Send + Sync + 'static> Registry<T> {
@@ -52,7 +55,7 @@ impl<T: ?Sized + Send + Sync + 'static> Registry<T> {
 impl<T: ?Sized + Send + Sync + 'static> Default for Registry<T> {
     fn default() -> Self {
         Self {
-            map: HashMap::new(),
+            map: BTreeMap::new(),
         }
     }
 }

@@ -92,7 +92,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         settings,
         auth,
     );
-    (app(state), artifacts, storage, raw_key.as_str().to_owned())
+    (app(state, &[]), artifacts, storage, raw_key.as_str().to_owned())
 }
 
 async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
@@ -815,7 +815,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
         settings,
         auth,
     );
-    (app(state), raw_key.as_str().to_owned())
+    (app(state, &[]), raw_key.as_str().to_owned())
 }
 
 #[tokio::test]
@@ -895,7 +895,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         settings,
         auth.clone(),
     );
-    (app(state), auth, storage)
+    (app(state, &[]), auth, storage)
 }
 
 /// Creates a user and returns an API key carrying `role`.

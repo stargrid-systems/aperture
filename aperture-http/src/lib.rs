@@ -3,6 +3,7 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
+use aperture_events::EventDescriptor;
 use aperture_settings::Settings;
 use aperture_storage::{ApiKeyId, Storage, UserId};
 use aperture_tasks::{TaskDescriptor, Tasks};
@@ -119,11 +120,15 @@ fn api_router() -> OpenApiRouter<AppState> {
 }
 
 /// Returns the generated `OpenAPI` specification for the gateway API, with the
-/// registered task kinds projected in.
-pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
+/// registered task and event kinds projected in.
+pub fn openapi(
+    task_descriptors: &[TaskDescriptor],
+    event_descriptors: &[EventDescriptor],
+) -> OpenApiSpec {
     let mut spec = self::api_router().split_for_parts().1;
     auth::add_security_schemes(&mut spec);
-    project_tasks(&mut spec, descriptors);
+    project_tasks(&mut spec, task_descriptors);
+    project_events(&mut spec, event_descriptors);
     spec
 }
 
@@ -133,9 +138,10 @@ pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
 /// frontend, which the state's [`Spectra`] serves and fetches on demand.
 /// A [`TraceLayer`] creates a span for each request so per-request tracing
 /// shows up in the log viewer.
-pub fn app(state: AppState) -> Router {
+pub fn app(state: AppState, event_descriptors: &[EventDescriptor]) -> Router {
     let (api, mut doc) = self::api_router().split_for_parts();
     project_tasks(&mut doc, &state.tasks().registry().descriptors());
+    project_events(&mut doc, event_descriptors);
     Router::<AppState>::new()
         .merge(api)
         .route(
@@ -204,6 +210,31 @@ fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
 /// Compares two component schemas by their serialized form.
 fn schemas_equal(a: &RefOr<Schema>, b: &RefOr<Schema>) -> bool {
     serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+}
+
+/// Projects registered event kinds into the `OpenAPI` spec.
+///
+/// Adds each kind's payload component schemas so clients know the shape of
+/// event data returned by the event API.
+fn project_events(spec: &mut OpenApiSpec, descriptors: &[EventDescriptor]) {
+    if descriptors.is_empty() {
+        return;
+    }
+
+    let components = spec.components.get_or_insert_with(Default::default);
+    for descriptor in descriptors {
+        for (name, schema) in &descriptor.schemas {
+            match components.schemas.get(name) {
+                Some(existing) => assert!(
+                    schemas_equal(existing, schema),
+                    "event kinds define conflicting OpenAPI schemas for component {name:?}"
+                ),
+                None => {
+                    components.schemas.insert(name.clone(), schema.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Points the `POST /tasks` request body at the `CreateTaskInput` union.
