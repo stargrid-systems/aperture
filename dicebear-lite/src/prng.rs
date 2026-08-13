@@ -86,14 +86,49 @@ impl<'a> Prng<'a> {
         math_round((min + self.value(key) * (max - min)) * 10000.0) / 10000.0
     }
 
-    /// Fisher-Yates shuffles `indices` in place.
-    pub fn shuffle(&self, key: &[&str], indices: &mut [usize]) {
+    /// Returns the element that lands at position 0 after a Fisher-Yates
+    /// shuffle of `[0, 1, ..., n-1]`. Uses the trace-label algorithm: instead
+    /// of materializing the full permutation, it traces which original element
+    /// ends up at position 0 by following the chain of swaps that affect it.
+    /// Requires `n <= 10` (3 bits per j value in a `u32`).
+    pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
-        let mut i = indices.len();
-        while i > 1 {
-            i -= 1;
+        let mut val_at_0: usize = 0;
+        let mut j_packed: u32 = 0;
+
+        for i in (1..n).rev() {
             let j = floor_index(rng.next_float(), i + 1);
-            indices.swap(i, j);
+            #[expect(clippy::cast_possible_truncation, reason = "j < n <= 10, fits in u32")]
+            let j_u32 = j as u32;
+            j_packed |= j_u32 << (3 * (i - 1));
+            if j == 0 {
+                val_at_0 = trace_label(i, n, j_packed);
+            }
+        }
+
+        val_at_0
+    }
+}
+
+/// Traces which original element is at `start` by following the chain of
+/// Fisher-Yates swaps. At each position, finds the smallest step `k` (where
+/// `k > pos`) whose random index `j_k` targeted `pos`. If found, the element
+/// at `pos` came from position `k`, so recurse. If not found, the element is
+/// still at its original position.
+fn trace_label(start: usize, n: usize, j_packed: u32) -> usize {
+    let mut pos = start;
+    loop {
+        let mut found = false;
+        for k in (pos + 1)..n {
+            let j_k = ((j_packed >> (3 * (k - 1))) & 7) as usize;
+            if j_k == pos {
+                pos = k;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return pos;
         }
     }
 }

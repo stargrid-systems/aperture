@@ -7,9 +7,6 @@ use crate::data::{ColorRef, ComponentDef, VariantDef};
 use crate::number::{equals, floor_index};
 use crate::prng::Prng;
 
-/// Maximum palette size across `DiceBear` styles.
-const MAX_PALETTE: usize = 8;
-
 pub struct Resolver<'a> {
     prng: Prng<'a>,
 }
@@ -35,7 +32,7 @@ impl<'a> Resolver<'a> {
         name: &str,
         component: &'a ComponentDef<'a>,
     ) -> Option<&'a VariantDef<'a>> {
-        let variants = component.variants;
+        let variants = &component.variants;
         if variants.is_empty() {
             return None;
         }
@@ -52,7 +49,7 @@ impl<'a> Resolver<'a> {
         }
         let threshold = value * total;
         let mut cumulative = 0.0;
-        for v in variants {
+        for v in variants.iter() {
             cumulative += v.weight;
             if threshold < cumulative {
                 return Some(v);
@@ -85,19 +82,16 @@ impl<'a> Resolver<'a> {
 
     /// Resolves `color` to its single shuffled stop.
     pub fn color<'b>(&self, color: &ColorRef<'b>) -> Option<&'b str> {
-        if color.stops.is_empty() {
+        if color.palette.is_empty() {
             return None;
         }
-        let n = color.stops.len().min(MAX_PALETTE);
-        let mut indices = [0usize; MAX_PALETTE];
-        for (i, slot) in indices.iter_mut().enumerate().take(n) {
-            *slot = i;
-        }
-        self.prng.shuffle(&[color.key, "Color"], &mut indices[..n]);
+        let idx = self
+            .prng
+            .shuffle_zero(&[color.key, "Color"], color.palette.len());
         color
-            .stops
-            .get(indices[0])
-            .or_else(|| color.stops.last())
+            .palette
+            .get(idx)
+            .or_else(|| color.palette.last())
             .copied()
     }
 }

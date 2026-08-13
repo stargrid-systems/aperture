@@ -1,11 +1,7 @@
-// Constellation style data, bootstrapped from DiceBear 10.x (CC0 1.0).
-// Committed as plain Rust so the crate parses no JSON. Weight-0 animation
-// variants are omitted (never selected). Color palettes are pre-sorted to
-// match the PRNG shuffle's sort step. Byte parity is verified by
-// tests/fixtures.
+// DiceBear 10.x constellation style (CC0 1.0).
 
 use crate::Style;
-use crate::data::{AttrVal, ColorRef, ComponentDef, Node, VariantDef};
+use crate::data::{AttrVal, ColorRef, ComponentDef, Node, Palette, VariantDef, Variants};
 
 static COMP_COMET: ComponentDef = ComponentDef {
     name: "comet",
@@ -15,7 +11,7 @@ static COMP_COMET: ComponentDef = ComponentDef {
     translate: Some(((-12.0, 12.0), (-5.0, 8.0))),
     rotate: Some((-12.0, 12.0)),
     scale: None,
-    variants: &[
+    variants: Variants::new(&[
         VariantDef {
             name: "long",
             weight: 1.0,
@@ -144,7 +140,7 @@ static COMP_COMET: ComponentDef = ComponentDef {
                 ],
             }],
         },
-    ],
+    ]),
 };
 
 static COMP_CONSTELLATION: ComponentDef = ComponentDef {
@@ -155,7 +151,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
     translate: Some(((-6.0, 6.0), (-6.0, 6.0))),
     rotate: Some((-180.0, 180.0)),
     scale: None,
-    variants: &[
+    variants: Variants::new(&[
         VariantDef {
             name: "andromeda",
             weight: 1.0,
@@ -2147,7 +2143,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
                 },
             ],
         },
-    ],
+    ]),
 };
 
 static COMP_STAR: ComponentDef = ComponentDef {
@@ -2158,7 +2154,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
     translate: Some(((-120.0, 120.0), (-120.0, 120.0))),
     rotate: None,
     scale: None,
-    variants: &[
+    variants: Variants::new(&[
         VariantDef {
             name: "faint",
             weight: 3.0,
@@ -2212,7 +2208,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
                 }],
             }],
         },
-    ],
+    ]),
 };
 
 static COMP_ANIMATION: ComponentDef = ComponentDef {
@@ -2223,11 +2219,11 @@ static COMP_ANIMATION: ComponentDef = ComponentDef {
     translate: None,
     rotate: None,
     scale: None,
-    variants: &[VariantDef {
+    variants: Variants::new(&[VariantDef {
         name: "none",
         weight: 1.0,
         elements: &[],
-    }],
+    }]),
 };
 
 static CANVAS: &[Node] = &[
@@ -2330,13 +2326,13 @@ static CANVAS: &[Node] = &[
 
 const BG: ColorRef = ColorRef {
     key: "background",
-    stops: &[
+    palette: Palette::new(&[
         "#032729", "#032933", "#0d1e2f", "#131e37", "#181a22", "#1f2040", "#27193c", "#2f182d",
-    ],
+    ]),
 };
 const CON: ColorRef = ColorRef {
     key: "constellation",
-    stops: &["#c1e0f0", "#e7ecf0", "#e9dab2", "#ece8dd", "#f1d7d2"],
+    palette: Palette::new(&["#c1e0f0", "#e7ecf0", "#e9dab2", "#ece8dd", "#f1d7d2"]),
 };
 
 const METADATA: &str = r#"<metadata xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><rdf:RDF><rdf:Description><dc:title>Constellation</dc:title><dc:creator>DiceBear</dc:creator><dc:source xsi:type="dcterms:URI">https://www.dicebear.com</dc:source><dcterms:license xsi:type="dcterms:URI">https://creativecommons.org/publicdomain/zero/1.0/</dcterms:license><dc:rights>“Constellation” (https://www.dicebear.com) by “DiceBear”, licensed under “CC0 1.0” (https://creativecommons.org/publicdomain/zero/1.0/)</dc:rights></rdf:Description></rdf:RDF></metadata>"#;

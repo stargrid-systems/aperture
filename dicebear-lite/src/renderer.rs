@@ -8,121 +8,26 @@
 //! the renderer makes two deterministic passes: variant selection is fully
 //! keyed by `(seed, key)`, so recomputing it is safe.
 
-use core::{fmt, ptr};
+use core::fmt::{self, Write};
+use core::ptr;
+
+#[expect(
+    unused_imports,
+    reason = "Write trait needed for write_str method resolution"
+)]
+use Write as _;
 
 use crate::Style;
-use crate::data::{AttrVal, ComponentDef, Node, VariantDef};
+use crate::data::{AttrVal, Node, VariantDef};
 use crate::number::{Num, equals};
 use crate::prng::hash_u32;
 use crate::resolver::Resolver;
-use crate::xml::Escaped;
+use crate::svg::{Escaped, ScaleAtPoint, UseElement};
 
 /// Maximum canvas nodes across `DiceBear` styles.
 const MAX_CANVAS: usize = 32;
 /// Maximum gradient ids across `DiceBear` styles.
 const MAX_GRADIENTS: usize = 4;
-
-// --- CSS function types ---
-
-/// CSS `translate(x, y)`.
-struct Translate(f64, f64);
-impl fmt::Display for Translate {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "translate({x}, {y})", x = Num(self.0), y = Num(self.1))
-    }
-}
-
-/// CSS `rotate(angle, cx, cy)`.
-struct Rotate(f64, f64, f64);
-impl fmt::Display for Rotate {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "rotate({a}, {cx}, {cy})",
-            a = Num(self.0),
-            cx = Num(self.1),
-            cy = Num(self.2)
-        )
-    }
-}
-
-/// CSS `translate(cx, cy) scale(s) translate(-cx, -cy)`.
-struct ScaleAtPoint {
-    scale: f64,
-    cx: f64,
-    cy: f64,
-}
-impl fmt::Display for ScaleAtPoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "translate({cx}, {cy}) scale({s}) translate({mcx}, {mcy})",
-            cx = Num(self.cx),
-            cy = Num(self.cy),
-            s = Num(self.scale),
-            mcx = Num(-self.cx),
-            mcy = Num(-self.cy)
-        )
-    }
-}
-
-/// SVG `<use>` element with an optional transform.
-struct UseElement<'a> {
-    source: &'a str,
-    variant_name: &'a str,
-    hash: u32,
-    user_transform: Option<&'a str>,
-    translate: Option<(f64, f64)>,
-    rotate: Option<(f64, f64, f64)>,
-    scale: Option<ScaleAtPoint>,
-}
-
-impl fmt::Display for UseElement<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<use")?;
-        let has_transform = self.user_transform.is_some()
-            || self.translate.is_some()
-            || self.rotate.is_some()
-            || self.scale.is_some();
-        if has_transform {
-            write!(f, " transform=\"")?;
-            let mut wrote = if let Some(ut) = self.user_transform {
-                write!(f, "{ut}")?;
-                true
-            } else {
-                false
-            };
-            if let Some((tx, ty)) = self.translate {
-                if wrote {
-                    write!(f, " ")?;
-                }
-                write!(f, "{t}", t = Translate(tx, ty))?;
-                wrote = true;
-            }
-            if let Some((a, cx, cy)) = self.rotate {
-                if wrote {
-                    write!(f, " ")?;
-                }
-                write!(f, "{r}", r = Rotate(a, cx, cy))?;
-                wrote = true;
-            }
-            if let Some(ref s) = self.scale {
-                if wrote {
-                    write!(f, " ")?;
-                }
-                write!(f, "{s}")?;
-            }
-            write!(f, "\"")?;
-        }
-        write!(
-            f,
-            " href=\"#{source}-{variant_name}-{hash:08x}\"/>",
-            source = self.source,
-            variant_name = self.variant_name,
-            hash = self.hash
-        )
-    }
-}
 
 pub struct Renderer<'a> {
     style: &'a Style<'a>,
@@ -134,15 +39,12 @@ impl<'a> Renderer<'a> {
         Self { style, seed }
     }
 
-    /// Writes a component's def: embedded `<defs>` (gradients) are diverted
-    /// into the document `<defs>` (deduped by id), then the variant body is
-    /// wrapped in `<g id="...">`.
     #[expect(clippy::too_many_arguments, reason = "rendering parameters")]
     fn write_def<'b>(
         &self,
         f: &mut fmt::Formatter<'_>,
         resolver: &Resolver<'_>,
-        component: &ComponentDef<'_>,
+        source: &str,
         variant: &VariantDef<'b>,
         hash: u32,
         seen_grad: &mut [&'b str],
@@ -150,7 +52,6 @@ impl<'a> Renderer<'a> {
     ) -> fmt::Result {
         self.divert_defs(f, resolver, variant.elements, seen_grad, grad_count)?;
 
-        let source = component.name;
         write!(
             f,
             "<g id=\"{source}-{name}-{hash:08x}\">",
@@ -163,7 +64,7 @@ impl<'a> Renderer<'a> {
                 self.write_node(f, resolver, el)?;
             }
         }
-        write!(f, "</g>")
+        f.write_str("</g>")
     }
 
     #[expect(clippy::self_only_used_in_recursion, reason = "tree walk")]
@@ -192,9 +93,9 @@ impl<'a> Renderer<'a> {
                     }
                 }
                 if children.is_empty() {
-                    write!(f, "/>")
+                    f.write_str("/>")
                 } else {
-                    write!(f, ">")?;
+                    f.write_str(">")?;
                     for child in *children {
                         self.write_node(f, resolver, child)?;
                     }
@@ -205,8 +106,6 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    /// Depth-first walk that diverts every `<defs>` element's children into
-    /// the document `<defs>`, deduped by id.
     fn divert_defs<'b>(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -303,7 +202,7 @@ impl fmt::Display for Renderer<'_> {
             self.write_def(
                 f,
                 &resolver,
-                component,
+                component.name,
                 variant,
                 hash,
                 &mut seen_grad,
@@ -379,11 +278,10 @@ impl fmt::Display for Renderer<'_> {
             write!(f, "{use_el}")?;
         }
 
-        write!(f, "</g></svg>")
+        f.write_str("</g></svg>")
     }
 }
 
-/// Returns the `id` attribute of an element node, if it has a literal one.
 fn node_id<'a>(node: &'a Node<'a>) -> Option<&'a str> {
     let Node::El { attrs, .. } = node else {
         return None;

@@ -32,7 +32,7 @@ mod prng;
 mod renderer;
 mod resolver;
 mod styles;
-mod xml;
+mod svg;
 
 /// A `DiceBear` style definition. Each field is `&'a` data baked into the
 /// binary by the style module (e.g. [`constellation::CONSTELLATION`]).
