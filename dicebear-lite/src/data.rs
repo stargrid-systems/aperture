@@ -20,7 +20,6 @@ pub enum Node<'a> {
     },
     Component {
         name: &'a str,
-        source: &'a str,
         component: &'a ComponentDef<'a>,
         attrs: &'a [(&'a str, AttrVal<'a>)],
     },
@@ -33,6 +32,7 @@ pub struct VariantDef<'a> {
 }
 
 pub struct ComponentDef<'a> {
+    pub name: &'a str,
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub probability: Option<f64>,

@@ -3,7 +3,7 @@
 //!
 //! Produces SVG output byte-identical to `DiceBear` 10.x for default options,
 //! verified against committed reference fixtures. The PRNG, number formatting,
-//! and serializer are ports of `@dicebear/core`; only the subset a style
+//! and serializer are ports of `@dicebear/core`. Only the subset a style
 //! exercises is implemented (no option validation, gradients-as-options, tags,
 //! or text variables). Style definitions are plain Rust data behind feature
 //! gates, so no JSON is parsed.
@@ -13,7 +13,7 @@
 //! writing it into any [`core::fmt::Write`]. The crate itself is `no_std` and
 //! alloc-free.
 //!
-//! `DiceBear`'s core is MIT-licensed; attribution for the ported logic belongs
+//! `DiceBear`'s core is MIT-licensed. Attribution for the ported logic belongs
 //! to the `DiceBear` project (<https://www.dicebear.com>).
 //!
 //! # Features

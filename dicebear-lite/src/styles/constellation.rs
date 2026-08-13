@@ -1,6 +1,6 @@
 // Constellation style data, bootstrapped from DiceBear 10.x (CC0 1.0).
 // Committed as plain Rust so the crate parses no JSON. Weight-0 animation
-// variants are omitted (never selected); color palettes are pre-sorted to
+// variants are omitted (never selected). Color palettes are pre-sorted to
 // match the PRNG shuffle's sort step. Byte parity is verified by
 // tests/fixtures.
 
@@ -8,6 +8,7 @@ use crate::Style;
 use crate::data::{AttrVal, ColorRef, ComponentDef, Node, VariantDef};
 
 static COMP_COMET: ComponentDef = ComponentDef {
+    name: "comet",
     width: Some(100.0),
     height: Some(100.0),
     probability: Some(22.0),
@@ -147,6 +148,7 @@ static COMP_COMET: ComponentDef = ComponentDef {
 };
 
 static COMP_CONSTELLATION: ComponentDef = ComponentDef {
+    name: "constellation",
     width: Some(100.0),
     height: Some(100.0),
     probability: None,
@@ -2149,6 +2151,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
 };
 
 static COMP_STAR: ComponentDef = ComponentDef {
+    name: "star",
     width: Some(10.0),
     height: Some(10.0),
     probability: Some(85.0),
@@ -2213,6 +2216,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
 };
 
 static COMP_ANIMATION: ComponentDef = ComponentDef {
+    name: "animation",
     width: Some(100.0),
     height: Some(100.0),
     probability: None,
@@ -2229,131 +2233,113 @@ static COMP_ANIMATION: ComponentDef = ComponentDef {
 static CANVAS: &[Node] = &[
     Node::Component {
         name: "star",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(7.5 7.5)"))],
     },
     Node::Component {
         name: "star02",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(32.5 7.5)"))],
     },
     Node::Component {
         name: "star03",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(57.5 7.5)"))],
     },
     Node::Component {
         name: "star04",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(82.5 7.5)"))],
     },
     Node::Component {
         name: "star05",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(7.5 32.5)"))],
     },
     Node::Component {
         name: "star06",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(32.5 32.5)"))],
     },
     Node::Component {
         name: "star07",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(57.5 32.5)"))],
     },
     Node::Component {
         name: "star08",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(82.5 32.5)"))],
     },
     Node::Component {
         name: "star09",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(7.5 57.5)"))],
     },
     Node::Component {
         name: "star10",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(32.5 57.5)"))],
     },
     Node::Component {
         name: "star11",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(57.5 57.5)"))],
     },
     Node::Component {
         name: "star12",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(82.5 57.5)"))],
     },
     Node::Component {
         name: "star13",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(7.5 82.5)"))],
     },
     Node::Component {
         name: "star14",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(32.5 82.5)"))],
     },
     Node::Component {
         name: "star15",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(57.5 82.5)"))],
     },
     Node::Component {
         name: "star16",
-        source: "star",
         component: &COMP_STAR,
         attrs: &[("transform", AttrVal::Lit("translate(82.5 82.5)"))],
     },
     Node::Component {
         name: "constellation",
-        source: "constellation",
         component: &COMP_CONSTELLATION,
         attrs: &[],
     },
     Node::Component {
         name: "comet",
-        source: "comet",
         component: &COMP_COMET,
         attrs: &[],
     },
     Node::Component {
         name: "animation",
-        source: "animation",
         component: &COMP_ANIMATION,
         attrs: &[],
     },
 ];
 
-static BG_COLORS: &[&str] = &[
-    "#032729", "#032933", "#0d1e2f", "#131e37", "#181a22", "#1f2040", "#27193c", "#2f182d",
-];
-static CON_COLORS: &[&str] = &["#c1e0f0", "#e7ecf0", "#e9dab2", "#ece8dd", "#f1d7d2"];
-
-const METADATA: &str = r#"<metadata xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><rdf:RDF><rdf:Description><dc:title>Constellation</dc:title><dc:creator>DiceBear</dc:creator><dc:source xsi:type="dcterms:URI">https://www.dicebear.com</dc:source><dcterms:license xsi:type="dcterms:URI">https://creativecommons.org/publicdomain/zero/1.0/</dcterms:license><dc:rights>“Constellation” (https://www.dicebear.com) by “DiceBear”, licensed under “CC0 1.0” (https://creativecommons.org/publicdomain/zero/1.0/)</dc:rights></rdf:Description></rdf:RDF></metadata>"#;
-
+const BG: ColorRef = ColorRef {
+    key: "background",
+    stops: &[
+        "#032729", "#032933", "#0d1e2f", "#131e37", "#181a22", "#1f2040", "#27193c", "#2f182d",
+    ],
+};
 const CON: ColorRef = ColorRef {
     key: "constellation",
-    stops: CON_COLORS,
+    stops: &["#c1e0f0", "#e7ecf0", "#e9dab2", "#ece8dd", "#f1d7d2"],
 };
+
+const METADATA: &str = r#"<metadata xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><rdf:RDF><rdf:Description><dc:title>Constellation</dc:title><dc:creator>DiceBear</dc:creator><dc:source xsi:type="dcterms:URI">https://www.dicebear.com</dc:source><dcterms:license xsi:type="dcterms:URI">https://creativecommons.org/publicdomain/zero/1.0/</dcterms:license><dc:rights>“Constellation” (https://www.dicebear.com) by “DiceBear”, licensed under “CC0 1.0” (https://creativecommons.org/publicdomain/zero/1.0/)</dc:rights></rdf:Description></rdf:RDF></metadata>"#;
 
 pub static CONSTELLATION: Style = Style {
     source_name: "Constellation",
@@ -2361,8 +2347,5 @@ pub static CONSTELLATION: Style = Style {
     canvas_w: 100.0,
     canvas_h: 100.0,
     canvas: CANVAS,
-    background: ColorRef {
-        key: "background",
-        stops: BG_COLORS,
-    },
+    background: BG,
 };

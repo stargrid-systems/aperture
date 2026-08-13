@@ -2,7 +2,7 @@
 //! Mulberry32.
 //!
 //! Every draw is derived independently from `(seed, key)`, so the call order is
-//! irrelevant. A "key" is several string fragments concatenated; hashing walks
+//! irrelevant. A "key" is several string fragments concatenated. Hashing walks
 //! them incrementally so no allocation is needed. This is a direct port of
 //! `@dicebear/prng`.
 
