@@ -1,8 +1,9 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, Password, Role, Username};
 use aperture_storage::{ActorId, UserId};
 use axum::Json;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
@@ -18,6 +19,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_users, create_user))
         .routes(routes!(get_user))
         .routes(routes!(delete_user))
+        .routes(routes!(user_avatar))
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -168,4 +170,25 @@ async fn delete_user(
         .delete_user(user.id, user.actor_id, auth.actor.id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Returns a deterministic constellation avatar for a user as inline SVG.
+#[utoipa::path(
+    get,
+    path = "/{id}/avatar",
+    operation_id = operation_ids::GET_USER_AVATAR,
+    params(("id" = UserId, Path, description = "User id")),
+    responses(
+        (status = 200, description = "Avatar SVG", content_type = "image/svg+xml",
+         headers(("Cache-Control" = String, description = "Immutable caching directive"))),
+    ),
+)]
+async fn user_avatar(_auth: AuthenticatedActor, Path(id): Path<UserId>) -> Response<Body> {
+    let svg =
+        dicebear_lite::Avatar::new(&dicebear_lite::CONSTELLATION, &id.to_string()).to_string();
+    Response::builder()
+        .header(header::CONTENT_TYPE, "image/svg+xml")
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .body(Body::from(svg))
+        .expect("valid response")
 }

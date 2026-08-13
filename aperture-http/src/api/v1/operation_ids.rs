@@ -104,6 +104,9 @@ pub const GET_USER: &str = "getUser";
 /// `DELETE /api/v1/users/{id}`
 pub const DELETE_USER: &str = "deleteUser";
 
+/// `GET /api/v1/users/{id}/avatar`
+pub const GET_USER_AVATAR: &str = "getUserAvatar";
+
 /// `GET /api/v1/api-keys`
 pub const LIST_API_KEYS: &str = "listApiKeys";
 
