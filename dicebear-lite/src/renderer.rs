@@ -60,9 +60,7 @@ impl<'a> Renderer<'a> {
             hash = hash
         )?;
         for el in variant.elements {
-            if !matches!(el, Node::El { name: "defs", .. }) {
-                self.write_node(f, resolver, el)?;
-            }
+            self.write_node(f, resolver, el)?;
         }
         f.write_str("</g>")
     }
@@ -126,6 +124,7 @@ impl<'a> Renderer<'a> {
                         if seen_grad[..*grad_count].contains(&id) {
                             continue;
                         }
+                        debug_assert!(*grad_count < MAX_GRADIENTS, "too many gradients");
                         seen_grad[*grad_count] = id;
                         *grad_count += 1;
                     }
@@ -282,7 +281,7 @@ impl fmt::Display for Renderer<'_> {
     }
 }
 
-fn node_id<'a>(node: &'a Node<'a>) -> Option<&'a str> {
+fn node_id<'a>(node: &Node<'a>) -> Option<&'a str> {
     let Node::El { attrs, .. } = node else {
         return None;
     };

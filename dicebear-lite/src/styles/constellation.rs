@@ -1,15 +1,17 @@
 // DiceBear 10.x constellation style (CC0 1.0).
 
 use crate::Style;
-use crate::data::{AttrVal, ColorRef, ComponentDef, Node, Palette, VariantDef, Variants};
+use crate::data::{
+    AttrVal, Canvas, ColorRef, ComponentDef, Node, Palette, Range, VariantDef, Variants,
+};
 
 static COMP_COMET: ComponentDef = ComponentDef {
     name: "comet",
     width: Some(100.0),
     height: Some(100.0),
     probability: Some(22.0),
-    translate: Some(((-12.0, 12.0), (-5.0, 8.0))),
-    rotate: Some((-12.0, 12.0)),
+    translate: Some((Range(-12.0, 12.0), Range(-5.0, 8.0))),
+    rotate: Some(Range(-12.0, 12.0)),
     scale: None,
     variants: Variants::new(&[
         VariantDef {
@@ -148,8 +150,8 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
     width: Some(100.0),
     height: Some(100.0),
     probability: None,
-    translate: Some(((-6.0, 6.0), (-6.0, 6.0))),
-    rotate: Some((-180.0, 180.0)),
+    translate: Some((Range(-6.0, 6.0), Range(-6.0, 6.0))),
+    rotate: Some(Range(-180.0, 180.0)),
     scale: None,
     variants: Variants::new(&[
         VariantDef {
@@ -2151,7 +2153,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
     width: Some(10.0),
     height: Some(10.0),
     probability: Some(85.0),
-    translate: Some(((-120.0, 120.0), (-120.0, 120.0))),
+    translate: Some((Range(-120.0, 120.0), Range(-120.0, 120.0))),
     rotate: None,
     scale: None,
     variants: Variants::new(&[
@@ -2335,6 +2337,7 @@ const CON: ColorRef = ColorRef {
     palette: Palette::new(&["#c1e0f0", "#e7ecf0", "#e9dab2", "#ece8dd", "#f1d7d2"]),
 };
 
+// Curly quotes in METADATA are required for byte parity with DiceBear.
 const METADATA: &str = r#"<metadata xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><rdf:RDF><rdf:Description><dc:title>Constellation</dc:title><dc:creator>DiceBear</dc:creator><dc:source xsi:type="dcterms:URI">https://www.dicebear.com</dc:source><dcterms:license xsi:type="dcterms:URI">https://creativecommons.org/publicdomain/zero/1.0/</dcterms:license><dc:rights>“Constellation” (https://www.dicebear.com) by “DiceBear”, licensed under “CC0 1.0” (https://creativecommons.org/publicdomain/zero/1.0/)</dc:rights></rdf:Description></rdf:RDF></metadata>"#;
 
 pub static CONSTELLATION: Style = Style {
@@ -2342,6 +2345,6 @@ pub static CONSTELLATION: Style = Style {
     metadata: METADATA,
     canvas_w: 100.0,
     canvas_h: 100.0,
-    canvas: CANVAS,
+    canvas: Canvas::new(CANVAS),
     background: BG,
 };

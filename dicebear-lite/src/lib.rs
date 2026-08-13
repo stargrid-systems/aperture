@@ -1,4 +1,3 @@
-#![no_std]
 //! Slim renderer for `DiceBear` avatars.
 //!
 //! Produces SVG output byte-identical to `DiceBear` 10.x for default options,
@@ -18,11 +17,13 @@
 //!
 //! # Features
 //!
-//! - `constellation` -- the `DiceBear` "constellation" style (CC0 1.0).
+//! - `constellation`: enables the `DiceBear` "constellation" style (CC0 1.0).
+
+#![cfg_attr(not(test), no_std)]
 
 use core::fmt;
 
-use self::data::{ColorRef, Node};
+use self::data::{Canvas, ColorRef};
 #[cfg(feature = "constellation")]
 pub use self::styles::constellation::CONSTELLATION;
 
@@ -34,17 +35,24 @@ mod resolver;
 mod styles;
 mod svg;
 
+#[doc(hidden)]
+pub mod internal {
+    pub use crate::number::Num;
+    pub use crate::prng::{Prng, hash_u32};
+    pub use crate::svg::Escaped;
+}
+
 /// A `DiceBear` style definition. Each field is `&'a` data baked into the
 /// binary by the style module (e.g. [`constellation::CONSTELLATION`]).
 ///
 /// [`constellation::CONSTELLATION`]: styles::constellation::CONSTELLATION
 pub struct Style<'a> {
-    pub source_name: &'a str,
-    pub metadata: &'a str,
-    pub canvas_w: f64,
-    pub canvas_h: f64,
-    pub canvas: &'a [Node<'a>],
-    pub background: ColorRef<'a>,
+    pub(crate) source_name: &'a str,
+    pub(crate) metadata: &'a str,
+    pub(crate) canvas_w: f64,
+    pub(crate) canvas_h: f64,
+    pub(crate) canvas: Canvas<'a>,
+    pub(crate) background: ColorRef<'a>,
 }
 
 /// A `DiceBear` avatar for a given `seed` and [`Style`].

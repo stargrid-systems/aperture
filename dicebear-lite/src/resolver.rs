@@ -3,7 +3,7 @@
 //! Every draw is keyed by `(seed, key)` and therefore deterministic regardless
 //! of call order, so no memoization is needed.
 
-use crate::data::{ColorRef, ComponentDef, VariantDef};
+use crate::data::{ColorRef, ComponentDef, Range, VariantDef};
 use crate::number::{equals, floor_index};
 use crate::prng::Prng;
 
@@ -65,16 +65,16 @@ impl<'a> Resolver<'a> {
         component: &ComponentDef<'_>,
     ) -> ComponentTransform {
         ComponentTransform {
-            rotate: component.rotate.map_or(0.0, |(min, max)| {
+            rotate: component.rotate.map_or(0.0, |Range(min, max)| {
                 self.prng.float(&[name, "Rotate"], min, max)
             }),
-            translate_x: component.translate.map_or(0.0, |((min, max), _)| {
+            translate_x: component.translate.map_or(0.0, |(Range(min, max), _)| {
                 self.prng.float(&[name, "TranslateX"], min, max)
             }),
-            translate_y: component.translate.map_or(0.0, |(_, (min, max))| {
+            translate_y: component.translate.map_or(0.0, |(_, Range(min, max))| {
                 self.prng.float(&[name, "TranslateY"], min, max)
             }),
-            scale: component.scale.map_or(1.0, |(min, max)| {
+            scale: component.scale.map_or(1.0, |Range(min, max)| {
                 self.prng.float(&[name, "Scale"], min, max)
             }),
         }
@@ -88,10 +88,6 @@ impl<'a> Resolver<'a> {
         let idx = self
             .prng
             .shuffle_zero(&[color.key, "Color"], color.palette.len());
-        color
-            .palette
-            .get(idx)
-            .or_else(|| color.palette.last())
-            .copied()
+        color.palette.get(idx).copied()
     }
 }

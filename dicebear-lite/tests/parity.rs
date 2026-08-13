@@ -13,7 +13,8 @@ fn fixture_path(slug: &str) -> PathBuf {
 /// SVG. The `slug` selects the fixture file.
 #[track_caller]
 fn assert_parity(seed: &str, slug: &str) {
-    let expected = fs::read_to_string(fixture_path(slug)).unwrap();
+    let expected = fs::read_to_string(fixture_path(slug))
+        .unwrap_or_else(|e| panic!("fixture {slug}.svg: {e}"));
     let actual = Avatar::new(&CONSTELLATION, seed).to_string();
     assert_eq!(actual, expected, "seed={seed:?} (slug={slug})");
 }

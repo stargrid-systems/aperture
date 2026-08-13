@@ -80,9 +80,13 @@ impl<'a> Prng<'a> {
         self.value(key) * 100.0 < likelihood
     }
 
+    #[cfg_attr(
+        test,
+        expect(clippy::suboptimal_flops, reason = "no FMA: matches JavaScript")
+    )]
     pub fn float(&self, key: &[&str], min: f64, max: f64) -> f64 {
-        // Two separate roundings, matching JavaScript's `min + value * (max - min)`
-        // (JS has no fused multiply-add).
+        // No fused multiply-add: the product and sum are computed separately,
+        // matching JavaScript semantics.
         math_round((min + self.value(key) * (max - min)) * 10000.0) / 10000.0
     }
 
@@ -90,15 +94,16 @@ impl<'a> Prng<'a> {
     /// shuffle of `[0, 1, ..., n-1]`. Uses the trace-label algorithm: instead
     /// of materializing the full permutation, it traces which original element
     /// ends up at position 0 by following the chain of swaps that affect it.
-    /// Requires `n <= 10` (3 bits per j value in a `u32`).
+    /// Requires `n <= 8` (3 bits per j value in a `u32`).
     pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
+        debug_assert!(n <= 8, "shuffle_zero requires n <= 8");
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
         let mut val_at_0: usize = 0;
         let mut j_packed: u32 = 0;
 
         for i in (1..n).rev() {
             let j = floor_index(rng.next_float(), i + 1);
-            #[expect(clippy::cast_possible_truncation, reason = "j < n <= 10, fits in u32")]
+            #[expect(clippy::cast_possible_truncation, reason = "j < n <= 8, fits in u32")]
             let j_u32 = j as u32;
             j_packed |= j_u32 << (3 * (i - 1));
             if j == 0 {

@@ -2,6 +2,10 @@
 
 use core::ops::Deref;
 
+/// Min/max range for PRNG-driven transforms.
+#[derive(Clone, Copy)]
+pub struct Range(pub f64, pub f64);
+
 /// Color palette stops. Limited to 8 entries, enforced at construction.
 #[derive(Clone, Copy)]
 pub struct Palette<'a> {
@@ -53,7 +57,10 @@ pub struct VariantDef<'a> {
     pub elements: &'a [Node<'a>],
 }
 
-/// Variant definitions, verified sorted by name at construction.
+/// Variant definitions, verified sorted by name at construction. The sort
+/// order is load-bearing: the resolver's weighted pick walks variants in
+/// definition order, so the order must match `DiceBear`'s name-sorted
+/// iteration.
 #[derive(Clone, Copy)]
 pub struct Variants<'a> {
     variants: &'a [VariantDef<'a>],
@@ -95,8 +102,27 @@ pub struct ComponentDef<'a> {
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub probability: Option<f64>,
-    pub translate: Option<((f64, f64), (f64, f64))>,
-    pub rotate: Option<(f64, f64)>,
-    pub scale: Option<(f64, f64)>,
+    pub translate: Option<(Range, Range)>,
+    pub rotate: Option<Range>,
+    pub scale: Option<Range>,
     pub variants: Variants<'a>,
+}
+
+/// Canvas node slice. Limited to 32 nodes, enforced at construction.
+pub struct Canvas<'a> {
+    nodes: &'a [Node<'a>],
+}
+
+impl<'a> Canvas<'a> {
+    pub const fn new(nodes: &'a [Node<'a>]) -> Self {
+        assert!(nodes.len() <= 32, "canvas exceeds 32 nodes");
+        Self { nodes }
+    }
+}
+
+impl<'a> Deref for Canvas<'a> {
+    type Target = [Node<'a>];
+    fn deref(&self) -> &Self::Target {
+        self.nodes
+    }
 }

@@ -23,7 +23,7 @@ impl fmt::Display for Escaped<'_> {
                 '"' => f.write_str("&quot;")?,
                 '<' => f.write_str("&lt;")?,
                 '>' => f.write_str("&gt;")?,
-                other => f.write_str(other.encode_utf8(&mut [0u8; 4]))?,
+                other => f.write_char(other)?,
             }
         }
         Ok(())
