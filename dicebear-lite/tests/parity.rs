@@ -1,83 +1,115 @@
 use std::fs;
 use std::path::PathBuf;
 
-fn manifest_dir() -> PathBuf {
+use dicebear_lite::{Avatar, CONSTELLATION};
+
+fn fixture_path(slug: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(format!("{slug}.svg"))
 }
 
-/// The (slug, seed) pairs covered by `tests/fixtures`. Kept inline so the test
-/// depends on no extra crates.
-fn seeds() -> Vec<(&'static str, String)> {
-    let literal: &[(&str, &str)] = &[
-        ("empty", ""),
-        ("n0", "0"),
-        ("n1", "1"),
-        ("n2", "2"),
-        ("n3", "3"),
-        ("n7", "7"),
-        ("n42", "42"),
-        ("n100", "100"),
-        ("n9999", "9999"),
-        ("test", "test"),
-        ("alice", "alice"),
-        ("bob", "bob"),
-        ("admin", "admin"),
-        ("simon", "Simon"),
-        ("capitalA", "A"),
-        ("zzz", "zzz"),
-        ("hex", "0x1F"),
-        ("space", "a b c"),
-        ("unicode", "日本語"),
-        ("emoji", "🎉"),
-        ("mixed", "User-12345_Admin"),
-        ("neg", "-5"),
-        ("floatish", "3.14"),
-    ];
-    let mut all: Vec<(&'static str, String)> = literal
-        .iter()
-        .map(|(slug, seed)| (*slug, (*seed).to_owned()))
-        .collect();
-    all.push(("longseed", "x".repeat(300)));
-    all
+/// Renders `seed` and asserts byte-identical output to the committed reference
+/// SVG. The `slug` selects the fixture file.
+#[track_caller]
+fn assert_parity(seed: &str, slug: &str) {
+    let expected = fs::read_to_string(fixture_path(slug)).unwrap();
+    let actual = Avatar::new(seed, &CONSTELLATION).to_string();
+    assert_eq!(actual, expected, "seed={seed:?} (slug={slug})");
 }
 
-/// Renders every fixture seed and asserts byte-identical output to the
-/// committed `DiceBear` reference SVGs.
 #[test]
-fn byte_parity_with_dicebear() {
-    let mut failures: Vec<(String, usize, usize)> = Vec::new();
-    for (slug, seed) in seeds() {
-        let expected =
-            fs::read_to_string(manifest_dir().join(format!("tests/fixtures/{slug}.svg"))).unwrap();
-        let actual = dicebear_lite::Avatar::new(&seed).to_string();
-        if actual != expected {
-            // Persist the actual output so the mismatch can be diffed locally.
-            let _ = fs::write(
-                manifest_dir().join(format!("tests/fixtures/{slug}.actual.svg")),
-                &actual,
-            );
-            failures.push((slug.to_owned(), expected.len(), actual.len()));
-        }
-    }
+fn empty_seed() {
+    assert_parity("", "empty");
+}
 
-    assert!(
-        failures.is_empty(),
-        "parity failures (expected, actual lengths): {failures:#?}"
-    );
+#[test]
+fn single_digit_seeds() {
+    assert_parity("0", "n0");
+    assert_parity("1", "n1");
+    assert_parity("2", "n2");
+    assert_parity("3", "n3");
+    assert_parity("7", "n7");
+}
+
+#[test]
+fn multi_digit_seeds() {
+    assert_parity("42", "n42");
+    assert_parity("100", "n100");
+    assert_parity("9999", "n9999");
+}
+
+#[test]
+fn short_alpha_seeds() {
+    assert_parity("test", "test");
+    assert_parity("bob", "bob");
+    assert_parity("admin", "admin");
+    assert_parity("zzz", "zzz");
+}
+
+#[test]
+fn name_seeds() {
+    assert_parity("alice", "alice");
+    assert_parity("Simon", "simon");
+}
+
+#[test]
+fn single_capital_letter() {
+    assert_parity("A", "capitalA");
+}
+
+#[test]
+fn hex_seed() {
+    assert_parity("0x1F", "hex");
+}
+
+#[test]
+fn spaces_in_seed() {
+    assert_parity("a b c", "space");
+}
+
+#[test]
+fn negative_number() {
+    assert_parity("-5", "neg");
+}
+
+#[test]
+fn decimal_number() {
+    assert_parity("3.14", "floatish");
+}
+
+#[test]
+fn mixed_alphanumeric() {
+    assert_parity("User-12345_Admin", "mixed");
+}
+
+#[test]
+fn unicode_seed() {
+    assert_parity("日本語", "unicode");
+}
+
+#[test]
+fn emoji_seed() {
+    assert_parity("🎉", "emoji");
+}
+
+#[test]
+fn long_seed() {
+    assert_parity(&"x".repeat(300), "longseed");
 }
 
 #[test]
 fn deterministic_for_same_seed() {
     assert_eq!(
-        dicebear_lite::Avatar::new("alice").to_string(),
-        dicebear_lite::Avatar::new("alice").to_string()
+        Avatar::new("alice", &CONSTELLATION).to_string(),
+        Avatar::new("alice", &CONSTELLATION).to_string()
     );
 }
 
 #[test]
 fn distinct_seeds_differ() {
     assert_ne!(
-        dicebear_lite::Avatar::new("1").to_string(),
-        dicebear_lite::Avatar::new("2").to_string()
+        Avatar::new("1", &CONSTELLATION).to_string(),
+        Avatar::new("2", &CONSTELLATION).to_string()
     );
 }

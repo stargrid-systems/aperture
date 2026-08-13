@@ -57,46 +57,54 @@ pub fn floor_index(unit: f64, len: usize) -> usize {
     (unit * len as f64) as i64 as usize
 }
 
-/// Writes `value` rounded to at most 5 decimal places, trailing zeros trimmed,
-/// no exponential notation. Mirrors `Utils/Number.format` without allocating.
+/// A number formatted like `DiceBear`'s `Utils/Number.format`: rounded to at
+/// most 5 decimal places, trailing zeros trimmed, no exponential notation.
+pub struct Num(pub f64);
+
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "abs of bounded SVG-range values to integer digits"
 )]
-pub fn write_num<W: fmt::Write>(f: &mut W, value: f64) -> fmt::Result {
-    if value.is_nan() {
-        return f.write_str("NaN");
-    }
-    if value.is_infinite() {
-        return f.write_str(if value < 0.0 { "-Infinity" } else { "Infinity" });
-    }
+impl fmt::Display for Num {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = self.0;
+        if value.is_nan() {
+            return f.write_str("NaN");
+        }
+        if value.is_infinite() {
+            return f.write_str(if value < 0.0 { "-Infinity" } else { "Infinity" });
+        }
 
-    let mut scaled = math_round(value * 100_000.0);
-    if scaled < 0.0 {
-        f.write_str("-")?;
-        scaled = -scaled;
-    }
+        let mut scaled = math_round(value * 100_000.0);
+        if scaled < 0.0 {
+            f.write_str("-")?;
+            scaled = -scaled;
+        }
 
-    let integer = floor(scaled / 100_000.0) as u64;
-    let fracval = (scaled % 100_000.0) as u64;
-    write!(f, "{integer}")?;
-    if fracval == 0 {
-        return Ok(());
-    }
+        let integer = floor(scaled / 100_000.0) as u64;
+        let fracval = (scaled % 100_000.0) as u64;
+        write!(f, "{integer}")?;
+        if fracval == 0 {
+            return Ok(());
+        }
 
-    let mut digits = [b'0'; 5];
-    let mut v = fracval;
-    let mut i = 5;
-    while i > 0 {
-        i -= 1;
-        digits[i] = b'0' + (v % 10) as u8;
-        v /= 10;
+        let mut digits = [b'0'; 5];
+        let mut v = fracval;
+        let mut i = 5;
+        while i > 0 {
+            i -= 1;
+            digits[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        let mut end = 5;
+        while end > 0 && digits[end - 1] == b'0' {
+            end -= 1;
+        }
+        write!(
+            f,
+            ".{}",
+            str::from_utf8(&digits[..end]).expect("ascii digits")
+        )
     }
-    let mut end = 5;
-    while end > 0 && digits[end - 1] == b'0' {
-        end -= 1;
-    }
-    f.write_str(".")?;
-    f.write_str(str::from_utf8(&digits[..end]).expect("ascii digits"))
 }
