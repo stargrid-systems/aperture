@@ -14,7 +14,7 @@ fn fixture_path(slug: &str) -> PathBuf {
 #[track_caller]
 fn assert_parity(seed: &str, slug: &str) {
     let expected = fs::read_to_string(fixture_path(slug)).unwrap();
-    let actual = Avatar::new(seed, &CONSTELLATION).to_string();
+    let actual = Avatar::new(&CONSTELLATION, seed).to_string();
     assert_eq!(actual, expected, "seed={seed:?} (slug={slug})");
 }
 
@@ -101,15 +101,15 @@ fn long_seed() {
 #[test]
 fn deterministic_for_same_seed() {
     assert_eq!(
-        Avatar::new("alice", &CONSTELLATION).to_string(),
-        Avatar::new("alice", &CONSTELLATION).to_string()
+        Avatar::new(&CONSTELLATION, "alice").to_string(),
+        Avatar::new(&CONSTELLATION, "alice").to_string()
     );
 }
 
 #[test]
 fn distinct_seeds_differ() {
     assert_ne!(
-        Avatar::new("1", &CONSTELLATION).to_string(),
-        Avatar::new("2", &CONSTELLATION).to_string()
+        Avatar::new(&CONSTELLATION, "1").to_string(),
+        Avatar::new(&CONSTELLATION, "2").to_string()
     );
 }

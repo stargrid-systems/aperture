@@ -1,35 +1,43 @@
 // Shared SVG data model used by style definitions and the renderer.
 
 #[derive(Clone, Copy)]
-pub enum AttrVal {
-    Lit(&'static str),
-    Color(&'static str),
+pub struct ColorRef<'a> {
+    pub key: &'a str,
+    pub stops: &'a [&'a str],
 }
 
-pub enum Node {
+#[derive(Clone, Copy)]
+pub enum AttrVal<'a> {
+    Lit(&'a str),
+    Color(ColorRef<'a>),
+}
+
+pub enum Node<'a> {
     El {
-        name: &'static str,
-        attrs: &'static [(&'static str, AttrVal)],
-        children: &'static [Self],
+        name: &'a str,
+        attrs: &'a [(&'a str, AttrVal<'a>)],
+        children: &'a [Self],
     },
     Component {
-        name: &'static str,
-        attrs: &'static [(&'static str, AttrVal)],
+        name: &'a str,
+        source: &'a str,
+        component: &'a ComponentDef<'a>,
+        attrs: &'a [(&'a str, AttrVal<'a>)],
     },
 }
 
-pub struct VariantDef {
+pub struct VariantDef<'a> {
+    pub name: &'a str,
     pub weight: f64,
-    pub elements: &'static [Node],
+    pub elements: &'a [Node<'a>],
 }
 
-pub struct ComponentDef {
+pub struct ComponentDef<'a> {
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub probability: Option<f64>,
     pub translate: Option<((f64, f64), (f64, f64))>,
     pub rotate: Option<(f64, f64)>,
     pub scale: Option<(f64, f64)>,
-    pub extends: Option<&'static str>,
-    pub variants: &'static [(&'static str, VariantDef)],
+    pub variants: &'a [VariantDef<'a>],
 }

@@ -185,7 +185,7 @@ async fn delete_user(
 )]
 async fn user_avatar(_auth: AuthenticatedActor, Path(id): Path<UserId>) -> Response<Body> {
     let svg =
-        dicebear_lite::Avatar::new(&id.to_string(), &dicebear_lite::CONSTELLATION).to_string();
+        dicebear_lite::Avatar::new(&dicebear_lite::CONSTELLATION, &id.to_string()).to_string();
     Response::builder()
         .header(header::CONTENT_TYPE, "image/svg+xml")
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")

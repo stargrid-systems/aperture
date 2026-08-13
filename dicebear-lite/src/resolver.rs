@@ -3,14 +3,15 @@
 //! Every draw is keyed by `(seed, key)` and therefore deterministic regardless
 //! of call order, so no memoization is needed.
 
-use crate::Style;
+use crate::data::{ColorRef, ComponentDef, VariantDef};
+use crate::number::{equals, floor_index};
 use crate::prng::Prng;
 
-const BUF: usize = 32;
+/// Maximum palette size across `DiceBear` styles.
+const MAX_PALETTE: usize = 8;
 
 pub struct Resolver<'a> {
     prng: Prng<'a>,
-    style: &'static Style,
 }
 
 pub struct ComponentTransform {
@@ -21,64 +22,82 @@ pub struct ComponentTransform {
 }
 
 impl<'a> Resolver<'a> {
-    pub const fn new(seed: &'a str, style: &'static Style) -> Self {
+    pub const fn new(seed: &'a str) -> Self {
         Self {
             prng: Prng::new(seed),
-            style,
         }
     }
 
-    /// Selects a variant for `name`, or `None` when the component is not
-    /// visible. PRNG keys use `name` (the alias); the probability and variant
-    /// pool come from the resolved source.
-    pub fn variant(&self, name: &str) -> Option<&'static str> {
-        let component = self.style.component(name)?;
-        let resolved = self.style.resolve(component);
-        let probability = resolved.probability.unwrap_or(100.0);
-        if !self.prng.bool(&[name, "Probability"], probability) {
+    /// Selects a variant for `component`, or `None` when it is not visible.
+    /// PRNG keys use `name` (the canvas alias).
+    pub fn variant(
+        &self,
+        name: &str,
+        component: &'a ComponentDef<'a>,
+    ) -> Option<&'a VariantDef<'a>> {
+        let variants = component.variants;
+        if variants.is_empty() {
             return None;
         }
-        let n = resolved.variants.len();
-        let mut entries: [(&'static str, f64); BUF] = [("", 0.0); BUF];
-        for (i, (variant_name, def)) in resolved.variants.iter().take(n).enumerate() {
-            entries[i] = (*variant_name, def.weight);
+        if !self.prng.bool(
+            &[name, "Probability"],
+            component.probability.unwrap_or(100.0),
+        ) {
+            return None;
         }
-        self.prng.weighted_pick(&[name, "Variant"], &entries[..n])
+        let total: f64 = variants.iter().map(|v| v.weight).sum();
+        let value = self.prng.value(&[name, "Variant"]);
+        if equals(total, 0.0) {
+            return variants.get(floor_index(value, variants.len()));
+        }
+        let threshold = value * total;
+        let mut cumulative = 0.0;
+        for v in variants {
+            cumulative += v.weight;
+            if threshold < cumulative {
+                return Some(v);
+            }
+        }
+        variants.last()
     }
 
-    /// Rotate/translate/scale for one component. Ranges come from the resolved
-    /// source; PRNG keys use `name`. Absent ranges fall back without drawing.
-    pub fn component_transform(&self, name: &str) -> ComponentTransform {
-        let resolved = self.style.component(name).map(|c| self.style.resolve(c));
+    /// Rotate/translate/scale for one component. PRNG keys use `name`.
+    pub fn component_transform(
+        &self,
+        name: &str,
+        component: &ComponentDef<'_>,
+    ) -> ComponentTransform {
         ComponentTransform {
-            rotate: resolved.and_then(|c| c.rotate).map_or(0.0, |(min, max)| {
+            rotate: component.rotate.map_or(0.0, |(min, max)| {
                 self.prng.float(&[name, "Rotate"], min, max)
             }),
-            translate_x: resolved
-                .and_then(|c| c.translate)
-                .map_or(0.0, |((min, max), _)| {
-                    self.prng.float(&[name, "TranslateX"], min, max)
-                }),
-            translate_y: resolved
-                .and_then(|c| c.translate)
-                .map_or(0.0, |(_, (min, max))| {
-                    self.prng.float(&[name, "TranslateY"], min, max)
-                }),
-            scale: resolved.and_then(|c| c.scale).map_or(1.0, |(min, max)| {
+            translate_x: component.translate.map_or(0.0, |((min, max), _)| {
+                self.prng.float(&[name, "TranslateX"], min, max)
+            }),
+            translate_y: component.translate.map_or(0.0, |(_, (min, max))| {
+                self.prng.float(&[name, "TranslateY"], min, max)
+            }),
+            scale: component.scale.map_or(1.0, |(min, max)| {
                 self.prng.float(&[name, "Scale"], min, max)
             }),
         }
     }
 
-    /// Resolves a named color to its single shuffled stop (solid fills only).
-    pub fn color(&self, name: &str) -> &'static str {
-        let Some(palette) = self.style.palette(name) else {
-            return "";
-        };
-        if palette.is_empty() {
-            return "";
+    /// Resolves `color` to its single shuffled stop.
+    pub fn color<'b>(&self, color: &ColorRef<'b>) -> Option<&'b str> {
+        if color.stops.is_empty() {
+            return None;
         }
-        let index = self.prng.shuffle_zero(&[name, "Color"], palette.len());
-        palette[index.min(palette.len() - 1)]
+        let n = color.stops.len().min(MAX_PALETTE);
+        let mut indices = [0usize; MAX_PALETTE];
+        for (i, slot) in indices.iter_mut().enumerate().take(n) {
+            *slot = i;
+        }
+        self.prng.shuffle(&[color.key, "Color"], &mut indices[..n]);
+        color
+            .stops
+            .get(indices[0])
+            .or_else(|| color.stops.last())
+            .copied()
     }
 }

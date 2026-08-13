@@ -8,11 +8,10 @@
 //! the renderer makes two deterministic passes: variant selection is fully
 //! keyed by `(seed, key)`, so recomputing it is safe.
 
-use core::cell::Cell;
-use core::fmt;
+use core::fmt::{self};
 
 use crate::Style;
-use crate::data::{AttrVal, ComponentDef, Node};
+use crate::data::{AttrVal, ComponentDef, Node, VariantDef};
 use crate::number::{Num, equals};
 use crate::prng::hash_u32;
 use crate::resolver::Resolver;
@@ -20,57 +19,45 @@ use crate::xml::Escaped;
 
 const MAX_DEFS: usize = 16;
 
-#[expect(
-    clippy::declare_interior_mutable_const,
-    reason = "Cell is required for interior mutability in no_std Display impl"
-)]
-const NONE_G: Cell<Option<(&'static str, &'static str)>> = Cell::new(None);
-#[expect(
-    clippy::declare_interior_mutable_const,
-    reason = "Cell is required for interior mutability in no_std Display impl"
-)]
-const NONE_GRAD: Cell<Option<&'static str>> = Cell::new(None);
-
-/// Interior-mutable dedup state for pass 1. Uses `Cell` so the renderer can
-/// mutate it through `&self` inside a `Display` impl.
-struct DefDedup {
-    seen_g: [Cell<Option<(&'static str, &'static str)>>; MAX_DEFS],
-    seen_grad: [Cell<Option<&'static str>>; MAX_DEFS],
+/// Dedup state for pass 1. Uses plain `&mut` — no interior mutability needed
+/// because it lives as a local inside `Display::fmt`.
+struct DefDedup<'a> {
+    seen_g: [Option<(&'a str, &'a str)>; MAX_DEFS],
+    seen_grad: [Option<&'a str>; MAX_DEFS],
 }
 
-impl DefDedup {
+impl<'a> DefDedup<'a> {
     const fn new() -> Self {
         Self {
-            seen_g: [NONE_G; MAX_DEFS],
-            seen_grad: [NONE_GRAD; MAX_DEFS],
+            seen_g: [None; MAX_DEFS],
+            seen_grad: [None; MAX_DEFS],
         }
     }
 
     fn seen_g(&self, source: &str, variant: &str) -> bool {
         self.seen_g
             .iter()
-            .any(|slot| slot.get().is_some_and(|(s, v)| s == source && v == variant))
+            .flatten()
+            .any(|&(s, v)| s == source && v == variant)
     }
 
-    fn mark_g(&self, source: &'static str, variant: &'static str) {
-        for slot in &self.seen_g {
-            if slot.get().is_none() {
-                slot.set(Some((source, variant)));
+    fn mark_g(&mut self, source: &'a str, variant: &'a str) {
+        for slot in &mut self.seen_g {
+            if slot.is_none() {
+                *slot = Some((source, variant));
                 return;
             }
         }
     }
 
     fn seen_grad(&self, id: &str) -> bool {
-        self.seen_grad
-            .iter()
-            .any(|slot| slot.get().is_some_and(|s| s == id))
+        self.seen_grad.iter().flatten().any(|&s| s == id)
     }
 
-    fn mark_grad(&self, id: &'static str) {
-        for slot in &self.seen_grad {
-            if slot.get().is_none() {
-                slot.set(Some(id));
+    fn mark_grad(&mut self, id: &'a str) {
+        for slot in &mut self.seen_grad {
+            if slot.is_none() {
+                *slot = Some(id);
                 return;
             }
         }
@@ -78,38 +65,31 @@ impl DefDedup {
 }
 
 pub struct Renderer<'a> {
+    style: &'a Style<'a>,
     seed: &'a str,
-    style: &'static Style,
 }
 
 impl<'a> Renderer<'a> {
-    pub const fn new(seed: &'a str, style: &'static Style) -> Self {
-        Self { seed, style }
+    pub const fn new(style: &'a Style<'a>, seed: &'a str) -> Self {
+        Self { style, seed }
     }
 
     /// Writes a component's def: embedded `<defs>` (gradients) are diverted
     /// into the document `<defs>` (deduped by id), then the variant body is
     /// wrapped in `<g id="...">`.
-    #[expect(clippy::too_many_arguments, reason = "rendering parameters")]
-    fn write_def(
+    fn write_def<'b>(
         &self,
         f: &mut fmt::Formatter<'_>,
         resolver: &Resolver<'_>,
-        component: &'static ComponentDef,
-        source: &'static str,
-        variant: &'static str,
+        source: &str,
+        variant: &VariantDef<'b>,
         hash: u32,
-        dedup: &DefDedup,
+        dedup: &mut DefDedup<'b>,
     ) -> fmt::Result {
-        let base = self.style.resolve(component);
-        let Some((_, def)) = base.variants.iter().find(|(n, _)| n == &variant) else {
-            return Ok(());
-        };
+        self.divert_defs(f, resolver, variant.elements, dedup)?;
 
-        self.divert_defs(f, resolver, def.elements, dedup)?;
-
-        write!(f, "<g id=\"{source}-{variant}-{hash:08x}\">")?;
-        for el in def.elements {
+        write!(f, "<g id=\"{source}-{}-{hash:08x}\">", variant.name)?;
+        for el in variant.elements {
             if !matches!(el, Node::El { name: "defs", .. }) {
                 self.write_node(f, resolver, el)?;
             }
@@ -120,31 +100,27 @@ impl<'a> Renderer<'a> {
     /// Writes a `<use>` reference with the merged placement + component
     /// transform.
     #[expect(clippy::too_many_arguments, reason = "rendering parameters")]
+    #[expect(clippy::unused_self, reason = "grouped with Renderer methods")]
     fn write_use(
         &self,
         f: &mut fmt::Formatter<'_>,
         resolver: &Resolver<'_>,
-        name: &'static str,
-        component: &'static ComponentDef,
-        variant: &'static str,
-        attrs: &[(&'static str, AttrVal)],
+        name: &str,
+        source: &str,
+        component: &ComponentDef<'_>,
+        variant: &VariantDef<'_>,
+        attrs: &[(&str, AttrVal<'_>)],
         hash: u32,
     ) -> fmt::Result {
-        let source = component.extends.unwrap_or(name);
-        let base = self.style.resolve(component);
-        let transform = resolver.component_transform(name);
-        let width = base.width.unwrap_or(0.0);
-        let height = base.height.unwrap_or(0.0);
+        let transform = resolver.component_transform(name, component);
+        let width = component.width.unwrap_or(0.0);
+        let height = component.height.unwrap_or(0.0);
         let cx = width / 2.0;
         let cy = height / 2.0;
 
-        let user_transform = attrs.iter().find_map(|(k, v)| {
-            if *k == "transform"
-                && let AttrVal::Lit(s) = v
-            {
-                return Some(*s);
-            }
-            None
+        let user_transform = attrs.iter().find_map(|(k, v)| match (*k, v) {
+            ("transform", AttrVal::Lit(s)) => Some(*s),
+            _ => None,
         });
         let has_translate =
             !equals(transform.translate_x, 0.0) || !equals(transform.translate_y, 0.0);
@@ -153,10 +129,10 @@ impl<'a> Renderer<'a> {
 
         write!(f, "<use")?;
         if user_transform.is_some() || has_translate || has_rotate || has_scale {
-            f.write_str(" transform=\"")?;
+            write!(f, " transform=\"")?;
             let mut wrote = user_transform.is_some();
             if let Some(ut) = user_transform {
-                f.write_str(ut)?;
+                write!(f, "{ut}")?;
             }
             if has_translate {
                 if wrote {
@@ -197,21 +173,19 @@ impl<'a> Renderer<'a> {
                     Num(-cy)
                 )?;
             }
-            f.write_str("\"")?;
+            write!(f, "\"")?;
         }
-        write!(f, " href=\"#{source}-{variant}-{hash:08x}\"/>")
+        write!(f, " href=\"#{source}-{}-{hash:08x}\"/>", variant.name)
     }
 
     fn write_node(
         &self,
         f: &mut fmt::Formatter<'_>,
         resolver: &Resolver<'_>,
-        node: &Node,
+        node: &Node<'_>,
     ) -> fmt::Result {
-        if let Node::El { name: "defs", .. } = node {
-            return Ok(());
-        }
         match node {
+            Node::El { name, .. } if *name == "defs" => Ok(()),
             Node::El {
                 name,
                 attrs,
@@ -238,26 +212,29 @@ impl<'a> Renderer<'a> {
         &self,
         f: &mut fmt::Formatter<'_>,
         resolver: &Resolver<'_>,
-        attrs: &[(&'static str, AttrVal)],
+        attrs: &[(&str, AttrVal<'_>)],
     ) -> fmt::Result {
         for (key, value) in attrs {
-            let s = match value {
-                AttrVal::Lit(s) => *s,
-                AttrVal::Color(name) => resolver.color(name),
-            };
-            write!(f, " {key}=\"{}\"", Escaped(s))?;
+            match value {
+                AttrVal::Lit(s) => write!(f, " {key}=\"{}\"", Escaped(s))?,
+                AttrVal::Color(color) => {
+                    if let Some(resolved) = resolver.color(color) {
+                        write!(f, " {key}=\"{}\"", Escaped(resolved))?;
+                    }
+                }
+            }
         }
         Ok(())
     }
 
     /// Depth-first walk that diverts every `<defs>` element's children into
     /// the document `<defs>`, deduped by id.
-    fn divert_defs(
+    fn divert_defs<'b>(
         &self,
         f: &mut fmt::Formatter<'_>,
         resolver: &Resolver<'_>,
-        nodes: &[Node],
-        dedup: &DefDedup,
+        nodes: &[Node<'b>],
+        dedup: &mut DefDedup<'b>,
     ) -> fmt::Result {
         for node in nodes {
             if let Node::El {
@@ -267,12 +244,11 @@ impl<'a> Renderer<'a> {
             } = node
             {
                 for child in *children {
-                    let id = node_id(child);
-                    if id.is_some_and(|i| dedup.seen_grad(i)) {
-                        continue;
-                    }
-                    if let Some(i) = id {
-                        dedup.mark_grad(i);
+                    if let Some(id) = node_id(child) {
+                        if dedup.seen_grad(id) {
+                            continue;
+                        }
+                        dedup.mark_grad(id);
                     }
                     self.write_node(f, resolver, child)?;
                 }
@@ -286,7 +262,7 @@ impl<'a> Renderer<'a> {
 
 impl fmt::Display for Renderer<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let resolver = Resolver::new(self.seed, self.style);
+        let resolver = Resolver::new(self.seed);
         let hash = hash_u32(self.style.source_name, self.seed);
 
         write!(
@@ -304,24 +280,25 @@ impl fmt::Display for Renderer<'_> {
 
         // Pass 1: each visible component's variant body, deduped by (source, variant).
         // Embedded <defs> (gradients) are diverted into the document <defs> first.
-        let dedup = DefDedup::new();
+        let mut dedup = DefDedup::new();
         for node in self.style.canvas {
-            let &Node::Component { name, .. } = node else {
+            let &Node::Component {
+                name,
+                source,
+                component,
+                ..
+            } = node
+            else {
                 continue;
             };
-            let Some(variant) = resolver.variant(name) else {
+            let Some(variant) = resolver.variant(name, component) else {
                 continue;
             };
-            let component = self
-                .style
-                .component(name)
-                .expect("canvas references a known component");
-            let source = component.extends.unwrap_or(name);
-            if dedup.seen_g(source, variant) {
+            if dedup.seen_g(source, variant.name) {
                 continue;
             }
-            dedup.mark_g(source, variant);
-            self.write_def(f, &resolver, component, source, variant, hash, &dedup)?;
+            dedup.mark_g(source, variant.name);
+            self.write_def(f, &resolver, source, variant, hash, &mut dedup)?;
         }
 
         // The clipPath is always applied (border radius defaults to 0).
@@ -333,27 +310,30 @@ impl fmt::Display for Renderer<'_> {
             Num(self.style.canvas_h)
         )?;
 
+        let bg = resolver.color(&self.style.background).unwrap_or("");
         write!(
             f,
             "<g clip-path=\"url(#clip-{hash:08x})\"><rect width=\"{}\" height=\"{}\" fill=\"{}\"/>",
             Num(self.style.canvas_w),
             Num(self.style.canvas_h),
-            Escaped(resolver.color("background"))
+            Escaped(bg)
         )?;
 
         // Pass 2: emit one <use> per visible component.
         for node in self.style.canvas {
-            let &Node::Component { name, attrs } = node else {
+            let &Node::Component {
+                name,
+                source,
+                component,
+                attrs,
+            } = node
+            else {
                 continue;
             };
-            let Some(variant) = resolver.variant(name) else {
+            let Some(variant) = resolver.variant(name, component) else {
                 continue;
             };
-            let component = self
-                .style
-                .component(name)
-                .expect("canvas references a known component");
-            self.write_use(f, &resolver, name, component, variant, attrs, hash)?;
+            self.write_use(f, &resolver, name, source, component, variant, attrs, hash)?;
         }
 
         write!(f, "</g></svg>")
@@ -361,16 +341,12 @@ impl fmt::Display for Renderer<'_> {
 }
 
 /// Returns the `id` attribute of an element node, if it has a literal one.
-fn node_id(node: &Node) -> Option<&'static str> {
+fn node_id<'a>(node: &'a Node<'a>) -> Option<&'a str> {
     let Node::El { attrs, .. } = node else {
         return None;
     };
-    for &(key, value) in *attrs {
-        if key == "id"
-            && let AttrVal::Lit(s) = value
-        {
-            return Some(s);
-        }
-    }
-    None
+    attrs.iter().find_map(|(k, v)| match (*k, v) {
+        ("id", AttrVal::Lit(s)) => Some(*s),
+        _ => None,
+    })
 }
