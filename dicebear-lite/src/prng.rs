@@ -8,7 +8,8 @@
 
 use core::iter;
 
-use crate::number::{floor_index, math_round};
+use crate::data::{ColorRef, ComponentDef, Palette, VariantDef};
+use crate::number::{equals, floor_index, math_round};
 
 const FNV_OFFSET: u32 = 0x811C_9DC5;
 const FNV_PRIME: u32 = 0x0100_0193;
@@ -60,6 +61,10 @@ impl Mulberry32 {
     }
 }
 
+/// Const assertion: 3-bit packing of j values in a `u32` requires
+/// `(Palette::MAX_LEN - 1) * 3 <= u32::BITS`.
+const _: () = assert!((Palette::MAX_LEN - 1) * 3 <= u32::BITS as usize);
+
 /// Key-based pseudorandom value generator. Keys are passed as multiple
 /// fragments (e.g. `&[name, "Variant"]`) and concatenated for hashing.
 pub struct Prng<'a> {
@@ -97,16 +102,16 @@ impl<'a> Prng<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if `n > 8` (3 bits per j value in a `u32`).
+    /// Panics if `n > Palette::MAX_LEN`.
     pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
-        assert!(n <= 8, "shuffle_zero requires n <= 8");
+        assert!(n <= Palette::MAX_LEN);
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
         let mut val_at_0: usize = 0;
         let mut j_packed: u32 = 0;
 
         for i in (1..n).rev() {
             let j = floor_index(rng.next_float(), i + 1);
-            #[expect(clippy::cast_possible_truncation, reason = "j < n <= 8, fits in u32")]
+            #[expect(clippy::cast_possible_truncation, reason = "j < Palette::MAX_LEN")]
             let j_u32 = j as u32;
             j_packed |= j_u32 << (3 * (i - 1));
             if j == 0 {
@@ -115,6 +120,44 @@ impl<'a> Prng<'a> {
         }
 
         val_at_0
+    }
+
+    /// Selects a variant for `component`, or `None` when it is not visible.
+    pub fn variant<'b>(
+        &self,
+        name: &str,
+        component: &'b ComponentDef<'b>,
+    ) -> Option<&'b VariantDef<'b>> {
+        let variants = &component.variants;
+        if variants.is_empty() {
+            return None;
+        }
+        if !self.bool(
+            &[name, "Probability"],
+            component.probability.unwrap_or(100.0),
+        ) {
+            return None;
+        }
+        let total: f64 = variants.iter().map(|v| v.weight).sum();
+        let value = self.value(&[name, "Variant"]);
+        if equals(total, 0.0) {
+            return variants.get(floor_index(value, variants.len()));
+        }
+        let threshold = value * total;
+        let mut cumulative = 0.0;
+        for v in variants.iter() {
+            cumulative += v.weight;
+            if threshold < cumulative {
+                return Some(v);
+            }
+        }
+        variants.last()
+    }
+
+    /// Resolves `color` to its single shuffled stop.
+    pub fn color<'b>(&self, color: &ColorRef<'b>) -> Option<&'b str> {
+        let idx = self.shuffle_zero(&[color.key, "Color"], color.palette.len());
+        color.palette.get(idx).copied()
     }
 }
 

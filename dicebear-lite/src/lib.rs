@@ -21,26 +21,20 @@
 
 #![cfg_attr(not(test), no_std)]
 
-use core::fmt;
-
-use self::data::{Canvas, ColorRef};
-#[cfg(feature = "constellation")]
-pub use self::styles::constellation::CONSTELLATION;
-
 mod data;
 mod number;
 mod prng;
 mod renderer;
-mod resolver;
-mod styles;
-mod svg;
 
-#[doc(hidden)]
-pub mod internal {
-    pub use super::number::Num;
-    pub use super::prng::{Prng, hash_u32};
-    pub use super::svg::Escaped;
+use core::fmt;
+
+use self::data::{Canvas, ColorRef};
+#[cfg(feature = "constellation")]
+mod styles {
+    pub mod constellation;
 }
+#[cfg(feature = "constellation")]
+pub use self::styles::constellation::CONSTELLATION;
 
 /// A `DiceBear` style definition. Each field is `&'a` data baked into the
 /// binary by the style module (e.g. [`constellation::CONSTELLATION`]).
@@ -75,6 +69,6 @@ impl<'a> Avatar<'a> {
 
 impl fmt::Display for Avatar<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        renderer::Renderer::new(self.style, self.seed).fmt(f)
+        renderer::render(f, self.style, self.seed)
     }
 }

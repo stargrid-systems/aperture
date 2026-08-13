@@ -12,7 +12,7 @@ static COMP_COMET: ComponentDef = ComponentDef {
     probability: Some(22.0),
     translate: Some((Range(-12.0, 12.0), Range(-5.0, 8.0))),
     rotate: Some(Range(-12.0, 12.0)),
-    scale: None,
+
     variants: Variants::new(&[
         VariantDef {
             name: "long",
@@ -152,7 +152,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
     probability: None,
     translate: Some((Range(-6.0, 6.0), Range(-6.0, 6.0))),
     rotate: Some(Range(-180.0, 180.0)),
-    scale: None,
+
     variants: Variants::new(&[
         VariantDef {
             name: "andromeda",
@@ -2155,7 +2155,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
     probability: Some(85.0),
     translate: Some((Range(-120.0, 120.0), Range(-120.0, 120.0))),
     rotate: None,
-    scale: None,
+
     variants: Variants::new(&[
         VariantDef {
             name: "faint",
@@ -2220,7 +2220,7 @@ static COMP_ANIMATION: ComponentDef = ComponentDef {
     probability: None,
     translate: None,
     rotate: None,
-    scale: None,
+
     variants: Variants::new(&[VariantDef {
         name: "none",
         weight: 1.0,

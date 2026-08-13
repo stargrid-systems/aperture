@@ -6,17 +6,19 @@ use core::ops::Deref;
 #[derive(Clone, Copy)]
 pub struct Range(pub f64, pub f64);
 
-/// Color palette stops. Must be non-empty and limited to 8 entries, enforced
-/// at construction.
+/// Color palette stops. Must be non-empty and limited to `MAX_LEN` entries,
+/// enforced at construction.
 #[derive(Clone, Copy)]
 pub struct Palette<'a> {
     stops: &'a [&'a str],
 }
 
 impl<'a> Palette<'a> {
+    pub const MAX_LEN: usize = 8;
+
     pub const fn new(stops: &'a [&'a str]) -> Self {
         assert!(!stops.is_empty(), "palette must not be empty");
-        assert!(stops.len() <= 8, "palette exceeds 8 entries");
+        assert!(stops.len() <= Self::MAX_LEN, "palette exceeds MAX_LEN");
         Self { stops }
     }
 }
@@ -106,18 +108,19 @@ pub struct ComponentDef<'a> {
     pub probability: Option<f64>,
     pub translate: Option<(Range, Range)>,
     pub rotate: Option<Range>,
-    pub scale: Option<Range>,
     pub variants: Variants<'a>,
 }
 
-/// Canvas node slice. Limited to 32 nodes, enforced at construction.
+/// Canvas node slice. Limited to `MAX_LEN` nodes, enforced at construction.
 pub struct Canvas<'a> {
     nodes: &'a [Node<'a>],
 }
 
 impl<'a> Canvas<'a> {
+    pub const MAX_LEN: usize = 32;
+
     pub const fn new(nodes: &'a [Node<'a>]) -> Self {
-        assert!(nodes.len() <= 32, "canvas exceeds 32 nodes");
+        assert!(nodes.len() <= Self::MAX_LEN, "canvas exceeds MAX_LEN");
         Self { nodes }
     }
 }
