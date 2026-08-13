@@ -1,4 +1,4 @@
-use dicebear_lite::internal::{hash_u32, Escaped, Num, Prng};
+use dicebear_lite::internal::{Escaped, Num, Prng, hash_u32};
 
 #[test]
 fn num_formats_integers() {
