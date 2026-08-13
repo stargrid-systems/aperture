@@ -2,12 +2,6 @@
 
 use core::fmt::{self, Write};
 
-#[expect(
-    unused_imports,
-    reason = "Write trait needed for write_str method resolution"
-)]
-use Write as _;
-
 use crate::number::Num;
 
 /// A string wrapper that escapes the five significant XML characters when

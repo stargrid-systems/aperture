@@ -8,14 +8,7 @@
 //! the renderer makes two deterministic passes: variant selection is fully
 //! keyed by `(seed, key)`, so recomputing it is safe.
 
-use core::fmt::{self, Write};
-use core::ptr;
-
-#[expect(
-    unused_imports,
-    reason = "Write trait needed for write_str method resolution"
-)]
-use Write as _;
+use core::{fmt, ptr};
 
 use crate::Style;
 use crate::data::{AttrVal, Node, VariantDef};

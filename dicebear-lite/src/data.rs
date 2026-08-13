@@ -6,7 +6,8 @@ use core::ops::Deref;
 #[derive(Clone, Copy)]
 pub struct Range(pub f64, pub f64);
 
-/// Color palette stops. Limited to 8 entries, enforced at construction.
+/// Color palette stops. Must be non-empty and limited to 8 entries, enforced
+/// at construction.
 #[derive(Clone, Copy)]
 pub struct Palette<'a> {
     stops: &'a [&'a str],
@@ -14,6 +15,7 @@ pub struct Palette<'a> {
 
 impl<'a> Palette<'a> {
     pub const fn new(stops: &'a [&'a str]) -> Self {
+        assert!(!stops.is_empty(), "palette must not be empty");
         assert!(stops.len() <= 8, "palette exceeds 8 entries");
         Self { stops }
     }

@@ -37,9 +37,9 @@ mod svg;
 
 #[doc(hidden)]
 pub mod internal {
-    pub use crate::number::Num;
-    pub use crate::prng::{Prng, hash_u32};
-    pub use crate::svg::Escaped;
+    pub use super::number::Num;
+    pub use super::prng::{Prng, hash_u32};
+    pub use super::svg::Escaped;
 }
 
 /// A `DiceBear` style definition. Each field is `&'a` data baked into the

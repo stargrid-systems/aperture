@@ -94,9 +94,12 @@ impl<'a> Prng<'a> {
     /// shuffle of `[0, 1, ..., n-1]`. Uses the trace-label algorithm: instead
     /// of materializing the full permutation, it traces which original element
     /// ends up at position 0 by following the chain of swaps that affect it.
-    /// Requires `n <= 8` (3 bits per j value in a `u32`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n > 8` (3 bits per j value in a `u32`).
     pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
-        debug_assert!(n <= 8, "shuffle_zero requires n <= 8");
+        assert!(n <= 8, "shuffle_zero requires n <= 8");
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
         let mut val_at_0: usize = 0;
         let mut j_packed: u32 = 0;
