@@ -81,7 +81,7 @@ pub const LOGIN: &str = "login";
 pub const LOGOUT: &str = "logout";
 
 /// `GET /api/v1/auth/me`
-pub const GET_CURRENT_ACTOR: &str = "getCurrentActor";
+pub const GET_CURRENT_USER: &str = "getCurrentUser";
 
 /// `POST /api/v1/auth/change-password`
 pub const CHANGE_PASSWORD: &str = "changePassword";

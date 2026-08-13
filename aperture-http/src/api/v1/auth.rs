@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use aperture_auth::{AuthenticatedActor, Password, Role, SessionToken, Username};
-use aperture_storage::{ActorId, UserId};
+use aperture_storage::ActorId;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -21,7 +21,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(login))
         .routes(routes!(logout))
-        .routes(routes!(current_actor))
+        .routes(routes!(current_user))
         .routes(routes!(change_password))
         .routes(routes!(setup_status))
         .routes(routes!(setup))
@@ -89,9 +89,8 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct CurrentActorResponse {
+pub struct CurrentUserResponse {
     actor_id: ActorId,
-    user_id: Option<UserId>,
     username: Option<String>,
     display_name: String,
     roles: Vec<Role>,
@@ -102,28 +101,26 @@ pub struct CurrentActorResponse {
 #[utoipa::path(
     get,
     path = "/me",
-    operation_id = operation_ids::GET_CURRENT_ACTOR,
-    responses((status = 200, description = "Current caller", body = CurrentActorResponse)),
+    operation_id = operation_ids::GET_CURRENT_USER,
+    responses((status = 200, description = "Current caller", body = CurrentUserResponse)),
 )]
-async fn current_actor(
+async fn current_user(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<CurrentActorResponse>, ApiError> {
-    let user = if auth.actor.kind == aperture_storage::ActorKind::User {
+) -> Result<Json<CurrentUserResponse>, ApiError> {
+    let username = if auth.actor.kind == aperture_storage::ActorKind::User {
         state
             .storage()
             .users()?
             .find_by_actor_id(auth.actor.id)
             .await?
+            .map(|u| u.username)
     } else {
         None
     };
-    let user_id = user.as_ref().map(|u| u.id);
-    let username = user.map(|u| u.username);
     let roles = state.auth().roles_for(&auth.subject).await?;
-    Ok(Json(CurrentActorResponse {
+    Ok(Json(CurrentUserResponse {
         actor_id: auth.actor.id,
-        user_id,
         username,
         display_name: auth.actor.display_name,
         roles,
