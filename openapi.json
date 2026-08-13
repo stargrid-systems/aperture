@@ -1650,6 +1650,39 @@
         }
       }
     },
+    "/api/v1/users/{id}/avatar": {
+      "get": {
+        "summary": "Returns a deterministic constellation avatar for a user as inline SVG.",
+        "operationId": "getUserAvatar",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UserId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Avatar SVG",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Immutable caching directive"
+              }
+            },
+            "content": {
+              "image/svg+xml": {}
+            }
+          }
+        }
+      }
+    },
     "/api/v1/version": {
       "get": {
         "summary": "Returns version information about the gateway.",
