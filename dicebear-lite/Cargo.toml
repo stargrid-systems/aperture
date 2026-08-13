@@ -1,19 +1,13 @@
 [package]
 name = "dicebear-lite"
-version.workspace = true
+version = "0.1.0"
 description = "Slim, byte-compatible DiceBear constellation avatar renderer."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 repository.workspace = true
 rust-version.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-serde = { workspace = true, features = ["derive", "std"] }
-# preserve_order keeps JSON attribute insertion order, which is required for
-# byte-identical SVG output.
-serde_json = { workspace = true, features = ["std", "preserve_order"] }

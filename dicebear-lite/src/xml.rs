@@ -1,18 +1,19 @@
-//! XML entity escaping, matching `Utils/Xml.escape`.
+//! XML entity escaping, matching `Utils/Xml.escape`, streamed without
+//! allocating.
 
-/// Escapes the five significant XML characters. Everything else (including
-/// non-ASCII such as curly quotes) is left untouched.
-pub fn escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
+use core::fmt;
+
+/// Writes `value` with the five significant XML characters escaped.
+pub fn escape_into<W: fmt::Write>(f: &mut W, value: &str) -> fmt::Result {
     for ch in value.chars() {
         match ch {
-            '&' => out.push_str("&amp;"),
-            '\'' => out.push_str("&apos;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            other => out.push(other),
+            '&' => f.write_str("&amp;")?,
+            '\'' => f.write_str("&apos;")?,
+            '"' => f.write_str("&quot;")?,
+            '<' => f.write_str("&lt;")?,
+            '>' => f.write_str("&gt;")?,
+            other => f.write_char(other)?,
         }
     }
-    out
+    Ok(())
 }

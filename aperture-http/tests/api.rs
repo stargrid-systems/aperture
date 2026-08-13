@@ -1291,7 +1291,7 @@ async fn change_password_rejected_for_api_key_auth() {
 }
 
 #[tokio::test]
-async fn current_user_returns_identity_and_role() {
+async fn current_actor_returns_identity_and_role() {
     let (app, auth, storage) = fresh_app().await;
 
     // API-key caller: resolves to its owning user actor, carries the key's role.
@@ -1307,7 +1307,7 @@ async fn current_user_returns_identity_and_role() {
     let (status, json) = get_json(&app, &token, "/api/v1/auth/me").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["actor_id"], api_actor.get().to_string());
-    assert_eq!(json["id"], alice_id.get().to_string());
+    assert_eq!(json["user_id"], alice_id.get().to_string());
     assert_eq!(json["username"], "alice");
     assert_eq!(json["roles"], serde_json::json!(["operator"]));
     assert_eq!(json["must_change_password"], false);
@@ -1344,14 +1344,14 @@ async fn current_user_returns_identity_and_role() {
         .unwrap();
     let (status, json) = read_json(response).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["id"], carol_id.get().to_string());
+    assert_eq!(json["user_id"], carol_id.get().to_string());
     assert_eq!(json["username"], "carol");
     assert_eq!(json["display_name"], "carol");
     assert_eq!(json["roles"], serde_json::json!(["admin"]));
 }
 
 #[tokio::test]
-async fn current_user_requires_authentication() {
+async fn current_actor_requires_authentication() {
     let (app, _auth, _storage) = fresh_app().await;
 
     let status = app

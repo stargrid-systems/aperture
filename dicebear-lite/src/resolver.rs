@@ -3,12 +3,13 @@
 //! Every draw is keyed by `(seed, key)` and therefore deterministic regardless
 //! of call order, so no memoization is needed.
 
-use crate::color::to_hex;
-use crate::definition::{Range, STYLE};
+use crate::data::{self, ComponentDef};
 use crate::prng::Prng;
 
-pub struct Resolver {
-    prng: Prng,
+const BUF: usize = 32;
+
+pub struct Resolver<'a> {
+    prng: Prng<'a>,
 }
 
 pub struct ComponentTransform {
@@ -18,85 +19,76 @@ pub struct ComponentTransform {
     pub scale: f64,
 }
 
-impl Resolver {
-    pub fn new(seed: &str) -> Self {
+/// Follows a component's `extends` alias to its source (one hop).
+fn resolve(comp: &ComponentDef) -> &ComponentDef {
+    if let Some(source) = comp.extends
+        && let Some(resolved) = data::component(source)
+    {
+        return resolved;
+    }
+    comp
+}
+
+impl<'a> Resolver<'a> {
+    pub const fn new(seed: &'a str) -> Self {
         Self {
             prng: Prng::new(seed),
         }
     }
 
     /// Selects a variant for `name`, or `None` when the component is not
-    /// visible this render. PRNG keys use `name` (the alias, e.g. `star02`);
-    /// the probability and variant pool come from the resolved source.
-    pub fn variant(&self, name: &str) -> Option<String> {
-        let component = STYLE.components.get(name)?;
-        let resolved = component.resolve(&STYLE.components);
+    /// visible. PRNG keys use `name` (the alias); the probability and variant
+    /// pool come from the resolved source.
+    pub fn variant(&self, name: &str) -> Option<&'static str> {
+        let component = data::component(name)?;
+        let resolved = resolve(component);
         let probability = resolved.probability.unwrap_or(100.0);
-        if !self.prng.bool(&format!("{name}Probability"), probability) {
+        if !self.prng.bool(&[name, "Probability"], probability) {
             return None;
         }
-        let entries: Vec<(String, f64)> = resolved
-            .variants
-            .iter()
-            .map(|(n, v)| (n.clone(), v.weight.unwrap_or(1.0)))
-            .collect();
-        let picked = self.prng.weighted_pick(&format!("{name}Variant"), entries);
-        if picked.is_empty() {
-            None
-        } else {
-            Some(picked)
+        let n = resolved.variants.len();
+        let mut entries: [(&'static str, f64); BUF] = [("", 0.0); BUF];
+        for (i, (variant_name, def)) in resolved.variants.iter().take(n).enumerate() {
+            entries[i] = (*variant_name, def.weight);
         }
+        self.prng.weighted_pick(&[name, "Variant"], &entries[..n])
     }
 
     /// Rotate/translate/scale for one component. Ranges come from the resolved
     /// source; PRNG keys use `name`. Absent ranges fall back without drawing.
     pub fn component_transform(&self, name: &str) -> ComponentTransform {
-        let resolved = STYLE
-            .components
-            .get(name)
-            .map(|c| c.resolve(&STYLE.components));
+        let resolved = data::component(name).map(resolve);
         ComponentTransform {
-            rotate: self.float_for(
-                resolved.and_then(|c| c.rotate),
-                &format!("{name}Rotate"),
-                0.0,
-            ),
-            translate_x: self.float_for(
-                resolved
-                    .and_then(|c| c.translate.as_ref())
-                    .and_then(|t| t.x),
-                &format!("{name}TranslateX"),
-                0.0,
-            ),
-            translate_y: self.float_for(
-                resolved
-                    .and_then(|c| c.translate.as_ref())
-                    .and_then(|t| t.y),
-                &format!("{name}TranslateY"),
-                0.0,
-            ),
-            scale: self.float_for(resolved.and_then(|c| c.scale), &format!("{name}Scale"), 1.0),
-        }
-    }
-
-    fn float_for(&self, range: Option<Range>, key: &str, fallback: f64) -> f64 {
-        match range {
-            Some(r) => self.prng.float(key, r.min, r.max),
-            None => fallback,
+            rotate: resolved.and_then(|c| c.rotate).map_or(0.0, |(min, max)| {
+                self.prng.float(&[name, "Rotate"], min, max)
+            }),
+            translate_x: resolved
+                .and_then(|c| c.translate)
+                .map_or(0.0, |((min, max), _)| {
+                    self.prng.float(&[name, "TranslateX"], min, max)
+                }),
+            translate_y: resolved
+                .and_then(|c| c.translate)
+                .map_or(0.0, |(_, (min, max))| {
+                    self.prng.float(&[name, "TranslateY"], min, max)
+                }),
+            scale: resolved.and_then(|c| c.scale).map_or(1.0, |(min, max)| {
+                self.prng.float(&[name, "Scale"], min, max)
+            }),
         }
     }
 
     /// Resolves a named color to its single shuffled stop (solid fills only).
-    pub fn color(&self, name: &str) -> Vec<String> {
-        let Some(style_color) = STYLE.colors.get(name) else {
-            return Vec::new();
+    pub fn color(&self, name: &str) -> &'static str {
+        let palette = match name {
+            "background" => data::BG_COLORS,
+            "constellation" => data::CON_COLORS,
+            _ => return "",
         };
-        let candidates: Vec<String> = style_color.values.iter().map(|c| to_hex(c)).collect();
-        // Default `colorFill` is `solid` → a single stop, drawn via shuffle.
-        self.prng
-            .shuffle(&format!("{name}Color"), candidates)
-            .into_iter()
-            .take(1)
-            .collect()
+        if palette.is_empty() {
+            return "";
+        }
+        let index = self.prng.shuffle_zero(&[name, "Color"], palette.len());
+        palette[index.min(palette.len() - 1)]
     }
 }

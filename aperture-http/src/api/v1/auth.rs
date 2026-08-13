@@ -21,7 +21,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(login))
         .routes(routes!(logout))
-        .routes(routes!(current_user))
+        .routes(routes!(current_actor))
         .routes(routes!(change_password))
         .routes(routes!(setup_status))
         .routes(routes!(setup))
@@ -89,9 +89,9 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct CurrentUserResponse {
+pub struct CurrentActorResponse {
     actor_id: ActorId,
-    id: Option<UserId>,
+    user_id: Option<UserId>,
     username: Option<String>,
     display_name: String,
     roles: Vec<Role>,
@@ -102,13 +102,13 @@ pub struct CurrentUserResponse {
 #[utoipa::path(
     get,
     path = "/me",
-    operation_id = operation_ids::GET_CURRENT_USER,
-    responses((status = 200, description = "Current caller", body = CurrentUserResponse)),
+    operation_id = operation_ids::GET_CURRENT_ACTOR,
+    responses((status = 200, description = "Current caller", body = CurrentActorResponse)),
 )]
-async fn current_user(
+async fn current_actor(
     auth: AuthenticatedActor,
     State(state): State<AppState>,
-) -> Result<Json<CurrentUserResponse>, ApiError> {
+) -> Result<Json<CurrentActorResponse>, ApiError> {
     let user = if auth.actor.kind == aperture_storage::ActorKind::User {
         state
             .storage()
@@ -118,12 +118,12 @@ async fn current_user(
     } else {
         None
     };
-    let id = user.as_ref().map(|u| u.id);
+    let user_id = user.as_ref().map(|u| u.id);
     let username = user.map(|u| u.username);
     let roles = state.auth().roles_for(&auth.subject).await?;
-    Ok(Json(CurrentUserResponse {
+    Ok(Json(CurrentActorResponse {
         actor_id: auth.actor.id,
-        id,
+        user_id,
         username,
         display_name: auth.actor.display_name,
         roles,

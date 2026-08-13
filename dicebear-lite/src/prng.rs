@@ -2,26 +2,52 @@
 //! Mulberry32.
 //!
 //! Every draw is derived independently from `(seed, key)`, so the call order is
-//! irrelevant. This is a direct port of `@dicebear/prng`.
+//! irrelevant. A "key" is several string fragments concatenated; hashing walks
+//! them incrementally so no allocation is needed. This is a direct port of
+//! `@dicebear/prng`.
 
 use crate::number::{equals, floor_index, math_round};
 
 const FNV_OFFSET: u32 = 0x811C_9DC5;
 const FNV_PRIME: u32 = 0x0100_0193;
 
-/// 32-bit FNV-1a hash over the UTF-16 code units of `input`.
-pub fn fnv1a_hash(input: &str) -> u32 {
-    let mut hash = FNV_OFFSET;
-    for unit in input.encode_utf16() {
-        hash ^= u32::from(unit);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
+/// Stack buffer large enough for the most variants (19) or palette entries (8)
+/// any constellation component uses.
+const BUF: usize = 32;
+
+#[inline]
+fn step(hash: u32, unit: u16) -> u32 {
+    (hash ^ u32::from(unit)).wrapping_mul(FNV_PRIME)
 }
 
-/// FNV-1a hash as an 8-character lowercase hex string.
-pub fn fnv1a_hex(input: &str) -> String {
-    format!("{:08x}", fnv1a_hash(input))
+/// FNV-1a over the UTF-16 code units of `seed`, a `:` separator, then the
+/// concatenated `key` fragments.
+fn hash_seed_key(seed: &str, key: &[&str]) -> u32 {
+    let mut h = FNV_OFFSET;
+    for unit in seed.encode_utf16() {
+        h = step(h, unit);
+    }
+    h = step(h, 0x3A);
+    for fragment in key {
+        for unit in fragment.encode_utf16() {
+            h = step(h, unit);
+        }
+    }
+    h
+}
+
+/// FNV-1a hash of `prefix + ":" + s` over UTF-16 code units. Used for the
+/// per-seed `<defs>` id suffix.
+pub fn hash_u32(prefix: &str, s: &str) -> u32 {
+    let mut h = FNV_OFFSET;
+    for unit in prefix.encode_utf16() {
+        h = step(h, unit);
+    }
+    h = step(h, 0x3A);
+    for unit in s.encode_utf16() {
+        h = step(h, unit);
+    }
+    h
 }
 
 /// Stateful Mulberry32 generator.
@@ -47,80 +73,80 @@ impl Mulberry32 {
     }
 }
 
-/// Key-based pseudorandom value generator.
-pub struct Prng {
-    seed: String,
+/// Key-based pseudorandom value generator. Keys are passed as multiple
+/// fragments (e.g. `&[name, "Variant"]`) and concatenated for hashing.
+pub struct Prng<'a> {
+    seed: &'a str,
 }
 
-impl Prng {
-    pub fn new(seed: &str) -> Self {
-        Self {
-            seed: seed.to_owned(),
-        }
+impl<'a> Prng<'a> {
+    pub const fn new(seed: &'a str) -> Self {
+        Self { seed }
     }
 
-    /// A single float in `[0, 1)` derived from `(seed, key)`.
-    fn value(&self, key: &str) -> f64 {
-        let hashed = fnv1a_hash(&format!("{}:{key}", self.seed));
-        Mulberry32::new(hashed).next_float()
+    fn value(&self, key: &[&str]) -> f64 {
+        Mulberry32::new(hash_seed_key(self.seed, key)).next_float()
     }
 
-    pub fn bool(&self, key: &str, likelihood: f64) -> bool {
+    pub fn bool(&self, key: &[&str], likelihood: f64) -> bool {
         self.value(key) * 100.0 < likelihood
     }
 
-    pub fn float(&self, key: &str, min: f64, max: f64) -> f64 {
-        math_round(self.value(key).mul_add(max - min, min) * 10000.0) / 10000.0
-    }
-
-    /// Picks one item. The pool is sorted by UTF-16 code units before drawing,
-    /// matching `Prng.pick`. Constellation only ever passes empty pools here.
-    pub fn pick<'a>(&self, key: &str, items: &[&'a str]) -> Option<&'a str> {
-        if items.is_empty() {
-            return None;
-        }
-        if items.len() == 1 {
-            return Some(items[0]);
-        }
-        let mut sorted: Vec<&str> = items.to_vec();
-        sorted.sort_unstable();
-        let index = floor_index(self.value(key), sorted.len());
-        Some(sorted[index.min(sorted.len() - 1)])
+    pub fn float(&self, key: &[&str], min: f64, max: f64) -> f64 {
+        // Two separate roundings, matching JavaScript's `min + value * (max - min)`
+        // (JS has no fused multiply-add).
+        math_round((min + self.value(key) * (max - min)) * 10000.0) / 10000.0
     }
 
     /// Weighted pick over `(name, weight)` pairs, sorted by name.
-    pub fn weighted_pick(&self, key: &str, mut entries: Vec<(String, f64)>) -> String {
-        if entries.is_empty() {
-            return String::new();
+    pub fn weighted_pick(
+        &self,
+        key: &[&str],
+        entries: &[(&'static str, f64)],
+    ) -> Option<&'static str> {
+        let n = entries.len();
+        if n == 0 {
+            return None;
         }
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
-        let total: f64 = entries.iter().map(|(_, w)| *w).sum();
-        if equals(total, 0.0) {
-            let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-            return self.pick(key, &names).unwrap_or("").to_owned();
+        let mut order = [0usize; BUF];
+        for (i, slot) in order.iter_mut().enumerate().take(n) {
+            *slot = i;
         }
-        let threshold = self.value(key) * total;
+        order[..n].sort_unstable_by(|&a, &b| entries[a].0.cmp(entries[b].0));
+
+        let total: f64 = order[..n].iter().map(|&i| entries[i].1).sum();
+        let threshold = if equals(total, 0.0) {
+            // All-zero weights: fall back to a uniform pick across the pool.
+            return Some(entries[order[floor_index(self.value(key), n)]].0);
+        } else {
+            self.value(key) * total
+        };
+
         let mut cumulative = 0.0;
-        for (name, weight) in &entries {
-            cumulative += *weight;
+        for &i in &order[..n] {
+            cumulative += entries[i].1;
             if threshold < cumulative {
-                return name.clone();
+                return Some(entries[i].0);
             }
         }
-        entries.last().unwrap().0.clone()
+        Some(entries[order[n - 1]].0)
     }
 
-    /// Fisher-Yates shuffle keyed by `key`. The pool is sorted before
-    /// shuffling.
-    pub fn shuffle(&self, key: &str, mut items: Vec<String>) -> Vec<String> {
-        items.sort();
-        let mut rng = Mulberry32::new(fnv1a_hash(&format!("{}:{key}", self.seed)));
-        let mut i = items.len();
+    /// Returns the index that lands at position 0 after a Fisher-Yates shuffle
+    /// of `0..n`, matching `Prng.shuffle` (which sorts first; callers pass a
+    /// pre-sorted pool).
+    pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
+        let mut indices = [0usize; BUF];
+        for (i, slot) in indices.iter_mut().enumerate().take(n) {
+            *slot = i;
+        }
+        let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
+        let mut i = n;
         while i > 1 {
             i -= 1;
             let j = floor_index(rng.next_float(), i + 1);
-            items.swap(i, j);
+            indices.swap(i, j);
         }
-        items
+        indices[0]
     }
 }
