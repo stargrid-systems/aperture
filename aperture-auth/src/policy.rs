@@ -43,7 +43,6 @@ m = g(r.sub, p.sub) && globMatch(r.obj, p.obj) && globMatch(r.act, p.act)
 pub enum Object {
     Artifact,
     Task,
-    TaskDefinition,
     TaskSchedule,
     Log,
     User,
@@ -57,7 +56,6 @@ impl Object {
         match self {
             Self::Artifact => "artifact",
             Self::Task => "task",
-            Self::TaskDefinition => "task-definition",
             Self::TaskSchedule => "task-schedule",
             Self::Log => "log",
             Self::User => "user",
@@ -191,14 +189,12 @@ pub async fn seed_builtin_policies(e: &mut Enforcer, storage: &Storage) -> casbi
         // Operator: full operational access, no user or api-key management.
         policy(Role::Operator, Object::Artifact, "*"),
         policy(Role::Operator, Object::Task, "*"),
-        policy(Role::Operator, Object::TaskDefinition, Action::Read),
         policy(Role::Operator, Object::TaskSchedule, "*"),
         policy(Role::Operator, Object::Log, Action::Read),
         policy(Role::Operator, Object::Setting, "*"),
         // Viewer: read-only on non-sensitive data. No artifact downloads.
         policy(Role::Viewer, Object::Artifact, Action::Read),
         policy(Role::Viewer, Object::Task, Action::Read),
-        policy(Role::Viewer, Object::TaskDefinition, Action::Read),
         policy(Role::Viewer, Object::TaskSchedule, Action::Read),
         policy(Role::Viewer, Object::Log, Action::Read),
         policy(Role::Viewer, Object::Setting, Action::Read),
