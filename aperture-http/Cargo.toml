@@ -19,7 +19,7 @@ aperture-settings = { workspace = true }
 aperture-storage = { workspace = true }
 aperture-tasks = { workspace = true }
 
-dicebear-lite = { workspace = true, features = ["constellation"] }
+dicebear-lite = { workspace = true, features = ["constellation", "planets", "thumbs"] }
 
 anyhow = { workspace = true, features = ["std"] }
 arc-swap = { workspace = true }
