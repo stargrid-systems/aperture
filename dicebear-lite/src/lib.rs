@@ -30,17 +30,16 @@
 
 #![cfg_attr(not(test), no_std)]
 
+use core::fmt;
+
+use self::data::{Canvas, ColorRef};
+
 mod color;
 mod data;
 mod number;
 mod prng;
 mod renderer;
 
-use core::fmt;
-
-use self::data::{Canvas, ColorRef};
-
-#[cfg(any(feature = "constellation", feature = "planets", feature = "thumbs"))]
 mod styles {
     #[cfg(feature = "constellation")]
     pub mod constellation;
@@ -57,9 +56,7 @@ pub use self::styles::planets::PLANETS;
 pub use self::styles::thumbs::THUMBS;
 
 /// A `DiceBear` style definition. Each field is `&'a` data baked into the
-/// binary by the style module (e.g. [`constellation::CONSTELLATION`]).
-///
-/// [`constellation::CONSTELLATION`]: styles::constellation::CONSTELLATION
+/// binary by a style module (e.g. `CONSTELLATION`).
 pub struct Style<'a> {
     pub(crate) source_name: &'a str,
     pub(crate) metadata: &'a str,
@@ -69,6 +66,13 @@ pub struct Style<'a> {
     /// Every named color, including `background`. Colors may reference each
     /// other through `contrast_to`/`not_equal_to`.
     pub(crate) colors: &'a [ColorRef<'a>],
+}
+
+impl Style<'_> {
+    /// The named color definition for `name`, if the style defines it.
+    pub(crate) fn color(&self, name: &str) -> Option<&ColorRef<'_>> {
+        self.colors.iter().find(|color| color.key == name)
+    }
 }
 
 /// Animation speed for [`Animation::Fixed`].

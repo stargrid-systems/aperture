@@ -4,7 +4,7 @@
 //! because `pow` is not correctly rounded: results must match the other
 //! `DiceBear` ports bit for bit.
 
-use core::str;
+use core::fmt;
 
 /// `s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4` for every 8-bit
 /// channel value, with `s = channel / 255`.
@@ -77,50 +77,68 @@ static LINEARIZED: [f64; 256] = [
     0.9822505503331171, 0.9911020971138298, 1.0,
 ];
 
-/// Parses a hex color into an `[r, g, b]` triple of 8-bit channels, expanding
-/// 3/4-digit shorthand like `#fff` first (alpha is ignored).
-fn parse_hex(hex: &str) -> [u8; 3] {
-    fn channel(hi: u8, lo: u8) -> u8 {
-        let digits = [hi, lo];
-        u8::from_str_radix(str::from_utf8(&digits).unwrap_or("00"), 16).unwrap_or(0)
+/// An 8-bit-per-channel RGB color.
+///
+/// Style palettes store colors as `Rgb8` rather than hex strings;
+/// [`Display`](core::fmt::Display) renders the `#rrggbb` form `DiceBear`
+/// emits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Rgb8 {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+impl Rgb8 {
+    /// Builds a color from its packed 24-bit form (`0xrrggbb`).
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds when `value` exceeds 24 bits.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "value is masked to 24 bits first"
+    )]
+    pub const fn from_u24(value: u32) -> Self {
+        debug_assert!(value < 0x0100_0000, "rgb value exceeds 24 bits");
+        let value = value & 0x00FF_FFFF;
+        Self {
+            r: (value >> 16) as u8,
+            g: (value >> 8) as u8,
+            b: value as u8,
+        }
     }
 
-    let bytes = hex.strip_prefix('#').unwrap_or(hex).as_bytes();
-    match bytes.len() {
-        3 | 4 => [
-            channel(bytes[0], bytes[0]),
-            channel(bytes[1], bytes[1]),
-            channel(bytes[2], bytes[2]),
-        ],
-        6 => [
-            channel(bytes[0], bytes[1]),
-            channel(bytes[2], bytes[3]),
-            channel(bytes[4], bytes[5]),
-        ],
-        _ => [0, 0, 0],
+    /// WCAG 2.1 relative luminance.
+    #[cfg_attr(
+        test,
+        expect(clippy::suboptimal_flops, reason = "no FMA: matches JavaScript")
+    )]
+    #[must_use]
+    pub fn luminance(self) -> f64 {
+        0.2126 * LINEARIZED[usize::from(self.r)]
+            + 0.7152 * LINEARIZED[usize::from(self.g)]
+            + 0.0722 * LINEARIZED[usize::from(self.b)]
+    }
+
+    /// WCAG contrast ratio between this color and `other`.
+    #[must_use]
+    pub fn contrast_ratio(self, other: Self) -> f64 {
+        let a = self.luminance();
+        let b = other.luminance();
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 }
 
-/// WCAG 2.1 relative luminance.
-#[cfg_attr(
-    test,
-    expect(clippy::suboptimal_flops, reason = "no FMA: matches JavaScript")
-)]
-pub fn luminance(hex: &str) -> f64 {
-    let [r, g, b] = parse_hex(hex);
-    0.2126 * LINEARIZED[usize::from(r)]
-        + 0.7152 * LINEARIZED[usize::from(g)]
-        + 0.0722 * LINEARIZED[usize::from(b)]
+impl fmt::Display for Rgb8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
 }
 
-/// WCAG contrast ratio between two colors.
-pub fn contrast_ratio(a: &str, b: &str) -> f64 {
-    let la = luminance(a);
-    let lb = luminance(b);
-    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
-}
-
-/// Whether two hex colors denote the same RGB value, expanding shorthand.
-pub fn same_rgb(a: &str, b: &str) -> bool {
-    parse_hex(a) == parse_hex(b)
+impl fmt::Debug for Rgb8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Rgb8({self})")
+    }
 }

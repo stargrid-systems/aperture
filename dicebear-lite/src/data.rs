@@ -2,6 +2,8 @@
 
 use core::ops::Deref;
 
+use crate::color::Rgb8;
+
 /// Min/max range for PRNG-driven transforms.
 #[derive(Clone, Copy)]
 pub struct Range(pub f64, pub f64);
@@ -10,21 +12,21 @@ pub struct Range(pub f64, pub f64);
 /// enforced at construction.
 #[derive(Clone, Copy)]
 pub struct Palette<'a> {
-    stops: &'a [&'a str],
+    stops: &'a [Rgb8],
 }
 
 impl<'a> Palette<'a> {
     pub const MAX_LEN: usize = 16;
 
-    pub const fn new(stops: &'a [&'a str]) -> Self {
+    pub const fn new(stops: &'a [Rgb8]) -> Self {
         assert!(!stops.is_empty(), "palette must not be empty");
         assert!(stops.len() <= Self::MAX_LEN, "palette exceeds MAX_LEN");
         Self { stops }
     }
 }
 
-impl<'a> Deref for Palette<'a> {
-    type Target = [&'a str];
+impl Deref for Palette<'_> {
+    type Target = [Rgb8];
     fn deref(&self) -> &Self::Target {
         self.stops
     }

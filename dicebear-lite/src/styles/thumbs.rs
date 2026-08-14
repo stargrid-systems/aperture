@@ -1,6 +1,7 @@
 // DiceBear 10.x thumbs style (CC0 1.0).
 
 use crate::Style;
+use crate::color::Rgb8;
 use crate::data::{
     AttrVal, Canvas, ColorRef, ComponentDef, Node, Palette, Range, VariantDef, Variants,
 };
@@ -590,29 +591,45 @@ static CANVAS: &[Node] = &[
     },
 ];
 
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const BG: ColorRef = ColorRef {
+    key: "background",
+    palette: Palette::new(&[
+        Rgb8::from_u24(0x0A5B83),
+        Rgb8::from_u24(0x1C799F),
+        Rgb8::from_u24(0x69D2E7),
+        Rgb8::from_u24(0xF1F4DC),
+        Rgb8::from_u24(0xF88C49),
+    ]),
     contrast_to: None,
     not_equal_to: &[],
-    key: "background",
-    palette: Palette::new(&["#0a5b83", "#1c799f", "#69d2e7", "#f1f4dc", "#f88c49"]),
 };
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const SHAPE: ColorRef = ColorRef {
+    key: "shape",
+    palette: Palette::new(&[
+        Rgb8::from_u24(0x0A5B83),
+        Rgb8::from_u24(0x1C799F),
+        Rgb8::from_u24(0x69D2E7),
+        Rgb8::from_u24(0xF1F4DC),
+        Rgb8::from_u24(0xF88C49),
+    ]),
     contrast_to: None,
     not_equal_to: &["background"],
-    key: "shape",
-    palette: Palette::new(&["#0a5b83", "#1c799f", "#69d2e7", "#f1f4dc", "#f88c49"]),
 };
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const EYES: ColorRef = ColorRef {
-    contrast_to: Some("shape"),
-    not_equal_to: &["shape"],
     key: "eyes",
-    palette: Palette::new(&["#000000", "#ffffff"]),
-};
-const MOUTH: ColorRef = ColorRef {
+    palette: Palette::new(&[Rgb8::from_u24(0x000000), Rgb8::from_u24(0xFFFFFF)]),
     contrast_to: Some("shape"),
     not_equal_to: &["shape"],
+};
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
+const MOUTH: ColorRef = ColorRef {
     key: "mouth",
-    palette: Palette::new(&["#000000", "#ffffff"]),
+    palette: Palette::new(&[Rgb8::from_u24(0x000000), Rgb8::from_u24(0xFFFFFF)]),
+    contrast_to: Some("shape"),
+    not_equal_to: &["shape"],
 };
 
 // Curly quotes in METADATA are required for byte parity with DiceBear.

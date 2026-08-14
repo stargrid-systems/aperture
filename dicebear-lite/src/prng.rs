@@ -8,16 +8,18 @@
 
 use core::iter;
 
-use crate::Animation;
-use crate::color::{contrast_ratio, same_rgb};
+use crate::color::Rgb8;
 use crate::data::{ColorRef, ComponentDef, Palette, VariantDef};
 use crate::number::{equals, floor_index, math_round};
+use crate::{Animation, Style};
 
 const FNV_OFFSET: u32 = 0x811C_9DC5;
 const FNV_PRIME: u32 = 0x0100_0193;
 
+/// Maximum depth of `contrast_to`/`not_equal_to` references.
+const MAX_COLOR_DEPTH: usize = 8;
 /// Resolved `not_equal_to` stops tracked per color, alloc-free.
-const MAX_REFS: usize = 8;
+const MAX_COLOR_REFS: usize = 8;
 
 #[inline]
 fn step(hash: u32, unit: u16) -> u32 {
@@ -97,12 +99,12 @@ impl<'a> Prng<'a> {
     }
 
     /// Returns the element that lands at position 0 after a Fisher-Yates
-    /// shuffle of `[0, 1, ..., n-1]`. Instead of tracing swap chains, the full
-    /// permutation is materialized in a fixed-size array.
+    /// shuffle of `[0, 1, ..., n-1]`, matching `Prng.shuffle`: the values are
+    /// sorted first, then swapped back to front.
     ///
     /// # Panics
     ///
-    /// Panics if `n > Palette::MAX_LEN`.
+    /// Panics if `n > Palette::MAX_LEN` or `n == 0`.
     pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
         assert!(n <= Palette::MAX_LEN);
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
@@ -164,31 +166,23 @@ impl<'a> Prng<'a> {
         variants: &'b [VariantDef<'b>],
         pred: impl Fn(&VariantDef) -> bool,
     ) -> &'b VariantDef<'b> {
-        let total: f64 = variants.iter().filter(|v| pred(v)).map(|v| v.weight).sum();
+        let matching = || variants.iter().filter(|v| pred(v));
+        let total: f64 = matching().map(|v| v.weight).sum();
         let value = self.value(key);
+
         if equals(total, 0.0) {
-            let len = variants.iter().filter(|v| pred(v)).count();
-            let index = floor_index(value, len);
-            variants
-                .iter()
-                .filter(|v| pred(v))
-                .nth(index)
-                .expect("non-empty filtered set")
-        } else {
-            let threshold = value * total;
-            let mut cumulative = 0.0;
-            for v in variants.iter().filter(|v| pred(v)) {
-                cumulative += v.weight;
-                if threshold < cumulative {
-                    return v;
-                }
-            }
-            variants
-                .iter()
-                .filter(|v| pred(v))
-                .last()
-                .expect("non-empty filtered set")
+            let index = floor_index(value, matching().count());
+            return matching().nth(index).expect("non-empty filtered set");
         }
+
+        let mut cumulative = 0.0;
+        for variant in matching() {
+            cumulative += variant.weight;
+            if value * total < cumulative {
+                return variant;
+            }
+        }
+        matching().last().expect("non-empty filtered set")
     }
 
     /// Resolves `color` to its single output stop, mirroring `DiceBear`'s
@@ -203,34 +197,33 @@ impl<'a> Prng<'a> {
     /// # Panics
     ///
     /// Panics on circular `contrast_to`/`not_equal_to` references.
-    pub fn resolve<'b>(&self, colors: &'b [ColorRef<'b>], color: &ColorRef<'b>) -> Option<&'b str> {
-        self.resolve_depth(colors, color, 0)
+    pub fn resolve(&self, style: &Style<'_>, color: &ColorRef<'_>) -> Rgb8 {
+        self.resolve_depth(style, color, 0)
     }
 
-    fn resolve_depth<'b>(
-        &self,
-        colors: &'b [ColorRef<'b>],
-        color: &ColorRef<'b>,
-        depth: usize,
-    ) -> Option<&'b str> {
-        assert!(depth < 8, "circular color reference at {}", color.key);
-        let palette: &[&'b str] = &color.palette;
+    fn resolve_depth(&self, style: &Style<'_>, color: &ColorRef<'_>, depth: usize) -> Rgb8 {
+        assert!(depth < MAX_COLOR_DEPTH, "circular color reference");
+        let palette: &[Rgb8] = &color.palette;
+
+        let reference = |name: &str| {
+            style
+                .color(name)
+                .map(|referenced| self.resolve_depth(style, referenced, depth + 1))
+        };
 
         // Resolved stops of the not_equal_to references (one per reference).
-        let mut excluded: [&'b str; MAX_REFS] = [""; MAX_REFS];
+        let mut excluded: [Rgb8; MAX_COLOR_REFS] = [Rgb8::from_u24(0); MAX_COLOR_REFS];
         let mut excluded_count = 0;
         for ref_name in color.not_equal_to {
-            if let Some(stop) = Self::lookup(colors, ref_name)
-                .and_then(|referenced| self.resolve_depth(colors, referenced, depth + 1))
-            {
-                debug_assert!(excluded_count < MAX_REFS, "too many color references");
+            if let Some(stop) = reference(ref_name) {
+                debug_assert!(excluded_count < MAX_COLOR_REFS, "too many references");
                 excluded[excluded_count] = stop;
                 excluded_count += 1;
             }
         }
         let excluded = &excluded[..excluded_count];
-        let is_excluded = |stop: &str| excluded.iter().any(|e| same_rgb(e, stop));
-        let kept: usize = palette.iter().filter(|stop| !is_excluded(stop)).count();
+        let is_kept = |stop: &Rgb8| !excluded.contains(stop);
+        let kept: usize = palette.iter().filter(|stop| is_kept(stop)).count();
 
         if let Some(ref_name) = color.contrast_to {
             // Identity order, then (when the reference resolves) a stable sort
@@ -240,41 +233,33 @@ impl<'a> Prng<'a> {
                 *slot = i;
             }
             let ranked = &mut ranked[..palette.len()];
-            if let Some(reference) = Self::lookup(colors, ref_name)
-                .and_then(|referenced| self.resolve_depth(colors, referenced, depth + 1))
-            {
+            if let Some(ref_color) = reference(ref_name) {
                 for i in 1..ranked.len() {
                     let mut j = i;
                     while j > 0
-                        && contrast_ratio(palette[ranked[j]], reference)
-                            > contrast_ratio(palette[ranked[j - 1]], reference)
+                        && palette[ranked[j]].contrast_ratio(ref_color)
+                            > palette[ranked[j - 1]].contrast_ratio(ref_color)
                     {
                         ranked.swap(j, j - 1);
                         j -= 1;
                     }
                 }
             }
-            for &i in ranked.iter() {
-                if !is_excluded(palette[i]) {
-                    return Some(palette[i]);
-                }
+            let first_kept = ranked.iter().copied().find(|&i| is_kept(&palette[i]));
+            return palette[first_kept.unwrap_or(ranked[0])];
+        }
+
+        // The shuffle is drawn over the surviving stops, or the whole palette
+        // when nothing survives (upstream falls back to the unfiltered list).
+        let mut pool: [Rgb8; Palette::MAX_LEN] = [Rgb8::from_u24(0); Palette::MAX_LEN];
+        let mut len = 0;
+        for stop in palette {
+            if kept == 0 || is_kept(stop) {
+                pool[len] = *stop;
+                len += 1;
             }
-            return Some(palette[ranked[0]]);
         }
-
-        let len = if kept == 0 { palette.len() } else { kept };
-        let index = self.shuffle_zero(&[color.key, "Color"], len);
-        if kept == 0 {
-            return palette.get(index).copied();
-        }
-        palette
-            .iter()
-            .filter(|stop| !is_excluded(stop))
-            .nth(index)
-            .copied()
-    }
-
-    pub fn lookup<'b>(colors: &'b [ColorRef<'b>], name: &str) -> Option<&'b ColorRef<'b>> {
-        colors.iter().find(|c| c.key == name)
+        debug_assert!(len > 0, "palette is never empty");
+        pool[self.shuffle_zero(&[color.key, "Color"], len)]
     }
 }

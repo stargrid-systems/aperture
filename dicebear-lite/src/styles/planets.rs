@@ -1,6 +1,7 @@
 // DiceBear 10.x planets style (CC0 1.0).
 
 use crate::Style;
+use crate::color::Rgb8;
 use crate::data::{
     AttrVal, Canvas, ColorRef, ComponentDef, Node, Palette, Range, VariantDef, Variants,
 };
@@ -1835,29 +1836,58 @@ static CANVAS: &[Node] = &[
     },
 ];
 
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const BG: ColorRef = ColorRef {
-    contrast_to: None,
-    not_equal_to: &[],
     key: "background",
     palette: Palette::new(&[
-        "#002a2e", "#012e3a", "#0b3533", "#0f2336", "#17233f", "#1c1f27", "#1d1a2a", "#23244a",
-        "#2c1c45", "#361b34",
+        Rgb8::from_u24(0x002A2E),
+        Rgb8::from_u24(0x012E3A),
+        Rgb8::from_u24(0x0B3533),
+        Rgb8::from_u24(0x0F2336),
+        Rgb8::from_u24(0x17233F),
+        Rgb8::from_u24(0x1C1F27),
+        Rgb8::from_u24(0x1D1A2A),
+        Rgb8::from_u24(0x23244A),
+        Rgb8::from_u24(0x2C1C45),
+        Rgb8::from_u24(0x361B34),
     ]),
-};
-const PLANET: ColorRef = ColorRef {
     contrast_to: None,
     not_equal_to: &[],
+};
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
+const PLANET: ColorRef = ColorRef {
     key: "planet",
     palette: Palette::new(&[
-        "#00b1cf", "#00b6af", "#39b789", "#47a7e7", "#74b160", "#7a9bef", "#9fa63b", "#a18ee8",
-        "#c083d2", "#c1982a", "#d67cb2", "#d88a40", "#e27a8c", "#e37f64",
+        Rgb8::from_u24(0x00B1CF),
+        Rgb8::from_u24(0x00B6AF),
+        Rgb8::from_u24(0x39B789),
+        Rgb8::from_u24(0x47A7E7),
+        Rgb8::from_u24(0x74B160),
+        Rgb8::from_u24(0x7A9BEF),
+        Rgb8::from_u24(0x9FA63B),
+        Rgb8::from_u24(0xA18EE8),
+        Rgb8::from_u24(0xC083D2),
+        Rgb8::from_u24(0xC1982A),
+        Rgb8::from_u24(0xD67CB2),
+        Rgb8::from_u24(0xD88A40),
+        Rgb8::from_u24(0xE27A8C),
+        Rgb8::from_u24(0xE37F64),
     ]),
-};
-const MOON: ColorRef = ColorRef {
     contrast_to: None,
     not_equal_to: &[],
+};
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
+const MOON: ColorRef = ColorRef {
     key: "moon",
-    palette: Palette::new(&["#bed9e7", "#d3d7e2", "#e0ded8", "#e5d6b6", "#eaccc7"]),
+    palette: Palette::new(&[
+        Rgb8::from_u24(0xBED9E7),
+        Rgb8::from_u24(0xD3D7E2),
+        Rgb8::from_u24(0xE0DED8),
+        Rgb8::from_u24(0xE5D6B6),
+        Rgb8::from_u24(0xEACCC7),
+    ]),
+    contrast_to: None,
+    not_equal_to: &[],
 };
 
 // Curly quotes in METADATA are required for byte parity with DiceBear.

@@ -4,7 +4,8 @@
 //!
 //! Output order is `<defs>` (encountered during the body walk: literal defs
 //! like masks and gradients, plus component variant bodies, nested components
-//! first) followed by the clipped body (background plus `<use>` references).
+//! first) followed by the clipped body: the background and the canvas tree,
+//! with visible components as `<use>` references.
 //! Because `<defs>` must precede the body but is discovered while walking it,
 //! the renderer makes two deterministic passes: variant selection is fully
 //! keyed by `(seed, key)`, so recomputing it is safe.
@@ -12,6 +13,7 @@
 use core::fmt::Write;
 use core::{fmt, ptr};
 
+use crate::color::Rgb8;
 use crate::data::{AttrVal, ComponentDef, Node, Range, VariantDef};
 use crate::number::{Num, equals};
 use crate::prng::{Prng, hash_u32};
@@ -20,6 +22,20 @@ use crate::{Animation, Style};
 const MAX_DEFS: usize = 32;
 
 struct Escaped<'a>(&'a str);
+
+/// Renders an optional resolved color, or nothing. Used for the background
+/// rect: upstream omits the `fill` attribute when the style defines no
+/// background palette.
+struct Rgb8Display(Option<Rgb8>);
+
+impl fmt::Display for Rgb8Display {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(color) => write!(f, "{color}"),
+            None => Ok(()),
+        }
+    }
+}
 
 impl fmt::Display for Escaped<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -116,18 +132,18 @@ pub fn render(
         h = Num(style.canvas_h)
     )?;
 
-    let bg = Prng::lookup(style.colors, "background")
-        .and_then(|background| prng.resolve(style.colors, background))
-        .unwrap_or("");
+    let background = style
+        .color("background")
+        .map(|color| prng.resolve(style, color));
     write!(
         f,
         "<g clip-path=\"url(#clip-{hash:08x})\"><rect width=\"{w}\" height=\"{h}\" fill=\"{bg}\"/>",
         w = Num(style.canvas_w),
         h = Num(style.canvas_h),
-        bg = Escaped(bg)
+        bg = Rgb8Display(background)
     )?;
 
-    // Pass 2: emit the body (background plus <use> per visible component).
+    // Pass 2: emit the body tree (visible components become <use> references).
     for node in style.canvas.iter() {
         write_node(f, &prng, style, node, animation, hash)?;
     }
@@ -154,10 +170,11 @@ fn walk_defs<'a>(
                 ..
             } => {
                 for child in *children {
-                    match node_id(child) {
-                        Some(id) if sink.saw_id(id) => continue,
-                        Some(id) => sink.push_id(id),
-                        None => {}
+                    if let Some(id) = node_id(child) {
+                        if sink.saw_id(id) {
+                            continue;
+                        }
+                        sink.push_id(id);
                     }
                     write_node(f, prng, style, child, animation, hash)?;
                 }
@@ -194,8 +211,7 @@ fn write_def(
     write!(
         f,
         "<g id=\"{source}-{name}-{hash:08x}\">",
-        source = source,
-        name = variant.name,
+        name = variant.name
     )?;
     for el in variant.elements {
         write_node(f, prng, style, el, animation, hash)?;
@@ -223,9 +239,7 @@ fn write_node(
                 match value {
                     AttrVal::Lit(s) => write!(f, " {key}=\"{v}\"", key = key, v = Escaped(s))?,
                     AttrVal::Color(color) => {
-                        if let Some(resolved) = prng.resolve(style.colors, color) {
-                            write!(f, " {key}=\"{v}\"", key = key, v = Escaped(resolved))?;
-                        }
+                        write!(f, " {key}=\"{}\"", prng.resolve(style, color))?;
                     }
                 }
             }

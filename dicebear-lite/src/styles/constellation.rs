@@ -1,6 +1,7 @@
 // DiceBear 10.x constellation style (CC0 1.0).
 
 use crate::Style;
+use crate::color::Rgb8;
 use crate::data::{
     AttrVal, Canvas, ColorRef, ComponentDef, Node, Palette, Range, VariantDef, Variants,
 };
@@ -2508,19 +2509,34 @@ static CANVAS: &[Node] = &[
     },
 ];
 
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const BG: ColorRef = ColorRef {
     key: "background",
+    palette: Palette::new(&[
+        Rgb8::from_u24(0x032729),
+        Rgb8::from_u24(0x032933),
+        Rgb8::from_u24(0x0D1E2F),
+        Rgb8::from_u24(0x131E37),
+        Rgb8::from_u24(0x181A22),
+        Rgb8::from_u24(0x1F2040),
+        Rgb8::from_u24(0x27193C),
+        Rgb8::from_u24(0x2F182D),
+    ]),
     contrast_to: None,
     not_equal_to: &[],
-    palette: Palette::new(&[
-        "#032729", "#032933", "#0d1e2f", "#131e37", "#181a22", "#1f2040", "#27193c", "#2f182d",
-    ]),
 };
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const CON: ColorRef = ColorRef {
     key: "constellation",
+    palette: Palette::new(&[
+        Rgb8::from_u24(0xC1E0F0),
+        Rgb8::from_u24(0xE7ECF0),
+        Rgb8::from_u24(0xE9DAB2),
+        Rgb8::from_u24(0xECE8DD),
+        Rgb8::from_u24(0xF1D7D2),
+    ]),
     contrast_to: None,
     not_equal_to: &[],
-    palette: Palette::new(&["#c1e0f0", "#e7ecf0", "#e9dab2", "#ece8dd", "#f1d7d2"]),
 };
 
 // Curly quotes in METADATA are required for byte parity with DiceBear.
