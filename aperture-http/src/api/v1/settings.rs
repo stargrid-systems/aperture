@@ -7,13 +7,17 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::dto::{SettingResponse, UpdateSettingRequest};
+use crate::dto::{SettingDefinitionResponse, SettingResponse, UpdateSettingRequest};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_settings))
         .routes(routes!(get_setting, update_setting))
+}
+
+pub fn definitions_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(list_setting_definitions))
 }
 
 /// Lists every setting key with its current value.
@@ -92,4 +96,27 @@ async fn update_setting(
         .await?;
     let value: Value = state.settings().get_value(&key).await?;
     Ok(Json(SettingResponse { key, value }))
+}
+
+/// Lists the registered setting keys with their JSON Schemas.
+#[utoipa::path(
+    get,
+    path = "",
+    operation_id = operation_ids::LIST_SETTING_DEFINITIONS,
+    responses((
+        status = 200,
+        description = "Setting definitions",
+        body = [SettingDefinitionResponse],
+    )),
+)]
+async fn list_setting_definitions(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<SettingDefinitionResponse>>, ApiError> {
+    let definitions = state
+        .settings()
+        .registry()
+        .descriptors()
+        .map(SettingDefinitionResponse::from)
+        .collect();
+    Ok(Json(definitions))
 }

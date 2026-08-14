@@ -303,6 +303,21 @@ async fn lists_task_definitions_with_schemas() {
 }
 
 #[tokio::test]
+async fn lists_setting_definitions_with_schemas() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/setting-definitions").await;
+    assert_eq!(status, StatusCode::OK);
+    let style = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|def| def["key"] == "avatar_style")
+        .expect("avatar style registered");
+    assert!(style["value_schema"].is_object());
+}
+
+#[tokio::test]
 async fn reads_recorded_tasks() {
     let (app, _artifacts, storage, token) = seeded_app().await;
     let repo = storage.tasks().unwrap();
