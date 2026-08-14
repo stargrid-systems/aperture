@@ -1,12 +1,13 @@
-//! SVG serializer, byte-for-byte compatible with `DiceBear`'s `Renderer`
-//! for default options, without allocating.
+//! SVG serializer, byte-for-byte compatible with `DiceBear`'s `Renderer`.
+//!
+//! Default options only, without allocating.
 //!
 //! `<defs>` must precede the body but is discovered while walking it, so the
 //! renderer makes two deterministic passes. Variant selection is fully keyed
 //! by `(seed, key)`, so recomputing it is safe.
 
+use core::fmt;
 use core::fmt::Write;
-use core::{fmt, ptr};
 
 use crate::data::{AttrVal, ComponentDef, Node, Range, VariantDef};
 use crate::number::{Num, equals};
@@ -33,12 +34,13 @@ impl fmt::Display for Escaped<'_> {
     }
 }
 
-/// `<defs>` dedup state: literal defs by `id`, component defs by pointer
-/// plus variant name.
+/// Dedup state for `<defs>`.
+///
+/// Literal defs by `id`, component defs by source and variant name.
 struct DefSink<'a> {
     seen_ids: [&'a str; MAX_DEFS],
     id_count: usize,
-    seen_comps: [(*const ComponentDef<'a>, &'a str); MAX_DEFS],
+    seen_comps: [(&'a str, &'a str); MAX_DEFS],
     comp_count: usize,
 }
 
@@ -47,12 +49,12 @@ impl<'a> DefSink<'a> {
         Self {
             seen_ids: [""; MAX_DEFS],
             id_count: 0,
-            seen_comps: [(ptr::null(), ""); MAX_DEFS],
+            seen_comps: [("", ""); MAX_DEFS],
             comp_count: 0,
         }
     }
 
-    fn saw_id(&self, id: &'a str) -> bool {
+    fn saw_id(&self, id: &str) -> bool {
         self.seen_ids[..self.id_count].contains(&id)
     }
 
@@ -62,15 +64,15 @@ impl<'a> DefSink<'a> {
         self.id_count += 1;
     }
 
-    fn saw_comp(&self, component: &ComponentDef<'a>, variant: &str) -> bool {
+    fn saw_comp(&self, source: &str, variant: &str) -> bool {
         self.seen_comps[..self.comp_count]
             .iter()
-            .any(|&(ptr_, name)| ptr::eq(ptr_, component) && name == variant)
+            .any(|&(seen_source, seen_variant)| seen_source == source && seen_variant == variant)
     }
 
-    fn push_comp(&mut self, component: &ComponentDef<'a>, variant: &'a str) {
+    fn push_comp(&mut self, source: &'a str, variant: &'a str) {
         debug_assert!(self.comp_count < MAX_DEFS, "too many defs");
-        self.seen_comps[self.comp_count] = (component, variant);
+        self.seen_comps[self.comp_count] = (source, variant);
         self.comp_count += 1;
     }
 }
@@ -158,10 +160,10 @@ fn walk_defs<'a>(
                 name, component, ..
             } => {
                 if let Some(variant) = prng.variant(name, component, animation)
-                    && !sink.saw_comp(component, variant.name)
+                    && !sink.saw_comp(component.name, variant.name)
                 {
                     walk_defs(f, prng, variant.elements, animation, hash, sink)?;
-                    sink.push_comp(component, variant.name);
+                    sink.push_comp(component.name, variant.name);
                     write!(
                         f,
                         "<g id=\"{source}-{name}-{hash:08x}\">",
@@ -227,8 +229,9 @@ fn write_node(
     }
 }
 
-/// Emits the `<use>` for a visible component: user transform first, then the
-/// style's translate and rotate.
+/// Emits the `<use>` for a visible component.
+///
+/// User transform first, then the style's translate and rotate.
 fn write_use<'a>(
     f: &mut fmt::Formatter<'_>,
     prng: &Prng<'_>,

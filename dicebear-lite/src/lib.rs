@@ -29,19 +29,18 @@
 use core::fmt;
 
 use self::data::{Canvas, ColorRef};
-
-mod color;
-mod data;
-mod number;
-mod prng;
-mod renderer;
-
 #[cfg(feature = "constellation")]
 pub use self::styles::constellation::CONSTELLATION;
 #[cfg(feature = "planets")]
 pub use self::styles::planets::PLANETS;
 #[cfg(feature = "thumbs")]
 pub use self::styles::thumbs::THUMBS;
+
+mod color;
+mod data;
+mod number;
+mod prng;
+mod renderer;
 
 mod styles {
     #[cfg(feature = "constellation")]
@@ -52,8 +51,10 @@ mod styles {
     pub mod thumbs;
 }
 
-/// A `DiceBear` style definition. Each field is `&'a` data baked into the
-/// binary by a style module (e.g. `CONSTELLATION`).
+/// A `DiceBear` style definition.
+///
+/// Each field is `&'a` data baked into the binary by a style module (e.g.
+/// `CONSTELLATION`).
 pub struct Style<'a> {
     pub(crate) source_name: &'a str,
     pub(crate) metadata: &'a str,
@@ -63,8 +64,9 @@ pub struct Style<'a> {
     pub(crate) background: ColorRef<'a>,
 }
 
-/// Animation speed for [`Animation::Fixed`], named after the `animation`
-/// component variants of the `DiceBear` styles.
+/// Animation speed for [`Animation::Fixed`].
+///
+/// Named after the `animation` component variants of the `DiceBear` styles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Speed {
     Fastest,
@@ -88,19 +90,21 @@ impl Speed {
     }
 }
 
-/// Opt-in avatar animation, mirroring `DiceBear`'s `tags` and
-/// `animationVariant` options.
+/// Opt-in avatar animation.
+///
+/// Mirrors `DiceBear`'s `tags` and `animationVariant` options.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Animation {
     /// Static avatars (the `DiceBear` default).
     Off,
-    /// `tags: ["animation"]`: animated, speed drawn per seed.
+    /// Animated, speed drawn per seed (`tags: ["animation"]`).
     Random,
-    /// `animationVariant: <speed>`: animated at a fixed speed.
+    /// Animated at a fixed speed (`animationVariant: <speed>`).
     Fixed(Speed),
 }
 
 /// A `DiceBear` avatar for a given `seed`, [`Style`], and [`Animation`].
+///
 /// Rendering is deferred to [`Display`](core::fmt::Display), so construction
 /// is free.
 pub struct Avatar<'a> {

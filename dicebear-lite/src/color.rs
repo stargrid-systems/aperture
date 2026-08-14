@@ -10,8 +10,9 @@ use self::linearized::LINEARIZED;
 
 mod linearized;
 
-/// An 8-bit-per-channel RGB color. [`Display`](core::fmt::Display) renders
-/// the `#rrggbb` form `DiceBear` emits.
+/// An 8-bit-per-channel RGB color.
+///
+/// [`Display`](core::fmt::Display) renders the `#rrggbb` form `DiceBear` emits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb8 {
     r: u8,

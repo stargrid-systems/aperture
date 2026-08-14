@@ -1,6 +1,7 @@
-//! Linear-light values per 8-bit sRGB channel value, transcribed from the
-//! `DiceBear` ports. `pow` is not correctly rounded, so computing them would
-//! drift from the other ports.
+//! Linear-light values per 8-bit sRGB channel value.
+//!
+//! Transcribed verbatim from the `DiceBear` ports: `pow` is not correctly
+//! rounded, so computing them would drift from the other ports.
 
 #[expect(clippy::unreadable_literal, reason = "transcribed verbatim")]
 pub(super) static LINEARIZED: [f64; 256] = [

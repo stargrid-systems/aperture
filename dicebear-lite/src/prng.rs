@@ -1,5 +1,6 @@
-//! `DiceBear`'s key-based PRNG: FNV-1a over UTF-16 code units seeding
-//! Mulberry32.
+//! Ports `DiceBear`'s key-based PRNG.
+//!
+//! An FNV-1a hash of the seed and key over UTF-16 code units seeds Mulberry32.
 //!
 //! Every draw is derived independently from `(seed, key)`, so the call order
 //! is irrelevant. A key is several string fragments concatenated, hashed
@@ -23,8 +24,7 @@ fn step(hash: u32, unit: u16) -> u32 {
     (hash ^ u32::from(unit)).wrapping_mul(FNV_PRIME)
 }
 
-/// FNV-1a over the UTF-16 code units of `seed`, a `:` separator, then the
-/// concatenated `key` fragments.
+/// FNV-1a over the UTF-16 code units of `seed`, `:`, then the `key` fragments.
 fn hash_seed_key(seed: &str, key: &[&str]) -> u32 {
     seed.encode_utf16()
         .chain(iter::once(0x3A_u16))
@@ -32,8 +32,9 @@ fn hash_seed_key(seed: &str, key: &[&str]) -> u32 {
         .fold(FNV_OFFSET, step)
 }
 
-/// FNV-1a hash of `prefix + ":" + s` over UTF-16 code units. Used for the
-/// per-seed `<defs>` id suffix.
+/// FNV-1a hash of `prefix + ":" + s` over UTF-16 code units.
+///
+/// Used for the per-seed `<defs>` id suffix.
 pub fn hash_u32(prefix: &str, s: &str) -> u32 {
     prefix
         .encode_utf16()
@@ -65,8 +66,10 @@ impl Mulberry32 {
     }
 }
 
-/// Key-based pseudorandom value generator. Keys are passed as multiple
-/// fragments (e.g. `&[name, "Variant"]`) and concatenated for hashing.
+/// Key-based pseudorandom value generator.
+///
+/// Keys are passed as multiple fragments (e.g. `&[name, "Variant"]`) and
+/// concatenated for hashing.
 pub struct Prng<'a> {
     seed: &'a str,
 }
@@ -93,8 +96,9 @@ impl<'a> Prng<'a> {
         math_round((min + self.value(key) * (max - min)) * 10000.0) / 10000.0
     }
 
-    /// Returns the element that lands at position 0 after a Fisher-Yates
-    /// shuffle of `[0, 1, ..., n-1]`.
+    /// Returns the element at position 0 after a Fisher-Yates shuffle.
+    ///
+    /// The shuffled sequence is `[0, 1, ..., n-1]`.
     ///
     /// # Panics
     ///
@@ -114,6 +118,7 @@ impl<'a> Prng<'a> {
     }
 
     /// Selects a variant for `component`, or `None` when it is not visible.
+    ///
     /// `animation` mirrors `DiceBear`'s opt-in animation options.
     pub fn variant<'b>(
         &self,
@@ -147,8 +152,10 @@ impl<'a> Prng<'a> {
         }
     }
 
-    /// Weighted pick matching `Prng.weightedPick`: a zero total weight makes
-    /// the pick uniform by index. At least one variant must match.
+    /// Weighted pick matching `Prng.weightedPick`.
+    ///
+    /// A zero total weight makes the pick uniform by index. At least one
+    /// variant must match.
     fn weighted<'b>(
         &self,
         key: &[&str],
@@ -174,11 +181,12 @@ impl<'a> Prng<'a> {
         matching().last().expect("non-empty filtered set")
     }
 
-    /// Resolves `color` to its output stop, porting `DiceBear`'s
-    /// `Resolver.resolveColor` for default options: `not_equal_to` stops are
-    /// dropped (falling back to the full palette when that would empty it), a
-    /// `contrast_to` reference sorts the stops by descending WCAG contrast
-    /// (stable, no shuffle), otherwise the surviving stops are shuffled.
+    /// Resolves `color` to its output stop for `DiceBear`'s default options.
+    ///
+    /// Ports `Resolver.resolveColor`: `not_equal_to` stops are dropped (falling
+    /// back to the full palette when that would empty it), a `contrast_to`
+    /// reference sorts the stops by descending WCAG contrast (stable, no
+    /// shuffle), otherwise the surviving stops are shuffled.
     pub fn resolve(&self, color: &ColorRef<'_>) -> Rgb8 {
         let palette: &[Rgb8] = &color.palette;
 

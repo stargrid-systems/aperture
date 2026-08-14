@@ -8,8 +8,9 @@ use crate::color::Rgb8;
 #[derive(Clone, Copy)]
 pub struct Range(pub f64, pub f64);
 
-/// Color palette stops. Must be non-empty and limited to `MAX_LEN` entries,
-/// enforced at construction.
+/// Color palette stops.
+///
+/// Must be non-empty, limited to `MAX_LEN` entries, enforced at construction.
 #[derive(Clone, Copy)]
 pub struct Palette<'a> {
     stops: &'a [Rgb8],
@@ -64,16 +65,18 @@ pub enum Node<'a> {
 pub struct VariantDef<'a> {
     pub name: &'a str,
     pub weight: f64,
-    /// Variant tags, e.g. `&["animation"]` on animation-speed variants. Drives
-    /// [`Animation::Random`](crate::Animation::Random) selection.
+    /// Variant tags, e.g. `&["animation"]` on animation-speed variants.
+    ///
+    /// Drives [`Animation::Random`](crate::Animation::Random) selection.
     pub tags: &'a [&'a str],
     pub elements: &'a [Node<'a>],
 }
 
-/// Variant definitions, verified sorted by name at construction. The sort
-/// order is load-bearing: the resolver's weighted pick walks variants in
-/// definition order, so the order must match `DiceBear`'s name-sorted
-/// iteration.
+/// Variant definitions, verified sorted by name at construction.
+///
+/// The sort order is load-bearing: the resolver's weighted pick walks
+/// variants in definition order, so the order must match `DiceBear`'s
+/// name-sorted iteration.
 #[derive(Clone, Copy)]
 pub struct Variants<'a> {
     variants: &'a [VariantDef<'a>],
@@ -120,7 +123,9 @@ pub struct ComponentDef<'a> {
     pub variants: Variants<'a>,
 }
 
-/// Canvas node slice. Limited to `MAX_LEN` nodes, enforced at construction.
+/// Canvas node slice.
+///
+/// Limited to `MAX_LEN` nodes, enforced at construction.
 pub struct Canvas<'a> {
     nodes: &'a [Node<'a>],
 }

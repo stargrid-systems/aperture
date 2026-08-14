@@ -19,8 +19,10 @@ pub fn math_round(x: f64) -> f64 {
     }
 }
 
-/// Exact float equality, matching JavaScript `===`. Values drawn from the PRNG
-/// are rounded to multiples of `1e-4`, so exact comparison is correct.
+/// Exact float equality, matching JavaScript `===`.
+///
+/// Values drawn from the PRNG are rounded to multiples of `1e-4`, so exact
+/// comparison is correct.
 #[expect(
     clippy::float_cmp,
     reason = "intentional exact equality matching JS ==="
@@ -29,7 +31,9 @@ pub fn equals(a: f64, b: f64) -> bool {
     a == b
 }
 
-/// Truncates toward zero. Inputs are bounded to `i64` range.
+/// Truncates toward zero.
+///
+/// Inputs are bounded to `i64` range.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -45,8 +49,9 @@ fn floor(x: f64) -> f64 {
     if x >= 0.0 || equals(x, t) { t } else { t - 1.0 }
 }
 
-/// Scales `unit` (a `[0, 1)` float) to an index in `0..len`, matching
-/// `Math.floor(unit * len)`.
+/// Scales `unit` (a `[0, 1)` float) to an index in `0..len`.
+///
+/// Matches `Math.floor(unit * len)`.
 #[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -57,8 +62,10 @@ pub fn floor_index(unit: f64, len: usize) -> usize {
     (unit * len as f64) as i64 as usize
 }
 
-/// A number formatted like `DiceBear`'s `Utils/Number.format`: rounded to at
-/// most 5 decimal places, trailing zeros trimmed, no exponential notation.
+/// A number formatted like `DiceBear`'s `Utils/Number.format`.
+///
+/// Rounded to at most 5 decimal places, trailing zeros trimmed, no exponential
+/// notation.
 pub struct Num(pub f64);
 
 #[expect(
