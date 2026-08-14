@@ -44,7 +44,7 @@ pub trait ErasedDefinition: Send + Sync + 'static {
 
 impl<T: TaskDefinition> ErasedDefinition for T {
     fn kind(&self) -> &'static str {
-        T::KIND
+        T::KEY
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -92,7 +92,7 @@ impl<T: TaskDefinition> ErasedDefinition for T {
         ctx: TaskContext,
         set: &mut JoinSet<()>,
     ) -> AbortHandle {
-        let kind = T::KIND;
+        let kind = T::KEY;
         let id = ctx.id();
         set.spawn(
             async move {

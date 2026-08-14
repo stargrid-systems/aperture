@@ -30,7 +30,7 @@ impl Capabilities {
     };
 }
 
-/// A kind of task. Each definition fixes a unique [`TaskDefinition::KIND`], a
+/// A kind of task. Each definition fixes a unique [`TaskDefinition::KEY`], a
 /// typed input and output, its capabilities, and the work to run.
 ///
 /// The input and output are real types. They are validated and (de)serialized
@@ -38,7 +38,7 @@ impl Capabilities {
 /// values.
 pub trait TaskDefinition: Send + Sync + 'static {
     /// The unique kind string this definition is registered under.
-    const KIND: &'static str;
+    const KEY: &'static str;
     /// The typed input the task is created with.
     type Input: DeserializeOwned + Serialize + ToSchema + Send;
     /// The typed output the task produces on success.

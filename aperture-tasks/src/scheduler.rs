@@ -125,7 +125,7 @@ mod tests {
     struct Ping;
 
     impl crate::TaskDefinition for Ping {
-        const KIND: &'static str = "ping";
+        const KEY: &'static str = "ping";
         type Input = Value;
         type Output = ();
 

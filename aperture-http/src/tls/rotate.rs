@@ -33,7 +33,7 @@ impl RotateCertificateDefinition {
 }
 
 impl TaskDefinition for RotateCertificateDefinition {
-    const KIND: &'static str = "rotate-certificate";
+    const KEY: &'static str = "rotate-certificate";
     type Input = RotateCertificateInput;
     type Output = RotateCertificateOutput;
 
@@ -67,13 +67,13 @@ pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Res
     let already = existing
         .items
         .iter()
-        .any(|s| s.kind == RotateCertificateDefinition::KIND);
+        .any(|s| s.kind == RotateCertificateDefinition::KEY);
     if already {
         return Ok(());
     }
     let now = Timestamp::now();
     repo.create(&NewTaskSchedule {
-        kind: RotateCertificateDefinition::KIND.to_owned(),
+        kind: RotateCertificateDefinition::KEY.to_owned(),
         input: serde_json::json!({}),
         interval: Interval::new(ROTATION_INTERVAL)?,
         next_run_at: now,

@@ -44,10 +44,10 @@ impl TaskRegistry {
         Self::default()
     }
 
-    /// Registers `definition` under its [`TaskDefinition::KIND`], replacing any
+    /// Registers `definition` under its [`TaskDefinition::KEY`], replacing any
     /// previously registered definition for that kind.
     pub fn register<T: TaskDefinition>(&mut self, definition: T) {
-        self.definitions.insert(T::KIND, Arc::new(definition));
+        self.definitions.insert(T::KEY, Arc::new(definition));
     }
 
     /// A schema-carrying descriptor per registered kind.
