@@ -155,13 +155,8 @@ async fn cancel_task(
     responses((status = 200, description = "Task definitions", body = Vec<TaskDefinitionResponse>)),
 )]
 async fn list_definitions(
-    auth: AuthenticatedActor,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::TaskDefinition, Action::Read)
-        .await?;
     let definitions = state
         .tasks()
         .registry()
