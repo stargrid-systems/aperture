@@ -8,11 +8,16 @@
 
 use core::iter;
 
+use crate::Animation;
+use crate::color::{contrast_ratio, same_rgb};
 use crate::data::{ColorRef, ComponentDef, Palette, VariantDef};
 use crate::number::{equals, floor_index, math_round};
 
 const FNV_OFFSET: u32 = 0x811C_9DC5;
 const FNV_PRIME: u32 = 0x0100_0193;
+
+/// Resolved `not_equal_to` stops tracked per color, alloc-free.
+const MAX_REFS: usize = 8;
 
 #[inline]
 fn step(hash: u32, unit: u16) -> u32 {
@@ -61,10 +66,6 @@ impl Mulberry32 {
     }
 }
 
-/// Const assertion: 3-bit packing of j values in a `u32` requires
-/// `(Palette::MAX_LEN - 1) * 3 <= u32::BITS`.
-const _: () = assert!((Palette::MAX_LEN - 1) * 3 <= u32::BITS as usize);
-
 /// Key-based pseudorandom value generator. Keys are passed as multiple
 /// fragments (e.g. `&[name, "Variant"]`) and concatenated for hashing.
 pub struct Prng<'a> {
@@ -96,9 +97,8 @@ impl<'a> Prng<'a> {
     }
 
     /// Returns the element that lands at position 0 after a Fisher-Yates
-    /// shuffle of `[0, 1, ..., n-1]`. Uses the trace-label algorithm: instead
-    /// of materializing the full permutation, it traces which original element
-    /// ends up at position 0 by following the chain of swaps that affect it.
+    /// shuffle of `[0, 1, ..., n-1]`. Instead of tracing swap chains, the full
+    /// permutation is materialized in a fixed-size array.
     ///
     /// # Panics
     ///
@@ -106,27 +106,28 @@ impl<'a> Prng<'a> {
     pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
         assert!(n <= Palette::MAX_LEN);
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
-        let mut val_at_0: usize = 0;
-        let mut j_packed: u32 = 0;
-
+        let mut perm = [0usize; Palette::MAX_LEN];
+        for (i, slot) in perm.iter_mut().enumerate().take(n) {
+            *slot = i;
+        }
         for i in (1..n).rev() {
             let j = floor_index(rng.next_float(), i + 1);
-            #[expect(clippy::cast_possible_truncation, reason = "j < Palette::MAX_LEN")]
-            let j_u32 = j as u32;
-            j_packed |= j_u32 << (3 * (i - 1));
-            if j == 0 {
-                val_at_0 = trace_label(i, n, j_packed);
-            }
+            perm.swap(i, j);
         }
-
-        val_at_0
+        perm[0]
     }
 
     /// Selects a variant for `component`, or `None` when it is not visible.
+    ///
+    /// `animation` mirrors `DiceBear`'s opt-in animation options: `Random`
+    /// restricts components with `animation`-tagged variants to those (their
+    /// zero weights make the pick uniform, at a per-seed speed), and `Fixed`
+    /// pins the variant of the `animation` component by name.
     pub fn variant<'b>(
         &self,
         name: &str,
         component: &'b ComponentDef<'b>,
+        animation: Animation,
     ) -> Option<&'b VariantDef<'b>> {
         let variants = &component.variants;
         if variants.is_empty() {
@@ -138,48 +139,142 @@ impl<'a> Prng<'a> {
         ) {
             return None;
         }
-        let total: f64 = variants.iter().map(|v| v.weight).sum();
-        let value = self.value(&[name, "Variant"]);
+        match animation {
+            Animation::Off => Some(self.weighted(&[name, "Variant"], variants, |_| true)),
+            Animation::Random if variants.iter().any(|v| v.tags.contains(&"animation")) => {
+                Some(self.weighted(&[name, "Variant"], variants, |v| {
+                    v.tags.contains(&"animation")
+                }))
+            }
+            Animation::Fixed(speed) if component.name == "animation" => {
+                variants.iter().find(|v| v.name == speed.as_str())
+            }
+            Animation::Random | Animation::Fixed(_) => {
+                Some(self.weighted(&[name, "Variant"], variants, |_| true))
+            }
+        }
+    }
+
+    /// Weighted pick over the variants matching `pred`, matching
+    /// `Prng.weightedPick`: with a zero total weight the pick is uniform by
+    /// index. At least one variant must match.
+    fn weighted<'b>(
+        &self,
+        key: &[&str],
+        variants: &'b [VariantDef<'b>],
+        pred: impl Fn(&VariantDef) -> bool,
+    ) -> &'b VariantDef<'b> {
+        let total: f64 = variants.iter().filter(|v| pred(v)).map(|v| v.weight).sum();
+        let value = self.value(key);
         if equals(total, 0.0) {
-            return variants.get(floor_index(value, variants.len()));
-        }
-        let threshold = value * total;
-        let mut cumulative = 0.0;
-        for v in variants.iter() {
-            cumulative += v.weight;
-            if threshold < cumulative {
-                return Some(v);
+            let len = variants.iter().filter(|v| pred(v)).count();
+            let index = floor_index(value, len);
+            variants
+                .iter()
+                .filter(|v| pred(v))
+                .nth(index)
+                .expect("non-empty filtered set")
+        } else {
+            let threshold = value * total;
+            let mut cumulative = 0.0;
+            for v in variants.iter().filter(|v| pred(v)) {
+                cumulative += v.weight;
+                if threshold < cumulative {
+                    return v;
+                }
             }
+            variants
+                .iter()
+                .filter(|v| pred(v))
+                .last()
+                .expect("non-empty filtered set")
         }
-        variants.last()
     }
 
-    /// Resolves `color` to its single shuffled stop.
-    pub fn color<'b>(&self, color: &ColorRef<'b>) -> Option<&'b str> {
-        let idx = self.shuffle_zero(&[color.key, "Color"], color.palette.len());
-        color.palette.get(idx).copied()
+    /// Resolves `color` to its single output stop, mirroring `DiceBear`'s
+    /// `Resolver.resolveColor` for default options:
+    ///
+    /// - `not_equal_to` stops are dropped (falling back to the full palette
+    ///   when that would empty it),
+    /// - a `contrast_to` reference sorts the stops by descending WCAG contrast
+    ///   against the reference's first stop (stable, and no shuffle), and
+    /// - otherwise the surviving stops are shuffled.
+    ///
+    /// # Panics
+    ///
+    /// Panics on circular `contrast_to`/`not_equal_to` references.
+    pub fn resolve<'b>(&self, colors: &'b [ColorRef<'b>], color: &ColorRef<'b>) -> Option<&'b str> {
+        self.resolve_depth(colors, color, 0)
     }
-}
 
-/// Traces which original element is at `start` by following the chain of
-/// Fisher-Yates swaps. At each position, finds the smallest step `k` (where
-/// `k > pos`) whose random index `j_k` targeted `pos`. If found, the element
-/// at `pos` came from position `k`, so recurse. If not found, the element is
-/// still at its original position.
-fn trace_label(start: usize, n: usize, j_packed: u32) -> usize {
-    let mut pos = start;
-    loop {
-        let mut found = false;
-        for k in (pos + 1)..n {
-            let j_k = ((j_packed >> (3 * (k - 1))) & 7) as usize;
-            if j_k == pos {
-                pos = k;
-                found = true;
-                break;
+    fn resolve_depth<'b>(
+        &self,
+        colors: &'b [ColorRef<'b>],
+        color: &ColorRef<'b>,
+        depth: usize,
+    ) -> Option<&'b str> {
+        assert!(depth < 8, "circular color reference at {}", color.key);
+        let palette: &[&'b str] = &color.palette;
+
+        // Resolved stops of the not_equal_to references (one per reference).
+        let mut excluded: [&'b str; MAX_REFS] = [""; MAX_REFS];
+        let mut excluded_count = 0;
+        for ref_name in color.not_equal_to {
+            if let Some(stop) = Self::lookup(colors, ref_name)
+                .and_then(|referenced| self.resolve_depth(colors, referenced, depth + 1))
+            {
+                debug_assert!(excluded_count < MAX_REFS, "too many color references");
+                excluded[excluded_count] = stop;
+                excluded_count += 1;
             }
         }
-        if !found {
-            return pos;
+        let excluded = &excluded[..excluded_count];
+        let is_excluded = |stop: &str| excluded.iter().any(|e| same_rgb(e, stop));
+        let kept: usize = palette.iter().filter(|stop| !is_excluded(stop)).count();
+
+        if let Some(ref_name) = color.contrast_to {
+            // Identity order, then (when the reference resolves) a stable sort
+            // by descending contrast ratio.
+            let mut ranked: [usize; Palette::MAX_LEN] = [0; Palette::MAX_LEN];
+            for (i, slot) in ranked.iter_mut().enumerate().take(palette.len()) {
+                *slot = i;
+            }
+            let ranked = &mut ranked[..palette.len()];
+            if let Some(reference) = Self::lookup(colors, ref_name)
+                .and_then(|referenced| self.resolve_depth(colors, referenced, depth + 1))
+            {
+                for i in 1..ranked.len() {
+                    let mut j = i;
+                    while j > 0
+                        && contrast_ratio(palette[ranked[j]], reference)
+                            > contrast_ratio(palette[ranked[j - 1]], reference)
+                    {
+                        ranked.swap(j, j - 1);
+                        j -= 1;
+                    }
+                }
+            }
+            for &i in ranked.iter() {
+                if !is_excluded(palette[i]) {
+                    return Some(palette[i]);
+                }
+            }
+            return Some(palette[ranked[0]]);
         }
+
+        let len = if kept == 0 { palette.len() } else { kept };
+        let index = self.shuffle_zero(&[color.key, "Color"], len);
+        if kept == 0 {
+            return palette.get(index).copied();
+        }
+        palette
+            .iter()
+            .filter(|stop| !is_excluded(stop))
+            .nth(index)
+            .copied()
+    }
+
+    pub fn lookup<'b>(colors: &'b [ColorRef<'b>], name: &str) -> Option<&'b ColorRef<'b>> {
+        colors.iter().find(|c| c.key == name)
     }
 }

@@ -14,7 +14,7 @@ pub struct Palette<'a> {
 }
 
 impl<'a> Palette<'a> {
-    pub const MAX_LEN: usize = 8;
+    pub const MAX_LEN: usize = 16;
 
     pub const fn new(stops: &'a [&'a str]) -> Self {
         assert!(!stops.is_empty(), "palette must not be empty");
@@ -34,6 +34,13 @@ impl<'a> Deref for Palette<'a> {
 pub struct ColorRef<'a> {
     pub key: &'a str,
     pub palette: Palette<'a>,
+    /// Sort this color's stops by descending contrast against the first stop
+    /// of the referenced color, skipping the shuffle (`DiceBear`
+    /// `contrastTo`).
+    pub contrast_to: Option<&'a str>,
+    /// Drop stops equal to any resolved stop of the referenced colors
+    /// (`DiceBear` `notEqualTo`).
+    pub not_equal_to: &'a [&'a str],
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +55,8 @@ pub enum Node<'a> {
         attrs: &'a [(&'a str, AttrVal<'a>)],
         children: &'a [Self],
     },
+    /// Escaped character data inside the parent element.
+    Text { value: &'a str },
     Component {
         name: &'a str,
         component: &'a ComponentDef<'a>,
@@ -58,6 +67,9 @@ pub enum Node<'a> {
 pub struct VariantDef<'a> {
     pub name: &'a str,
     pub weight: f64,
+    /// Variant tags, e.g. `&["animation"]` on animation-speed variants. Drives
+    /// [`Animation::Random`](crate::Animation::Random) selection.
+    pub tags: &'a [&'a str],
     pub elements: &'a [Node<'a>],
 }
 

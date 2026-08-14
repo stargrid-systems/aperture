@@ -1,116 +1,154 @@
-use std::fs;
-use std::path::PathBuf;
+use std::sync::LazyLock;
 
-use dicebear_lite::{Avatar, CONSTELLATION};
+use dicebear_core::{Avatar as OracleAvatar, Style as OracleStyle};
+use dicebear_lite::{Animation, Avatar, CONSTELLATION, PLANETS, Speed, THUMBS};
+use serde_json::json;
 
-fn fixture_path(slug: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(format!("{slug}.svg"))
-}
+type Case = (
+    &'static str,
+    &'static dicebear_lite::Style<'static>,
+    OracleStyle,
+);
 
-/// Renders `seed` and asserts byte-identical output to the committed reference
-/// SVG. The `slug` selects the fixture file.
+static STYLES: LazyLock<[Case; 3]> = LazyLock::new(|| {
+    [
+        (
+            "constellation",
+            &CONSTELLATION,
+            OracleStyle::from_str(dicebear_styles::CONSTELLATION).unwrap(),
+        ),
+        (
+            "planets",
+            &PLANETS,
+            OracleStyle::from_str(dicebear_styles::PLANETS).unwrap(),
+        ),
+        (
+            "thumbs",
+            &THUMBS,
+            OracleStyle::from_str(dicebear_styles::THUMBS).unwrap(),
+        ),
+    ]
+});
+
+const SEEDS: &[&str] = &[
+    "",
+    "0",
+    "1",
+    "2",
+    "3",
+    "7",
+    "42",
+    "100",
+    "9999",
+    "test",
+    "bob",
+    "admin",
+    "zzz",
+    "alice",
+    "Simon",
+    "A",
+    "0x1F",
+    "a b c",
+    "-5",
+    "3.14",
+    "User-12345_Admin",
+    "日本語",
+    "🎉",
+];
+
+const FIXED_SEEDS: &[&str] = &["", "alice", "42", "Simon"];
+
+const SPEEDS: &[Speed] = &[
+    Speed::Fastest,
+    Speed::Fast,
+    Speed::Medium,
+    Speed::Slow,
+    Speed::Slowest,
+];
+
 #[track_caller]
-fn assert_parity(seed: &str, slug: &str) {
-    let expected = fs::read_to_string(fixture_path(slug))
-        .unwrap_or_else(|e| panic!("fixture {slug}.svg: {e}"));
-    let actual = Avatar::new(&CONSTELLATION, seed).to_string();
-    assert_eq!(actual, expected, "seed={seed:?} (slug={slug})");
+fn assert_parity(
+    name: &str,
+    lite: &dicebear_lite::Style,
+    oracle: &OracleStyle,
+    seed: &str,
+    animation: Animation,
+) {
+    let options = match animation {
+        Animation::Off => json!({"seed": seed}),
+        Animation::Random => json!({"seed": seed, "tags": ["animation"]}),
+        Animation::Fixed(variant) => json!({"seed": seed, "animationVariant": variant.as_str()}),
+    };
+    let expected = OracleAvatar::new(oracle, options)
+        .unwrap()
+        .to_svg()
+        .to_string();
+    let actual = Avatar::new(lite, seed).animation(animation).to_string();
+
+    if expected == actual {
+        return;
+    }
+
+    let pos = expected
+        .bytes()
+        .zip(actual.bytes())
+        .position(|(a, b)| a != b)
+        .unwrap_or_else(|| expected.len().min(actual.len()));
+    let exp_len = expected.len();
+    let act_len = actual.len();
+    let lo = expected.floor_char_boundary(pos.saturating_sub(40));
+    let hi = expected.ceil_char_boundary((pos + 40).min(exp_len));
+    let exp_snip = &expected[lo..hi];
+    let act_snip = &actual[lo..hi];
+    panic!(
+        "parity mismatch: style={name} seed={seed:?} animation={animation:?} first diff at byte \
+         {pos} (exp {exp_len}B act {act_len}B) exp={exp_snip:?} act={act_snip:?}"
+    );
 }
 
 #[test]
-fn empty_seed() {
-    assert_parity("", "empty");
+fn parity_off() {
+    let long_seed = "x".repeat(300);
+    for &(name, lite, ref oracle) in STYLES.iter() {
+        for &seed in SEEDS {
+            assert_parity(name, lite, oracle, seed, Animation::Off);
+        }
+        assert_parity(name, lite, oracle, &long_seed, Animation::Off);
+    }
 }
 
 #[test]
-fn single_digit_seeds() {
-    assert_parity("0", "n0");
-    assert_parity("1", "n1");
-    assert_parity("2", "n2");
-    assert_parity("3", "n3");
-    assert_parity("7", "n7");
+fn parity_random() {
+    let long_seed = "x".repeat(300);
+    for &(name, lite, ref oracle) in STYLES.iter() {
+        for &seed in SEEDS {
+            assert_parity(name, lite, oracle, seed, Animation::Random);
+        }
+        assert_parity(name, lite, oracle, &long_seed, Animation::Random);
+    }
 }
 
 #[test]
-fn multi_digit_seeds() {
-    assert_parity("42", "n42");
-    assert_parity("100", "n100");
-    assert_parity("9999", "n9999");
-}
-
-#[test]
-fn short_alpha_seeds() {
-    assert_parity("test", "test");
-    assert_parity("bob", "bob");
-    assert_parity("admin", "admin");
-    assert_parity("zzz", "zzz");
-}
-
-#[test]
-fn name_seeds() {
-    assert_parity("alice", "alice");
-    assert_parity("Simon", "simon");
-}
-
-#[test]
-fn single_capital_letter() {
-    assert_parity("A", "capitalA");
-}
-
-#[test]
-fn hex_seed() {
-    assert_parity("0x1F", "hex");
-}
-
-#[test]
-fn spaces_in_seed() {
-    assert_parity("a b c", "space");
-}
-
-#[test]
-fn negative_number() {
-    assert_parity("-5", "neg");
-}
-
-#[test]
-fn decimal_number() {
-    assert_parity("3.14", "floatish");
-}
-
-#[test]
-fn mixed_alphanumeric() {
-    assert_parity("User-12345_Admin", "mixed");
-}
-
-#[test]
-fn unicode_seed() {
-    assert_parity("日本語", "unicode");
-}
-
-#[test]
-fn emoji_seed() {
-    assert_parity("🎉", "emoji");
-}
-
-#[test]
-fn long_seed() {
-    assert_parity(&"x".repeat(300), "longseed");
+fn parity_fixed() {
+    for &(name, lite, ref oracle) in STYLES.iter() {
+        for &seed in FIXED_SEEDS {
+            for &speed in SPEEDS {
+                assert_parity(name, lite, oracle, seed, Animation::Fixed(speed));
+            }
+        }
+    }
 }
 
 #[test]
 fn deterministic_for_same_seed() {
-    assert_eq!(
-        Avatar::new(&CONSTELLATION, "alice").to_string(),
-        Avatar::new(&CONSTELLATION, "alice").to_string()
-    );
+    let a = Avatar::new(&CONSTELLATION, "alice").to_string();
+    let b = Avatar::new(&CONSTELLATION, "alice").to_string();
+    assert_eq!(a, b);
 }
 
 #[test]
 fn distinct_seeds_differ() {
-    assert_ne!(
-        Avatar::new(&CONSTELLATION, "1").to_string(),
-        Avatar::new(&CONSTELLATION, "2").to_string()
-    );
+    let a = Avatar::new(&CONSTELLATION, "1").to_string();
+    let b = Avatar::new(&CONSTELLATION, "2").to_string();
+    assert_ne!(a, b);
 }
