@@ -1,23 +1,20 @@
 //! `DiceBear`'s key-based PRNG: FNV-1a over UTF-16 code units seeding
 //! Mulberry32.
 //!
-//! Every draw is derived independently from `(seed, key)`, so the call order is
-//! irrelevant. A "key" is several string fragments concatenated. Hashing walks
-//! them incrementally so no allocation is needed. This is a direct port of
-//! `@dicebear/prng`.
+//! Every draw is derived independently from `(seed, key)`, so the call order
+//! is irrelevant. A key is several string fragments concatenated, hashed
+//! incrementally so no allocation is needed.
 
 use core::iter;
 
+use crate::Animation;
 use crate::color::Rgb8;
 use crate::data::{ColorRef, ComponentDef, Palette, VariantDef};
 use crate::number::{equals, floor_index, math_round};
-use crate::{Animation, Style};
 
 const FNV_OFFSET: u32 = 0x811C_9DC5;
 const FNV_PRIME: u32 = 0x0100_0193;
 
-/// Maximum depth of `contrast_to`/`not_equal_to` references.
-const MAX_COLOR_DEPTH: usize = 8;
 /// Resolved `not_equal_to` stops tracked per color, alloc-free.
 const MAX_COLOR_REFS: usize = 8;
 
@@ -93,18 +90,15 @@ impl<'a> Prng<'a> {
         expect(clippy::suboptimal_flops, reason = "no FMA: matches JavaScript")
     )]
     pub fn float(&self, key: &[&str], min: f64, max: f64) -> f64 {
-        // No fused multiply-add: the product and sum are computed separately,
-        // matching JavaScript semantics.
         math_round((min + self.value(key) * (max - min)) * 10000.0) / 10000.0
     }
 
     /// Returns the element that lands at position 0 after a Fisher-Yates
-    /// shuffle of `[0, 1, ..., n-1]`, matching `Prng.shuffle`: the values are
-    /// sorted first, then swapped back to front.
+    /// shuffle of `[0, 1, ..., n-1]`.
     ///
     /// # Panics
     ///
-    /// Panics if `n > Palette::MAX_LEN` or `n == 0`.
+    /// Panics if `n == 0` or `n > Palette::MAX_LEN`.
     pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
         assert!(n <= Palette::MAX_LEN);
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
@@ -120,11 +114,7 @@ impl<'a> Prng<'a> {
     }
 
     /// Selects a variant for `component`, or `None` when it is not visible.
-    ///
-    /// `animation` mirrors `DiceBear`'s opt-in animation options: `Random`
-    /// restricts components with `animation`-tagged variants to those (their
-    /// zero weights make the pick uniform, at a per-seed speed), and `Fixed`
-    /// pins the variant of the `animation` component by name.
+    /// `animation` mirrors `DiceBear`'s opt-in animation options.
     pub fn variant<'b>(
         &self,
         name: &str,
@@ -157,9 +147,8 @@ impl<'a> Prng<'a> {
         }
     }
 
-    /// Weighted pick over the variants matching `pred`, matching
-    /// `Prng.weightedPick`: with a zero total weight the pick is uniform by
-    /// index. At least one variant must match.
+    /// Weighted pick matching `Prng.weightedPick`: a zero total weight makes
+    /// the pick uniform by index. At least one variant must match.
     fn weighted<'b>(
         &self,
         key: &[&str],
@@ -185,64 +174,40 @@ impl<'a> Prng<'a> {
         matching().last().expect("non-empty filtered set")
     }
 
-    /// Resolves `color` to its single output stop, mirroring `DiceBear`'s
-    /// `Resolver.resolveColor` for default options:
-    ///
-    /// - `not_equal_to` stops are dropped (falling back to the full palette
-    ///   when that would empty it),
-    /// - a `contrast_to` reference sorts the stops by descending WCAG contrast
-    ///   against the reference's first stop (stable, and no shuffle), and
-    /// - otherwise the surviving stops are shuffled.
-    ///
-    /// # Panics
-    ///
-    /// Panics on circular `contrast_to`/`not_equal_to` references.
-    pub fn resolve(&self, style: &Style<'_>, color: &ColorRef<'_>) -> Rgb8 {
-        self.resolve_depth(style, color, 0)
-    }
-
-    fn resolve_depth(&self, style: &Style<'_>, color: &ColorRef<'_>, depth: usize) -> Rgb8 {
-        assert!(depth < MAX_COLOR_DEPTH, "circular color reference");
+    /// Resolves `color` to its output stop, porting `DiceBear`'s
+    /// `Resolver.resolveColor` for default options: `not_equal_to` stops are
+    /// dropped (falling back to the full palette when that would empty it), a
+    /// `contrast_to` reference sorts the stops by descending WCAG contrast
+    /// (stable, no shuffle), otherwise the surviving stops are shuffled.
+    pub fn resolve(&self, color: &ColorRef<'_>) -> Rgb8 {
         let palette: &[Rgb8] = &color.palette;
 
-        let reference = |name: &str| {
-            style
-                .color(name)
-                .map(|referenced| self.resolve_depth(style, referenced, depth + 1))
-        };
-
-        // Resolved stops of the not_equal_to references (one per reference).
         let mut excluded: [Rgb8; MAX_COLOR_REFS] = [Rgb8::from_u24(0); MAX_COLOR_REFS];
         let mut excluded_count = 0;
-        for ref_name in color.not_equal_to {
-            if let Some(stop) = reference(ref_name) {
-                debug_assert!(excluded_count < MAX_COLOR_REFS, "too many references");
-                excluded[excluded_count] = stop;
-                excluded_count += 1;
-            }
+        for reference in color.not_equal_to {
+            debug_assert!(excluded_count < MAX_COLOR_REFS, "too many references");
+            excluded[excluded_count] = self.resolve(reference);
+            excluded_count += 1;
         }
         let excluded = &excluded[..excluded_count];
         let is_kept = |stop: &Rgb8| !excluded.contains(stop);
         let kept: usize = palette.iter().filter(|stop| is_kept(stop)).count();
 
-        if let Some(ref_name) = color.contrast_to {
-            // Identity order, then (when the reference resolves) a stable sort
-            // by descending contrast ratio.
+        if let Some(reference) = color.contrast_to {
+            let ref_color = self.resolve(reference);
             let mut ranked: [usize; Palette::MAX_LEN] = [0; Palette::MAX_LEN];
             for (i, slot) in ranked.iter_mut().enumerate().take(palette.len()) {
                 *slot = i;
             }
             let ranked = &mut ranked[..palette.len()];
-            if let Some(ref_color) = reference(ref_name) {
-                for i in 1..ranked.len() {
-                    let mut j = i;
-                    while j > 0
-                        && palette[ranked[j]].contrast_ratio(ref_color)
-                            > palette[ranked[j - 1]].contrast_ratio(ref_color)
-                    {
-                        ranked.swap(j, j - 1);
-                        j -= 1;
-                    }
+            for i in 1..ranked.len() {
+                let mut j = i;
+                while j > 0
+                    && palette[ranked[j]].contrast_ratio(ref_color)
+                        > palette[ranked[j - 1]].contrast_ratio(ref_color)
+                {
+                    ranked.swap(j, j - 1);
+                    j -= 1;
                 }
             }
             let first_kept = ranked.iter().copied().find(|&i| is_kept(&palette[i]));
@@ -250,7 +215,7 @@ impl<'a> Prng<'a> {
         }
 
         // The shuffle is drawn over the surviving stops, or the whole palette
-        // when nothing survives (upstream falls back to the unfiltered list).
+        // when nothing survives.
         let mut pool: [Rgb8; Palette::MAX_LEN] = [Rgb8::from_u24(0); Palette::MAX_LEN];
         let mut len = 0;
         for stop in palette {

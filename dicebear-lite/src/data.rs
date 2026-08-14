@@ -36,13 +36,8 @@ impl Deref for Palette<'_> {
 pub struct ColorRef<'a> {
     pub key: &'a str,
     pub palette: Palette<'a>,
-    /// Sort this color's stops by descending contrast against the first stop
-    /// of the referenced color, skipping the shuffle (`DiceBear`
-    /// `contrastTo`).
-    pub contrast_to: Option<&'a str>,
-    /// Drop stops equal to any resolved stop of the referenced colors
-    /// (`DiceBear` `notEqualTo`).
-    pub not_equal_to: &'a [&'a str],
+    pub contrast_to: Option<&'a Self>,
+    pub not_equal_to: &'a [&'a Self],
 }
 
 #[derive(Clone, Copy)]

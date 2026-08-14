@@ -615,27 +615,25 @@ const SHAPE: ColorRef = ColorRef {
         Rgb8::from_u24(0xF88C49),
     ]),
     contrast_to: None,
-    not_equal_to: &["background"],
+    not_equal_to: &[&BG],
 };
 #[expect(clippy::unreadable_literal, reason = "hex color values")]
 const EYES: ColorRef = ColorRef {
     key: "eyes",
     palette: Palette::new(&[Rgb8::from_u24(0x000000), Rgb8::from_u24(0xFFFFFF)]),
-    contrast_to: Some("shape"),
-    not_equal_to: &["shape"],
+    contrast_to: Some(&SHAPE),
+    not_equal_to: &[&SHAPE],
 };
 #[expect(clippy::unreadable_literal, reason = "hex color values")]
 const MOUTH: ColorRef = ColorRef {
     key: "mouth",
     palette: Palette::new(&[Rgb8::from_u24(0x000000), Rgb8::from_u24(0xFFFFFF)]),
-    contrast_to: Some("shape"),
-    not_equal_to: &["shape"],
+    contrast_to: Some(&SHAPE),
+    not_equal_to: &[&SHAPE],
 };
 
 // Curly quotes in METADATA are required for byte parity with DiceBear.
 const METADATA: &str = r#"<metadata xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><rdf:RDF><rdf:Description><dc:title>Thumbs</dc:title><dc:creator>DiceBear</dc:creator><dc:source xsi:type="dcterms:URI">https://www.dicebear.com</dc:source><dcterms:license xsi:type="dcterms:URI">https://creativecommons.org/publicdomain/zero/1.0/</dcterms:license><dc:rights>“Thumbs” (https://www.dicebear.com) by “DiceBear”, licensed under “CC0 1.0” (https://creativecommons.org/publicdomain/zero/1.0/)</dc:rights></rdf:Description></rdf:RDF></metadata>"#;
-
-const COLORS: &[ColorRef] = &[BG, SHAPE, EYES, MOUTH];
 
 pub static THUMBS: Style = Style {
     source_name: "Thumbs",
@@ -643,5 +641,5 @@ pub static THUMBS: Style = Style {
     canvas_w: 100.0,
     canvas_h: 100.0,
     canvas: Canvas::new(CANVAS),
-    colors: COLORS,
+    background: BG,
 };

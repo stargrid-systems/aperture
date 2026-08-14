@@ -1893,13 +1893,11 @@ const MOON: ColorRef = ColorRef {
 // Curly quotes in METADATA are required for byte parity with DiceBear.
 const METADATA: &str = r#"<metadata xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"><rdf:RDF><rdf:Description><dc:title>Planets</dc:title><dc:creator>DiceBear</dc:creator><dc:source xsi:type="dcterms:URI">https://www.dicebear.com</dc:source><dcterms:license xsi:type="dcterms:URI">https://creativecommons.org/publicdomain/zero/1.0/</dcterms:license><dc:rights>“Planets” (https://www.dicebear.com) by “DiceBear”, licensed under “CC0 1.0” (https://creativecommons.org/publicdomain/zero/1.0/)</dc:rights></rdf:Description></rdf:RDF></metadata>"#;
 
-const COLORS: &[ColorRef] = &[BG, PLANET, MOON];
-
 pub static PLANETS: Style = Style {
     source_name: "Planets",
     metadata: METADATA,
     canvas_w: 100.0,
     canvas_h: 100.0,
     canvas: Canvas::new(CANVAS),
-    colors: COLORS,
+    background: BG,
 };

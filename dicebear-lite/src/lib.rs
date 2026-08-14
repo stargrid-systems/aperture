@@ -2,18 +2,15 @@
 //!
 //! Produces SVG output byte-identical to `DiceBear` 10.x for default options,
 //! verified against the upstream crates at test time. The PRNG, number
-//! formatting, and serializer are ports of `@dicebear/core`. Only the subset a
-//! style exercises is implemented (no option validation, gradients-as-options,
-//! tags beyond `animation`, or text variables). Style definitions are plain
-//! Rust data behind feature gates, so no JSON is parsed.
+//! formatting, and serializer are ports of `@dicebear/core`; only the subset a
+//! style exercises is implemented. Style definitions are plain Rust data
+//! behind feature gates, so no JSON is parsed.
 //!
 //! `Avatar` implements [`core::fmt::Display`], so callers materialize the SVG
-//! with `Avatar::new(&STYLE, seed).to_string()` (in `alloc`/`std`) or by
-//! writing it into any [`core::fmt::Write`]. Construction is free: rendering
-//! is deferred to `Display`. The crate itself is `no_std` and alloc-free.
-//!
-//! `DiceBear`'s core is MIT-licensed. Attribution for the ported logic belongs
-//! to the `DiceBear` project (<https://www.dicebear.com>).
+//! with `Avatar::new(&STYLE, seed).to_string()` or by writing it into any
+//! [`core::fmt::Write`]. The crate is `no_std` and alloc-free. `DiceBear`'s
+//! core is MIT-licensed; attribution for the ported logic belongs to the
+//! `DiceBear` project (<https://www.dicebear.com>).
 //!
 //! # Features
 //!
@@ -24,9 +21,8 @@
 //! # Animation
 //!
 //! `Animation` mirrors `DiceBear`'s opt-in `tags: ["animation"]` and
-//! `animationVariant` options: styles ship an `animation` component whose
-//! speed variants carry zero weight, so [`Animation::Off`] (the default)
-//! renders the static avatar.
+//! `animationVariant` options. [`Animation::Off`] (the default) renders the
+//! static avatar.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -40,6 +36,13 @@ mod number;
 mod prng;
 mod renderer;
 
+#[cfg(feature = "constellation")]
+pub use self::styles::constellation::CONSTELLATION;
+#[cfg(feature = "planets")]
+pub use self::styles::planets::PLANETS;
+#[cfg(feature = "thumbs")]
+pub use self::styles::thumbs::THUMBS;
+
 mod styles {
     #[cfg(feature = "constellation")]
     pub mod constellation;
@@ -48,12 +51,6 @@ mod styles {
     #[cfg(feature = "thumbs")]
     pub mod thumbs;
 }
-#[cfg(feature = "constellation")]
-pub use self::styles::constellation::CONSTELLATION;
-#[cfg(feature = "planets")]
-pub use self::styles::planets::PLANETS;
-#[cfg(feature = "thumbs")]
-pub use self::styles::thumbs::THUMBS;
 
 /// A `DiceBear` style definition. Each field is `&'a` data baked into the
 /// binary by a style module (e.g. `CONSTELLATION`).
@@ -63,22 +60,11 @@ pub struct Style<'a> {
     pub(crate) canvas_w: f64,
     pub(crate) canvas_h: f64,
     pub(crate) canvas: Canvas<'a>,
-    /// Every named color, including `background`. Colors may reference each
-    /// other through `contrast_to`/`not_equal_to`.
-    pub(crate) colors: &'a [ColorRef<'a>],
+    pub(crate) background: ColorRef<'a>,
 }
 
-impl Style<'_> {
-    /// The named color definition for `name`, if the style defines it.
-    pub(crate) fn color(&self, name: &str) -> Option<&ColorRef<'_>> {
-        self.colors.iter().find(|color| color.key == name)
-    }
-}
-
-/// Animation speed for [`Animation::Fixed`].
-///
-/// The names match the `animation` component variants of the `DiceBear`
-/// styles.
+/// Animation speed for [`Animation::Fixed`], named after the `animation`
+/// component variants of the `DiceBear` styles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Speed {
     Fastest,
@@ -104,11 +90,6 @@ impl Speed {
 
 /// Opt-in avatar animation, mirroring `DiceBear`'s `tags` and
 /// `animationVariant` options.
-///
-/// [`Animation::Random`] turns on every component variant tagged `animation`
-/// (for the shipped styles: the animation component, at a per-seed speed).
-/// [`Animation::Fixed`] pins the speed instead; styles without an `animation`
-/// component render statically either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Animation {
     /// Static avatars (the `DiceBear` default).
@@ -120,10 +101,8 @@ pub enum Animation {
 }
 
 /// A `DiceBear` avatar for a given `seed`, [`Style`], and [`Animation`].
-///
-/// Rendering is deferred to [`Display`](core::fmt::Display), so constructing an
-/// `Avatar` is free. The same seed, style, and animation always produce
-/// byte-identical output.
+/// Rendering is deferred to [`Display`](core::fmt::Display), so construction
+/// is free.
 pub struct Avatar<'a> {
     style: &'a Style<'a>,
     seed: &'a str,

@@ -1,19 +1,13 @@
-//! SVG serializer. Walks the canvas element tree and streams markup
-//! byte-for-byte compatible with `DiceBear`'s `Renderer` for default options,
-//! without allocating.
+//! SVG serializer, byte-for-byte compatible with `DiceBear`'s `Renderer`
+//! for default options, without allocating.
 //!
-//! Output order is `<defs>` (encountered during the body walk: literal defs
-//! like masks and gradients, plus component variant bodies, nested components
-//! first) followed by the clipped body: the background and the canvas tree,
-//! with visible components as `<use>` references.
-//! Because `<defs>` must precede the body but is discovered while walking it,
-//! the renderer makes two deterministic passes: variant selection is fully
-//! keyed by `(seed, key)`, so recomputing it is safe.
+//! `<defs>` must precede the body but is discovered while walking it, so the
+//! renderer makes two deterministic passes. Variant selection is fully keyed
+//! by `(seed, key)`, so recomputing it is safe.
 
 use core::fmt::Write;
 use core::{fmt, ptr};
 
-use crate::color::Rgb8;
 use crate::data::{AttrVal, ComponentDef, Node, Range, VariantDef};
 use crate::number::{Num, equals};
 use crate::prng::{Prng, hash_u32};
@@ -22,20 +16,6 @@ use crate::{Animation, Style};
 const MAX_DEFS: usize = 32;
 
 struct Escaped<'a>(&'a str);
-
-/// Renders an optional resolved color, or nothing. Used for the background
-/// rect: upstream omits the `fill` attribute when the style defines no
-/// background palette.
-struct Rgb8Display(Option<Rgb8>);
-
-impl fmt::Display for Rgb8Display {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            Some(color) => write!(f, "{color}"),
-            None => Ok(()),
-        }
-    }
-}
 
 impl fmt::Display for Escaped<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -53,10 +33,8 @@ impl fmt::Display for Escaped<'_> {
     }
 }
 
-/// Tracks which `<defs>` entries have been emitted. Literal defs (children of
-/// `defs` elements) dedupe by their `id` attribute; component defs by
-/// component pointer plus variant name, which is what the formatted def id is
-/// derived from.
+/// `<defs>` dedup state: literal defs by `id`, component defs by pointer
+/// plus variant name.
 struct DefSink<'a> {
     seen_ids: [&'a str; MAX_DEFS],
     id_count: usize,
@@ -119,10 +97,9 @@ pub fn render(
         metadata = style.metadata
     )?;
 
-    // Pass 1: emit defs in body-walk encounter order. A component's def comes
-    // after the defs of everything nested inside its variant.
+    // Pass 1: emit defs in encounter order, nested components first.
     let mut sink = DefSink::new();
-    walk_defs(f, &prng, style, &style.canvas, animation, hash, &mut sink)?;
+    walk_defs(f, &prng, &style.canvas, animation, hash, &mut sink)?;
 
     write!(
         f,
@@ -132,31 +109,26 @@ pub fn render(
         h = Num(style.canvas_h)
     )?;
 
-    let background = style
-        .color("background")
-        .map(|color| prng.resolve(style, color));
     write!(
         f,
         "<g clip-path=\"url(#clip-{hash:08x})\"><rect width=\"{w}\" height=\"{h}\" fill=\"{bg}\"/>",
         w = Num(style.canvas_w),
         h = Num(style.canvas_h),
-        bg = Rgb8Display(background)
+        bg = prng.resolve(&style.background)
     )?;
 
-    // Pass 2: emit the body tree (visible components become <use> references).
+    // Pass 2: emit the body tree.
     for node in style.canvas.iter() {
-        write_node(f, &prng, style, node, animation, hash)?;
+        write_node(f, &prng, node, animation, hash)?;
     }
 
     f.write_str("</g></svg>")
 }
 
-/// Pass 1: diverts literal defs and registers component defs, nested
-/// components first (post-order).
+/// Pass 1: diverts literal defs and registers component defs post-order.
 fn walk_defs<'a>(
     f: &mut fmt::Formatter<'_>,
     prng: &Prng<'_>,
-    style: &Style<'a>,
     nodes: &[Node<'a>],
     animation: Animation,
     hash: u32,
@@ -176,11 +148,11 @@ fn walk_defs<'a>(
                         }
                         sink.push_id(id);
                     }
-                    write_node(f, prng, style, child, animation, hash)?;
+                    write_node(f, prng, child, animation, hash)?;
                 }
             }
             Node::El { children, .. } => {
-                walk_defs(f, prng, style, children, animation, hash, sink)?;
+                walk_defs(f, prng, children, animation, hash, sink)?;
             }
             Node::Component {
                 name, component, ..
@@ -188,9 +160,18 @@ fn walk_defs<'a>(
                 if let Some(variant) = prng.variant(name, component, animation)
                     && !sink.saw_comp(component, variant.name)
                 {
-                    walk_defs(f, prng, style, variant.elements, animation, hash, sink)?;
+                    walk_defs(f, prng, variant.elements, animation, hash, sink)?;
                     sink.push_comp(component, variant.name);
-                    write_def(f, prng, style, component.name, variant, animation, hash)?;
+                    write!(
+                        f,
+                        "<g id=\"{source}-{name}-{hash:08x}\">",
+                        source = component.name,
+                        name = variant.name
+                    )?;
+                    for el in variant.elements {
+                        write_node(f, prng, el, animation, hash)?;
+                    }
+                    f.write_str("</g>")?;
                 }
             }
             Node::Text { .. } => {}
@@ -199,30 +180,9 @@ fn walk_defs<'a>(
     Ok(())
 }
 
-fn write_def(
-    f: &mut fmt::Formatter<'_>,
-    prng: &Prng<'_>,
-    style: &Style<'_>,
-    source: &str,
-    variant: &VariantDef<'_>,
-    animation: Animation,
-    hash: u32,
-) -> fmt::Result {
-    write!(
-        f,
-        "<g id=\"{source}-{name}-{hash:08x}\">",
-        name = variant.name
-    )?;
-    for el in variant.elements {
-        write_node(f, prng, style, el, animation, hash)?;
-    }
-    f.write_str("</g>")
-}
-
 fn write_node(
     f: &mut fmt::Formatter<'_>,
     prng: &Prng<'_>,
-    style: &Style<'_>,
     node: &Node<'_>,
     animation: Animation,
     hash: u32,
@@ -239,7 +199,7 @@ fn write_node(
                 match value {
                     AttrVal::Lit(s) => write!(f, " {key}=\"{v}\"", key = key, v = Escaped(s))?,
                     AttrVal::Color(color) => {
-                        write!(f, " {key}=\"{}\"", prng.resolve(style, color))?;
+                        write!(f, " {key}=\"{}\"", prng.resolve(color))?;
                     }
                 }
             }
@@ -248,7 +208,7 @@ fn write_node(
             } else {
                 f.write_str(">")?;
                 for child in *children {
-                    write_node(f, prng, style, child, animation, hash)?;
+                    write_node(f, prng, child, animation, hash)?;
                 }
                 write!(f, "</{name}>")
             }
@@ -267,8 +227,8 @@ fn write_node(
     }
 }
 
-/// Emits the `<use>` reference for a visible component: the user transform
-/// (placement) first, then the style's translate and rotate inside it.
+/// Emits the `<use>` for a visible component: user transform first, then the
+/// style's translate and rotate.
 fn write_use<'a>(
     f: &mut fmt::Formatter<'_>,
     prng: &Prng<'_>,
