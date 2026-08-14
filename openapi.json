@@ -1964,12 +1964,12 @@
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/DownloadInput"
+                "$ref": "#/components/schemas/RotateCertificateInput"
               },
               "kind": {
                 "type": "string",
                 "enum": [
-                  "download"
+                  "rotate-certificate"
                 ]
               }
             }
@@ -1982,12 +1982,12 @@
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/RotateCertificateInput"
+                "$ref": "#/components/schemas/DownloadInput"
               },
               "kind": {
                 "type": "string",
                 "enum": [
-                  "rotate-certificate"
+                  "download"
                 ]
               }
             }
