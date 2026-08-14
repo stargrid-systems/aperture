@@ -1013,6 +1013,27 @@
         }
       }
     },
+    "/api/v1/setting-definitions": {
+      "get": {
+        "summary": "Lists the registered setting keys with their JSON Schemas.",
+        "operationId": "listSettingDefinitions",
+        "responses": {
+          "200": {
+            "description": "Setting definitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SettingDefinitionResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings": {
       "get": {
         "summary": "Lists every setting key with its current value.",
@@ -1988,12 +2009,12 @@
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/DownloadInput"
+                "$ref": "#/components/schemas/RotateCertificateInput"
               },
               "kind": {
                 "type": "string",
                 "enum": [
-                  "download"
+                  "rotate-certificate"
                 ]
               }
             }
@@ -2006,12 +2027,12 @@
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/RotateCertificateInput"
+                "$ref": "#/components/schemas/DownloadInput"
               },
               "kind": {
                 "type": "string",
                 "enum": [
-                  "rotate-certificate"
+                  "download"
                 ]
               }
             }
@@ -3295,6 +3316,23 @@
           "rotated": {
             "type": "boolean",
             "description": "Whether the leaf was actually re-issued."
+          }
+        }
+      },
+      "SettingDefinitionResponse": {
+        "type": "object",
+        "description": "A registered setting key with its JSON Schema.",
+        "required": [
+          "key",
+          "value_schema"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key string."
+          },
+          "value_schema": {
+            "description": "JSON Schema of the key's value."
           }
         }
       },
