@@ -93,7 +93,7 @@ impl TaskContext {
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
         self.inner
-            .spawn_value::<T::Output>(T::KIND, value, Some(self.id), self.initiator)
+            .spawn_value::<T::Output>(T::KEY, value, Some(self.id), self.initiator)
             .await
     }
 

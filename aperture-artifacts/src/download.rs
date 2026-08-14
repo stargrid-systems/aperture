@@ -68,7 +68,7 @@ impl DownloadDefinition {
 }
 
 impl TaskDefinition for DownloadDefinition {
-    const KIND: &'static str = "download";
+    const KEY: &'static str = "download";
     type Input = DownloadInput;
     type Output = DownloadOutput;
 

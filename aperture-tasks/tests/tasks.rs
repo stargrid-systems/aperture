@@ -29,7 +29,7 @@ struct DoubleOut {
 struct Double;
 
 impl TaskDefinition for Double {
-    const KIND: &'static str = "double";
+    const KEY: &'static str = "double";
     type Input = DoubleIn;
     type Output = DoubleOut;
 
@@ -60,7 +60,7 @@ struct Probe {
 }
 
 impl TaskDefinition for Probe {
-    const KIND: &'static str = "probe";
+    const KEY: &'static str = "probe";
     type Input = Empty;
     type Output = Empty;
 
@@ -92,7 +92,7 @@ struct Parent {
 }
 
 impl TaskDefinition for Parent {
-    const KIND: &'static str = "parent";
+    const KEY: &'static str = "parent";
     type Input = Empty;
     type Output = Empty;
 
@@ -116,7 +116,7 @@ impl TaskDefinition for Parent {
 struct Boom;
 
 impl TaskDefinition for Boom {
-    const KIND: &'static str = "boom";
+    const KEY: &'static str = "boom";
     type Input = Empty;
     type Output = Empty;
 
@@ -133,7 +133,7 @@ impl TaskDefinition for Boom {
 struct Fail;
 
 impl TaskDefinition for Fail {
-    const KIND: &'static str = "fail";
+    const KEY: &'static str = "fail";
     type Input = Empty;
     type Output = Empty;
 
