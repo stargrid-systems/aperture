@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
 use aperture_http::{
-    AppState, HttpServer, OpenApiSpec, RotateCertificateDefinition, Spectra, SpectraConfig,
-    SpectraWorker, install_default_rotation_schedule,
+    AppState, AvatarAnimation, AvatarStyle, HttpServer, OpenApiSpec, RotateCertificateDefinition,
+    Spectra, SpectraConfig, SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
 use aperture_settings::{SettingRegistry, Settings};
@@ -168,8 +168,11 @@ fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
     registry.register(RotateCertificateDefinition::new(artifacts));
 }
 
-/// Registers every setting scope the gateway supports.
-const fn register_settings(_registry: &mut SettingRegistry) {}
+/// Registers every setting the gateway supports.
+fn register_settings(registry: &mut SettingRegistry) {
+    registry.register(AvatarStyle::default());
+    registry.register(AvatarAnimation::default());
+}
 
 /// Resets the password for `username` and prints the new password to stdout.
 ///

@@ -2,7 +2,7 @@ use std::{env, fs, process, str};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, Role, Username};
-use aperture_http::{AppState, Spectra, SpectraConfig, app};
+use aperture_http::{AppState, AvatarAnimation, AvatarStyle, Spectra, SpectraConfig, app};
 use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, ArtifactId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
@@ -32,6 +32,15 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
         downloaded_at: at(downloaded_at),
         verified_at: None,
     }
+}
+
+/// Builds a `Settings` whose registry knows about every setting the gateway
+/// registers, so per-request reads fall back to definition defaults.
+fn test_settings(storage: &Storage) -> Settings {
+    let mut registry = SettingRegistry::new();
+    registry.register(AvatarStyle::default());
+    registry.register(AvatarAnimation::default());
+    Settings::new(storage.settings().unwrap(), registry)
 }
 
 async fn seeded_app() -> (Router, Artifacts, Storage, String) {
@@ -81,7 +90,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, Role::Admin).await.unwrap();
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let settings = test_settings(&storage);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -804,7 +813,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, role).await.unwrap();
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let settings = test_settings(&storage);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -884,7 +893,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         ActorId::SYSTEM,
     );
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new());
+    let settings = test_settings(&storage);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -1391,7 +1400,7 @@ async fn user_avatar_returns_svg_and_requires_auth() {
         .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    // Authenticated requests get immutable inline SVG.
+    // Authenticated requests get inline SVG plus a strong ETag.
     let response = app
         .clone()
         .oneshot(
@@ -1408,9 +1417,21 @@ async fn user_avatar_returns_svg_and_requires_auth() {
         response.headers().get(CONTENT_TYPE).unwrap(),
         "image/svg+xml"
     );
+    // The representation can be reconfigured at runtime, so it is not immutable.
     assert_eq!(
         response.headers().get(CACHE_CONTROL).unwrap(),
-        "public, max-age=31536000, immutable"
+        "public, max-age=31536000"
+    );
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .expect("avatar response carries an ETag")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        etag.starts_with("\"avatar-") && etag.ends_with('"'),
+        "expected a strong avatar etag, got {etag}"
     );
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let svg = str::from_utf8(&body).unwrap();
@@ -1420,6 +1441,120 @@ async fn user_avatar_returns_svg_and_requires_auth() {
     // The same user always renders the same avatar.
     let again = get_bytes(&app, &token, &uri).await;
     assert_eq!(again, body);
+}
+
+#[tokio::test]
+async fn avatar_style_setting_changes_output_and_etag() {
+    let (app, auth, storage) = fresh_app().await;
+    let (actor, token) = key_for_role(&auth, "dave", Role::Admin).await;
+    let user_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let uri = format!("/api/v1/users/{}/avatar", user_id.get());
+
+    // Baseline GET with the default (constellation) style.
+    let baseline = get_avatar(&app, &token, &uri).await;
+    let default_etag = baseline.etag;
+    let default_body = baseline.body;
+
+    // Flip the style to "planets" through the settings API.
+    let body = serde_json::to_vec(&json!({"value": "planets"})).unwrap();
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/settings/avatar_style")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+
+    // The new representation has a different ETag and SVG body.
+    let after = get_avatar(&app, &token, &uri).await;
+    assert_ne!(
+        after.etag, default_etag,
+        "changing the style must change the ETag"
+    );
+    assert_ne!(
+        after.body, default_body,
+        "changing the style must change the SVG body"
+    );
+
+    // An If-None-Match carrying the stale ETag still returns the new body.
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header(IF_NONE_MATCH, &default_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::OK);
+
+    // An If-None-Match carrying the current ETag yields a 304 with an empty
+    // body and the same ETag echoed back.
+    let fresh = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header(IF_NONE_MATCH, &after.etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fresh.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        fresh.headers().get(ETAG).unwrap().to_str().unwrap(),
+        after.etag
+    );
+    let fresh_body = to_bytes(fresh.into_body(), usize::MAX).await.unwrap();
+    assert!(fresh_body.is_empty(), "304 body must be empty");
+}
+
+struct AvatarResponse {
+    etag: String,
+    body: bytes::Bytes,
+}
+
+async fn get_avatar(app: &Router, token: &str, uri: &str) -> AvatarResponse {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    AvatarResponse { etag, body }
 }
 
 async fn get_bytes(app: &Router, token: &str, uri: &str) -> bytes::Bytes {

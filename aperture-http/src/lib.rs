@@ -18,6 +18,7 @@ use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
+pub use self::avatar::{AvatarAnimation, AvatarStyle};
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
@@ -26,6 +27,7 @@ pub use self::tls::{RotateCertificateDefinition, install_default_rotation_schedu
 
 mod api;
 mod auth;
+mod avatar;
 mod conditional;
 mod dto;
 mod error;
