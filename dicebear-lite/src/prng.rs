@@ -1,26 +1,30 @@
-//! `DiceBear`'s key-based PRNG: FNV-1a over UTF-16 code units seeding
-//! Mulberry32.
+//! Ports `DiceBear`'s key-based PRNG.
 //!
-//! Every draw is derived independently from `(seed, key)`, so the call order is
-//! irrelevant. A "key" is several string fragments concatenated. Hashing walks
-//! them incrementally so no allocation is needed. This is a direct port of
-//! `@dicebear/prng`.
+//! An FNV-1a hash of the seed and key over UTF-16 code units seeds Mulberry32.
+//!
+//! Every draw is derived independently from `(seed, key)`, so the call order
+//! is irrelevant. A key is several string fragments concatenated, hashed
+//! incrementally so no allocation is needed.
 
 use core::iter;
 
+use crate::Animation;
+use crate::color::Rgb8;
 use crate::data::{ColorRef, ComponentDef, Palette, VariantDef};
 use crate::number::{equals, floor_index, math_round};
 
 const FNV_OFFSET: u32 = 0x811C_9DC5;
 const FNV_PRIME: u32 = 0x0100_0193;
 
+/// Resolved `not_equal_to` stops tracked per color, alloc-free.
+const MAX_COLOR_REFS: usize = 8;
+
 #[inline]
 fn step(hash: u32, unit: u16) -> u32 {
     (hash ^ u32::from(unit)).wrapping_mul(FNV_PRIME)
 }
 
-/// FNV-1a over the UTF-16 code units of `seed`, a `:` separator, then the
-/// concatenated `key` fragments.
+/// FNV-1a over the UTF-16 code units of `seed`, `:`, then the `key` fragments.
 fn hash_seed_key(seed: &str, key: &[&str]) -> u32 {
     seed.encode_utf16()
         .chain(iter::once(0x3A_u16))
@@ -28,8 +32,9 @@ fn hash_seed_key(seed: &str, key: &[&str]) -> u32 {
         .fold(FNV_OFFSET, step)
 }
 
-/// FNV-1a hash of `prefix + ":" + s` over UTF-16 code units. Used for the
-/// per-seed `<defs>` id suffix.
+/// FNV-1a hash of `prefix + ":" + s` over UTF-16 code units.
+///
+/// Used for the per-seed `<defs>` id suffix.
 pub fn hash_u32(prefix: &str, s: &str) -> u32 {
     prefix
         .encode_utf16()
@@ -61,12 +66,10 @@ impl Mulberry32 {
     }
 }
 
-/// Const assertion: 3-bit packing of j values in a `u32` requires
-/// `(Palette::MAX_LEN - 1) * 3 <= u32::BITS`.
-const _: () = assert!((Palette::MAX_LEN - 1) * 3 <= u32::BITS as usize);
-
-/// Key-based pseudorandom value generator. Keys are passed as multiple
-/// fragments (e.g. `&[name, "Variant"]`) and concatenated for hashing.
+/// Key-based pseudorandom value generator.
+///
+/// Keys are passed as multiple fragments (e.g. `&[name, "Variant"]`) and
+/// concatenated for hashing.
 pub struct Prng<'a> {
     seed: &'a str,
 }
@@ -90,43 +93,38 @@ impl<'a> Prng<'a> {
         expect(clippy::suboptimal_flops, reason = "no FMA: matches JavaScript")
     )]
     pub fn float(&self, key: &[&str], min: f64, max: f64) -> f64 {
-        // No fused multiply-add: the product and sum are computed separately,
-        // matching JavaScript semantics.
         math_round((min + self.value(key) * (max - min)) * 10000.0) / 10000.0
     }
 
-    /// Returns the element that lands at position 0 after a Fisher-Yates
-    /// shuffle of `[0, 1, ..., n-1]`. Uses the trace-label algorithm: instead
-    /// of materializing the full permutation, it traces which original element
-    /// ends up at position 0 by following the chain of swaps that affect it.
+    /// Returns the element at position 0 after a Fisher-Yates shuffle.
+    ///
+    /// The shuffled sequence is `[0, 1, ..., n-1]`.
     ///
     /// # Panics
     ///
-    /// Panics if `n > Palette::MAX_LEN`.
+    /// Panics if `n == 0` or `n > Palette::MAX_LEN`.
     pub fn shuffle_zero(&self, key: &[&str], n: usize) -> usize {
         assert!(n <= Palette::MAX_LEN);
         let mut rng = Mulberry32::new(hash_seed_key(self.seed, key));
-        let mut val_at_0: usize = 0;
-        let mut j_packed: u32 = 0;
-
+        let mut perm = [0usize; Palette::MAX_LEN];
+        for (i, slot) in perm.iter_mut().enumerate().take(n) {
+            *slot = i;
+        }
         for i in (1..n).rev() {
             let j = floor_index(rng.next_float(), i + 1);
-            #[expect(clippy::cast_possible_truncation, reason = "j < Palette::MAX_LEN")]
-            let j_u32 = j as u32;
-            j_packed |= j_u32 << (3 * (i - 1));
-            if j == 0 {
-                val_at_0 = trace_label(i, n, j_packed);
-            }
+            perm.swap(i, j);
         }
-
-        val_at_0
+        perm[0]
     }
 
     /// Selects a variant for `component`, or `None` when it is not visible.
+    ///
+    /// `animation` mirrors `DiceBear`'s opt-in animation options.
     pub fn variant<'b>(
         &self,
         name: &str,
         component: &'b ComponentDef<'b>,
+        animation: Animation,
     ) -> Option<&'b VariantDef<'b>> {
         let variants = &component.variants;
         if variants.is_empty() {
@@ -138,48 +136,103 @@ impl<'a> Prng<'a> {
         ) {
             return None;
         }
-        let total: f64 = variants.iter().map(|v| v.weight).sum();
-        let value = self.value(&[name, "Variant"]);
+        match animation {
+            Animation::Off => Some(self.weighted(&[name, "Variant"], variants, |_| true)),
+            Animation::Random if variants.iter().any(|v| v.tags.contains(&"animation")) => {
+                Some(self.weighted(&[name, "Variant"], variants, |v| {
+                    v.tags.contains(&"animation")
+                }))
+            }
+            Animation::Fixed(speed) if component.name == "animation" => {
+                variants.iter().find(|v| v.name == speed.as_str())
+            }
+            Animation::Random | Animation::Fixed(_) => {
+                Some(self.weighted(&[name, "Variant"], variants, |_| true))
+            }
+        }
+    }
+
+    /// Weighted pick matching `Prng.weightedPick`.
+    ///
+    /// A zero total weight makes the pick uniform by index. At least one
+    /// variant must match.
+    fn weighted<'b>(
+        &self,
+        key: &[&str],
+        variants: &'b [VariantDef<'b>],
+        pred: impl Fn(&VariantDef) -> bool,
+    ) -> &'b VariantDef<'b> {
+        let matching = || variants.iter().filter(|v| pred(v));
+        let total: f64 = matching().map(|v| v.weight).sum();
+        let value = self.value(key);
+
         if equals(total, 0.0) {
-            return variants.get(floor_index(value, variants.len()));
+            let index = floor_index(value, matching().count());
+            return matching().nth(index).expect("non-empty filtered set");
         }
-        let threshold = value * total;
+
         let mut cumulative = 0.0;
-        for v in variants.iter() {
-            cumulative += v.weight;
-            if threshold < cumulative {
-                return Some(v);
+        for variant in matching() {
+            cumulative += variant.weight;
+            if value * total < cumulative {
+                return variant;
             }
         }
-        variants.last()
+        matching().last().expect("non-empty filtered set")
     }
 
-    /// Resolves `color` to its single shuffled stop.
-    pub fn color<'b>(&self, color: &ColorRef<'b>) -> Option<&'b str> {
-        let idx = self.shuffle_zero(&[color.key, "Color"], color.palette.len());
-        color.palette.get(idx).copied()
-    }
-}
+    /// Resolves `color` to its output stop for `DiceBear`'s default options.
+    ///
+    /// Ports `Resolver.resolveColor`: `not_equal_to` stops are dropped (falling
+    /// back to the full palette when that would empty it), a `contrast_to`
+    /// reference sorts the stops by descending WCAG contrast (stable, no
+    /// shuffle), otherwise the surviving stops are shuffled.
+    pub fn resolve(&self, color: &ColorRef<'_>) -> Rgb8 {
+        let palette: &[Rgb8] = &color.palette;
 
-/// Traces which original element is at `start` by following the chain of
-/// Fisher-Yates swaps. At each position, finds the smallest step `k` (where
-/// `k > pos`) whose random index `j_k` targeted `pos`. If found, the element
-/// at `pos` came from position `k`, so recurse. If not found, the element is
-/// still at its original position.
-fn trace_label(start: usize, n: usize, j_packed: u32) -> usize {
-    let mut pos = start;
-    loop {
-        let mut found = false;
-        for k in (pos + 1)..n {
-            let j_k = ((j_packed >> (3 * (k - 1))) & 7) as usize;
-            if j_k == pos {
-                pos = k;
-                found = true;
-                break;
+        let mut excluded: [Rgb8; MAX_COLOR_REFS] = [Rgb8::from_u24(0); MAX_COLOR_REFS];
+        let mut excluded_count = 0;
+        for reference in color.not_equal_to {
+            debug_assert!(excluded_count < MAX_COLOR_REFS, "too many references");
+            excluded[excluded_count] = self.resolve(reference);
+            excluded_count += 1;
+        }
+        let excluded = &excluded[..excluded_count];
+        let is_kept = |stop: &Rgb8| !excluded.contains(stop);
+        let kept: usize = palette.iter().filter(|stop| is_kept(stop)).count();
+
+        if let Some(reference) = color.contrast_to {
+            let ref_color = self.resolve(reference);
+            let mut ranked: [usize; Palette::MAX_LEN] = [0; Palette::MAX_LEN];
+            for (i, slot) in ranked.iter_mut().enumerate().take(palette.len()) {
+                *slot = i;
+            }
+            let ranked = &mut ranked[..palette.len()];
+            for i in 1..ranked.len() {
+                let mut j = i;
+                while j > 0
+                    && palette[ranked[j]].contrast_ratio(ref_color)
+                        > palette[ranked[j - 1]].contrast_ratio(ref_color)
+                {
+                    ranked.swap(j, j - 1);
+                    j -= 1;
+                }
+            }
+            let first_kept = ranked.iter().copied().find(|&i| is_kept(&palette[i]));
+            return palette[first_kept.unwrap_or(ranked[0])];
+        }
+
+        // The shuffle is drawn over the surviving stops, or the whole palette
+        // when nothing survives.
+        let mut pool: [Rgb8; Palette::MAX_LEN] = [Rgb8::from_u24(0); Palette::MAX_LEN];
+        let mut len = 0;
+        for stop in palette {
+            if kept == 0 || is_kept(stop) {
+                pool[len] = *stop;
+                len += 1;
             }
         }
-        if !found {
-            return pos;
-        }
+        debug_assert!(len > 0, "palette is never empty");
+        pool[self.shuffle_zero(&[color.key, "Color"], len)]
     }
 }

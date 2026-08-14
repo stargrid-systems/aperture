@@ -2,29 +2,32 @@
 
 use core::ops::Deref;
 
+use crate::color::Rgb8;
+
 /// Min/max range for PRNG-driven transforms.
 #[derive(Clone, Copy)]
 pub struct Range(pub f64, pub f64);
 
-/// Color palette stops. Must be non-empty and limited to `MAX_LEN` entries,
-/// enforced at construction.
+/// Color palette stops.
+///
+/// Must be non-empty, limited to `MAX_LEN` entries, enforced at construction.
 #[derive(Clone, Copy)]
 pub struct Palette<'a> {
-    stops: &'a [&'a str],
+    stops: &'a [Rgb8],
 }
 
 impl<'a> Palette<'a> {
-    pub const MAX_LEN: usize = 8;
+    pub const MAX_LEN: usize = 16;
 
-    pub const fn new(stops: &'a [&'a str]) -> Self {
+    pub const fn new(stops: &'a [Rgb8]) -> Self {
         assert!(!stops.is_empty(), "palette must not be empty");
         assert!(stops.len() <= Self::MAX_LEN, "palette exceeds MAX_LEN");
         Self { stops }
     }
 }
 
-impl<'a> Deref for Palette<'a> {
-    type Target = [&'a str];
+impl Deref for Palette<'_> {
+    type Target = [Rgb8];
     fn deref(&self) -> &Self::Target {
         self.stops
     }
@@ -34,6 +37,8 @@ impl<'a> Deref for Palette<'a> {
 pub struct ColorRef<'a> {
     pub key: &'a str,
     pub palette: Palette<'a>,
+    pub contrast_to: Option<&'a Self>,
+    pub not_equal_to: &'a [&'a Self],
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +53,8 @@ pub enum Node<'a> {
         attrs: &'a [(&'a str, AttrVal<'a>)],
         children: &'a [Self],
     },
+    /// Escaped character data inside the parent element.
+    Text { value: &'a str },
     Component {
         name: &'a str,
         component: &'a ComponentDef<'a>,
@@ -58,13 +65,18 @@ pub enum Node<'a> {
 pub struct VariantDef<'a> {
     pub name: &'a str,
     pub weight: f64,
+    /// Variant tags, e.g. `&["animation"]` on animation-speed variants.
+    ///
+    /// Drives [`Animation::Random`](crate::Animation::Random) selection.
+    pub tags: &'a [&'a str],
     pub elements: &'a [Node<'a>],
 }
 
-/// Variant definitions, verified sorted by name at construction. The sort
-/// order is load-bearing: the resolver's weighted pick walks variants in
-/// definition order, so the order must match `DiceBear`'s name-sorted
-/// iteration.
+/// Variant definitions, verified sorted by name at construction.
+///
+/// The sort order is load-bearing: the resolver's weighted pick walks
+/// variants in definition order, so the order must match `DiceBear`'s
+/// name-sorted iteration.
 #[derive(Clone, Copy)]
 pub struct Variants<'a> {
     variants: &'a [VariantDef<'a>],
@@ -111,7 +123,9 @@ pub struct ComponentDef<'a> {
     pub variants: Variants<'a>,
 }
 
-/// Canvas node slice. Limited to `MAX_LEN` nodes, enforced at construction.
+/// Canvas node slice.
+///
+/// Limited to `MAX_LEN` nodes, enforced at construction.
 pub struct Canvas<'a> {
     nodes: &'a [Node<'a>],
 }

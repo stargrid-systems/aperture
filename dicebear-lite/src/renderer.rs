@@ -1,22 +1,20 @@
-//! SVG serializer. Walks the canvas element tree and streams markup
-//! byte-for-byte compatible with `DiceBear`'s `Renderer` for default options,
-//! without allocating.
+//! SVG serializer, byte-for-byte compatible with `DiceBear`'s `Renderer`.
 //!
-//! Output order is `<defs>` (component variant bodies deduped, then the
-//! clipPath) followed by the clipped body (background plus `<use>` references).
-//! Because `<defs>` must precede the body but is discovered while walking it,
-//! the renderer makes two deterministic passes: variant selection is fully
-//! keyed by `(seed, key)`, so recomputing it is safe.
+//! Default options only, without allocating.
+//!
+//! `<defs>` must precede the body but is discovered while walking it, so the
+//! renderer makes two deterministic passes. Variant selection is fully keyed
+//! by `(seed, key)`, so recomputing it is safe.
 
+use core::fmt;
 use core::fmt::Write;
-use core::{fmt, ptr};
 
-use crate::Style;
-use crate::data::{AttrVal, Node, Range, VariantDef};
+use crate::data::{AttrVal, ComponentDef, Node, Range, VariantDef};
 use crate::number::{Num, equals};
 use crate::prng::{Prng, hash_u32};
+use crate::{Animation, Style};
 
-const MAX_GRADIENTS: usize = 4;
+const MAX_DEFS: usize = 32;
 
 struct Escaped<'a>(&'a str);
 
@@ -36,8 +34,55 @@ impl fmt::Display for Escaped<'_> {
     }
 }
 
-#[expect(clippy::too_many_lines, reason = "two-pass SVG renderer")]
-pub fn render(f: &mut fmt::Formatter<'_>, style: &Style<'_>, seed: &str) -> fmt::Result {
+/// Dedup state for `<defs>`.
+///
+/// Literal defs by `id`, component defs by source and variant name.
+struct DefSink<'a> {
+    seen_ids: [&'a str; MAX_DEFS],
+    id_count: usize,
+    seen_comps: [(&'a str, &'a str); MAX_DEFS],
+    comp_count: usize,
+}
+
+impl<'a> DefSink<'a> {
+    const fn new() -> Self {
+        Self {
+            seen_ids: [""; MAX_DEFS],
+            id_count: 0,
+            seen_comps: [("", ""); MAX_DEFS],
+            comp_count: 0,
+        }
+    }
+
+    fn saw_id(&self, id: &str) -> bool {
+        self.seen_ids[..self.id_count].contains(&id)
+    }
+
+    fn push_id(&mut self, id: &'a str) {
+        debug_assert!(self.id_count < MAX_DEFS, "too many defs");
+        self.seen_ids[self.id_count] = id;
+        self.id_count += 1;
+    }
+
+    fn saw_comp(&self, source: &str, variant: &str) -> bool {
+        self.seen_comps[..self.comp_count]
+            .iter()
+            .any(|&(seen_source, seen_variant)| seen_source == source && seen_variant == variant)
+    }
+
+    fn push_comp(&mut self, source: &'a str, variant: &'a str) {
+        debug_assert!(self.comp_count < MAX_DEFS, "too many defs");
+        self.seen_comps[self.comp_count] = (source, variant);
+        self.comp_count += 1;
+    }
+}
+
+pub fn render(
+    f: &mut fmt::Formatter<'_>,
+    style: &Style<'_>,
+    seed: &str,
+    animation: Animation,
+) -> fmt::Result {
     let prng = Prng::new(seed);
     let hash = hash_u32(style.source_name, seed);
 
@@ -54,48 +99,9 @@ pub fn render(f: &mut fmt::Formatter<'_>, style: &Style<'_>, seed: &str) -> fmt:
         metadata = style.metadata
     )?;
 
-    let mut seen_grad: [&str; MAX_GRADIENTS] = [""; MAX_GRADIENTS];
-    let mut grad_count: usize = 0;
-
-    // Pass 1: emit unique defs. Dedup by component pointer + variant name.
-    for (i, node) in style.canvas.iter().enumerate() {
-        let Node::Component {
-            name, component, ..
-        } = node
-        else {
-            continue;
-        };
-        let Some(variant) = prng.variant(name, component) else {
-            continue;
-        };
-
-        let is_dup = style.canvas.iter().take(i).any(|earlier| {
-            let Node::Component {
-                name: en,
-                component: ec,
-                ..
-            } = earlier
-            else {
-                return false;
-            };
-            prng.variant(en, ec)
-                .is_some_and(|ev| ptr::eq(*ec, *component) && ev.name == variant.name)
-        });
-
-        if is_dup {
-            continue;
-        }
-
-        write_def(
-            f,
-            &prng,
-            component.name,
-            variant,
-            hash,
-            &mut seen_grad,
-            &mut grad_count,
-        )?;
-    }
+    // Pass 1: emit defs in encounter order, nested components first.
+    let mut sink = DefSink::new();
+    walk_defs(f, &prng, &style.canvas, animation, hash, &mut sink)?;
 
     write!(
         f,
@@ -105,118 +111,86 @@ pub fn render(f: &mut fmt::Formatter<'_>, style: &Style<'_>, seed: &str) -> fmt:
         h = Num(style.canvas_h)
     )?;
 
-    let bg = prng.color(&style.background).unwrap_or("");
     write!(
         f,
         "<g clip-path=\"url(#clip-{hash:08x})\"><rect width=\"{w}\" height=\"{h}\" fill=\"{bg}\"/>",
         w = Num(style.canvas_w),
         h = Num(style.canvas_h),
-        bg = Escaped(bg)
+        bg = prng.resolve(&style.background)
     )?;
 
-    // Pass 2: emit <use> per visible component.
+    // Pass 2: emit the body tree.
     for node in style.canvas.iter() {
-        let Node::Component {
-            name,
-            component,
-            attrs,
-        } = node
-        else {
-            continue;
-        };
-        let Some(variant) = prng.variant(name, component) else {
-            continue;
-        };
-
-        let rotate = component.rotate.map_or(0.0, |Range(min, max)| {
-            prng.float(&[name, "Rotate"], min, max)
-        });
-        let translate_x = component.translate.map_or(0.0, |(Range(min, max), _)| {
-            prng.float(&[name, "TranslateX"], min, max)
-        });
-        let translate_y = component.translate.map_or(0.0, |(_, Range(min, max))| {
-            prng.float(&[name, "TranslateY"], min, max)
-        });
-
-        let width = component.width.unwrap_or(0.0);
-        let height = component.height.unwrap_or(0.0);
-        let user_transform = lit_attr(attrs, "transform");
-
-        let has_translate = !equals(translate_x, 0.0) || !equals(translate_y, 0.0);
-        let has_rotate = !equals(rotate, 0.0);
-
-        f.write_str("<use")?;
-        if user_transform.is_some() || has_translate || has_rotate {
-            f.write_str(" transform=\"")?;
-            let mut wrote = if let Some(ut) = user_transform {
-                f.write_str(ut)?;
-                true
-            } else {
-                false
-            };
-            if has_translate {
-                if wrote {
-                    f.write_str(" ")?;
-                }
-                write!(
-                    f,
-                    "translate({x}, {y})",
-                    x = Num(translate_x / 100.0 * width),
-                    y = Num(translate_y / 100.0 * height)
-                )?;
-                wrote = true;
-            }
-            if has_rotate {
-                if wrote {
-                    f.write_str(" ")?;
-                }
-                write!(
-                    f,
-                    "rotate({a}, {cx}, {cy})",
-                    a = Num(rotate),
-                    cx = Num(width / 2.0),
-                    cy = Num(height / 2.0)
-                )?;
-            }
-            f.write_str("\"")?;
-        }
-        write!(
-            f,
-            " href=\"#{source}-{variant_name}-{hash:08x}\"/>",
-            source = component.name,
-            variant_name = variant.name
-        )?;
+        write_node(f, &prng, node, animation, hash)?;
     }
 
     f.write_str("</g></svg>")
 }
 
-fn write_def<'b>(
+/// Pass 1: diverts literal defs and registers component defs post-order.
+fn walk_defs<'a>(
     f: &mut fmt::Formatter<'_>,
     prng: &Prng<'_>,
-    source: &str,
-    variant: &VariantDef<'b>,
+    nodes: &[Node<'a>],
+    animation: Animation,
     hash: u32,
-    seen_grad: &mut [&'b str],
-    grad_count: &mut usize,
+    sink: &mut DefSink<'a>,
 ) -> fmt::Result {
-    divert_defs(f, prng, variant.elements, seen_grad, grad_count)?;
-
-    write!(
-        f,
-        "<g id=\"{source}-{name}-{hash:08x}\">",
-        source = source,
-        name = variant.name,
-    )?;
-    for el in variant.elements {
-        write_node(f, prng, el)?;
+    for node in nodes {
+        match node {
+            Node::El {
+                name: "defs",
+                children,
+                ..
+            } => {
+                for child in *children {
+                    if let Some(id) = node_id(child) {
+                        if sink.saw_id(id) {
+                            continue;
+                        }
+                        sink.push_id(id);
+                    }
+                    write_node(f, prng, child, animation, hash)?;
+                }
+            }
+            Node::El { children, .. } => {
+                walk_defs(f, prng, children, animation, hash, sink)?;
+            }
+            Node::Component {
+                name, component, ..
+            } => {
+                if let Some(variant) = prng.variant(name, component, animation)
+                    && !sink.saw_comp(component.name, variant.name)
+                {
+                    walk_defs(f, prng, variant.elements, animation, hash, sink)?;
+                    sink.push_comp(component.name, variant.name);
+                    write!(
+                        f,
+                        "<g id=\"{source}-{name}-{hash:08x}\">",
+                        source = component.name,
+                        name = variant.name
+                    )?;
+                    for el in variant.elements {
+                        write_node(f, prng, el, animation, hash)?;
+                    }
+                    f.write_str("</g>")?;
+                }
+            }
+            Node::Text { .. } => {}
+        }
     }
-    f.write_str("</g>")
+    Ok(())
 }
 
-fn write_node(f: &mut fmt::Formatter<'_>, prng: &Prng<'_>, node: &Node<'_>) -> fmt::Result {
+fn write_node(
+    f: &mut fmt::Formatter<'_>,
+    prng: &Prng<'_>,
+    node: &Node<'_>,
+    animation: Animation,
+    hash: u32,
+) -> fmt::Result {
     match node {
-        Node::El { name, .. } if *name == "defs" => Ok(()),
+        Node::El { name: "defs", .. } => Ok(()),
         Node::El {
             name,
             attrs,
@@ -227,9 +201,7 @@ fn write_node(f: &mut fmt::Formatter<'_>, prng: &Prng<'_>, node: &Node<'_>) -> f
                 match value {
                     AttrVal::Lit(s) => write!(f, " {key}=\"{v}\"", key = key, v = Escaped(s))?,
                     AttrVal::Color(color) => {
-                        if let Some(resolved) = prng.color(color) {
-                            write!(f, " {key}=\"{v}\"", key = key, v = Escaped(resolved))?;
-                        }
+                        write!(f, " {key}=\"{}\"", prng.resolve(color))?;
                     }
                 }
             }
@@ -238,45 +210,95 @@ fn write_node(f: &mut fmt::Formatter<'_>, prng: &Prng<'_>, node: &Node<'_>) -> f
             } else {
                 f.write_str(">")?;
                 for child in *children {
-                    write_node(f, prng, child)?;
+                    write_node(f, prng, child, animation, hash)?;
                 }
                 write!(f, "</{name}>")
             }
         }
-        Node::Component { .. } => Ok(()),
+        Node::Text { value } => write!(f, "{}", Escaped(value)),
+        Node::Component {
+            name,
+            component,
+            attrs,
+        } => {
+            if let Some(variant) = prng.variant(name, component, animation) {
+                write_use(f, prng, name, component, attrs, variant, hash)?;
+            }
+            Ok(())
+        }
     }
 }
 
-fn divert_defs<'b>(
+/// Emits the `<use>` for a visible component.
+///
+/// User transform first, then the style's translate and rotate.
+fn write_use<'a>(
     f: &mut fmt::Formatter<'_>,
     prng: &Prng<'_>,
-    nodes: &[Node<'b>],
-    seen_grad: &mut [&'b str],
-    grad_count: &mut usize,
+    name: &str,
+    component: &'a ComponentDef<'a>,
+    attrs: &'a [(&'a str, AttrVal<'a>)],
+    variant: &VariantDef<'a>,
+    hash: u32,
 ) -> fmt::Result {
-    for node in nodes {
-        if let Node::El {
-            name: "defs",
-            children,
-            ..
-        } = node
-        {
-            for child in *children {
-                if let Some(id) = node_id(child) {
-                    if seen_grad[..*grad_count].contains(&id) {
-                        continue;
-                    }
-                    debug_assert!(*grad_count < MAX_GRADIENTS, "too many gradients");
-                    seen_grad[*grad_count] = id;
-                    *grad_count += 1;
-                }
-                write_node(f, prng, child)?;
+    let rotate = component.rotate.map_or(0.0, |Range(min, max)| {
+        prng.float(&[name, "Rotate"], min, max)
+    });
+    let translate_x = component.translate.map_or(0.0, |(Range(min, max), _)| {
+        prng.float(&[name, "TranslateX"], min, max)
+    });
+    let translate_y = component.translate.map_or(0.0, |(_, Range(min, max))| {
+        prng.float(&[name, "TranslateY"], min, max)
+    });
+
+    let width = component.width.unwrap_or(0.0);
+    let height = component.height.unwrap_or(0.0);
+    let user_transform = lit_attr(attrs, "transform");
+
+    let has_translate = !equals(translate_x, 0.0) || !equals(translate_y, 0.0);
+    let has_rotate = !equals(rotate, 0.0);
+
+    f.write_str("<use")?;
+    if user_transform.is_some() || has_translate || has_rotate {
+        f.write_str(" transform=\"")?;
+        let mut wrote = if let Some(ut) = user_transform {
+            f.write_str(ut)?;
+            true
+        } else {
+            false
+        };
+        if has_translate {
+            if wrote {
+                f.write_str(" ")?;
             }
-        } else if let Node::El { children, .. } = node {
-            divert_defs(f, prng, children, seen_grad, grad_count)?;
+            write!(
+                f,
+                "translate({x}, {y})",
+                x = Num(translate_x / 100.0 * width),
+                y = Num(translate_y / 100.0 * height)
+            )?;
+            wrote = true;
         }
+        if has_rotate {
+            if wrote {
+                f.write_str(" ")?;
+            }
+            write!(
+                f,
+                "rotate({a}, {cx}, {cy})",
+                a = Num(rotate),
+                cx = Num(width / 2.0),
+                cy = Num(height / 2.0)
+            )?;
+        }
+        f.write_str("\"")?;
     }
-    Ok(())
+    write!(
+        f,
+        " href=\"#{source}-{variant_name}-{hash:08x}\"/>",
+        source = component.name,
+        variant_name = variant.name
+    )
 }
 
 fn node_id<'a>(node: &Node<'a>) -> Option<&'a str> {

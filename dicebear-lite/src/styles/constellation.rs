@@ -1,6 +1,7 @@
 // DiceBear 10.x constellation style (CC0 1.0).
 
 use crate::Style;
+use crate::color::Rgb8;
 use crate::data::{
     AttrVal, Canvas, ColorRef, ComponentDef, Node, Palette, Range, VariantDef, Variants,
 };
@@ -17,6 +18,7 @@ static COMP_COMET: ComponentDef = ComponentDef {
         VariantDef {
             name: "long",
             weight: 1.0,
+            tags: &[],
             elements: &[Node::El {
                 name: "g",
                 attrs: &[("class", AttrVal::Lit("dbca-comet"))],
@@ -81,6 +83,7 @@ static COMP_COMET: ComponentDef = ComponentDef {
         VariantDef {
             name: "short",
             weight: 1.0,
+            tags: &[],
             elements: &[Node::El {
                 name: "g",
                 attrs: &[("class", AttrVal::Lit("dbca-comet"))],
@@ -157,6 +160,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "andromeda",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -252,6 +256,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "aquila",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -378,6 +383,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "auriga",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -473,6 +479,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "bear",
             weight: 0.5,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -629,6 +636,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "bigDipper",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -734,6 +742,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "bootes",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -859,6 +868,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "camelopardalis",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -944,6 +954,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "cassiopeia",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1028,6 +1039,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "cepheus",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1113,6 +1125,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "coronaBorealis",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1218,6 +1231,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "corvus",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1313,6 +1327,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "delphinus",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1397,6 +1412,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "dice",
             weight: 0.5,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1516,6 +1532,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "grus",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1642,6 +1659,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "lacerta",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1737,6 +1755,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "lynx",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1852,6 +1871,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "lyra",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -1937,6 +1957,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "orion",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -2043,6 +2064,7 @@ static COMP_CONSTELLATION: ComponentDef = ComponentDef {
         VariantDef {
             name: "ursaMinor",
             weight: 1.0,
+            tags: &[],
             elements: &[
                 Node::El {
                     name: "path",
@@ -2160,6 +2182,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
         VariantDef {
             name: "faint",
             weight: 3.0,
+            tags: &[],
             elements: &[Node::El {
                 name: "circle",
                 attrs: &[
@@ -2175,6 +2198,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
         VariantDef {
             name: "medium",
             weight: 2.0,
+            tags: &[],
             elements: &[Node::El {
                 name: "g",
                 attrs: &[("class", AttrVal::Lit("dbca-tw-medium"))],
@@ -2194,6 +2218,7 @@ static COMP_STAR: ComponentDef = ComponentDef {
         VariantDef {
             name: "small",
             weight: 3.0,
+            tags: &[],
             elements: &[Node::El {
                 name: "g",
                 attrs: &[("class", AttrVal::Lit("dbca-tw-small"))],
@@ -2221,11 +2246,169 @@ static COMP_ANIMATION: ComponentDef = ComponentDef {
     translate: None,
     rotate: None,
 
-    variants: Variants::new(&[VariantDef {
-        name: "none",
-        weight: 1.0,
-        elements: &[],
-    }]),
+    variants: Variants::new(&[
+        VariantDef {
+            name: "fast",
+            weight: 0.0,
+            tags: &["animation"],
+            elements: &[
+                Node::El {
+                    name: "g",
+                    attrs: &[("class", AttrVal::Lit("dbca-fast"))],
+                    children: &[],
+                },
+                Node::El {
+                    name: "style",
+                    attrs: &[],
+                    children: &[Node::Text {
+                        value: "svg:has(.dbca-fast){--dbca-t:0.9;--dbca-p:running}@media \
+                                (prefers-reduced-motion: no-preference){@keyframes \
+                                dbcaTw{0%,100%{opacity:1}50%{opacity:.3}} @keyframes \
+                                dbcaComet{0%{transform:translate(16px,-6.6px);opacity:0}8%\
+                                {opacity:1}26%{transform:translate(-36px,15px);opacity:0}100%\
+                                {transform:translate(-36px,15px);opacity:0}} \
+                                .dbca-tw-small{animation:dbcaTw calc(var(--dbca-t,1)*4.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*1.1s)} \
+                                .dbca-tw-medium{animation:dbcaTw calc(var(--dbca-t,1)*5.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*2.2s)} \
+                                .dbca-comet{animation:dbcaComet calc(var(--dbca-t,1)*10.5s) \
+                                ease-in infinite}.dbca-tw-small,.dbca-tw-medium,.\
+                                dbca-comet{animation-play-state:var(--dbca-p,paused)}}",
+                    }],
+                },
+            ],
+        },
+        VariantDef {
+            name: "fastest",
+            weight: 0.0,
+            tags: &["animation"],
+            elements: &[
+                Node::El {
+                    name: "g",
+                    attrs: &[("class", AttrVal::Lit("dbca-fastest"))],
+                    children: &[],
+                },
+                Node::El {
+                    name: "style",
+                    attrs: &[],
+                    children: &[Node::Text {
+                        value: "svg:has(.dbca-fastest){--dbca-t:0.75;--dbca-p:running}@media \
+                                (prefers-reduced-motion: no-preference){@keyframes \
+                                dbcaTw{0%,100%{opacity:1}50%{opacity:.3}} @keyframes \
+                                dbcaComet{0%{transform:translate(16px,-6.6px);opacity:0}8%\
+                                {opacity:1}26%{transform:translate(-36px,15px);opacity:0}100%\
+                                {transform:translate(-36px,15px);opacity:0}} \
+                                .dbca-tw-small{animation:dbcaTw calc(var(--dbca-t,1)*4.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*1.1s)} \
+                                .dbca-tw-medium{animation:dbcaTw calc(var(--dbca-t,1)*5.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*2.2s)} \
+                                .dbca-comet{animation:dbcaComet calc(var(--dbca-t,1)*10.5s) \
+                                ease-in infinite}.dbca-tw-small,.dbca-tw-medium,.\
+                                dbca-comet{animation-play-state:var(--dbca-p,paused)}}",
+                    }],
+                },
+            ],
+        },
+        VariantDef {
+            name: "medium",
+            weight: 0.0,
+            tags: &["animation"],
+            elements: &[
+                Node::El {
+                    name: "g",
+                    attrs: &[("class", AttrVal::Lit("dbca-medium"))],
+                    children: &[],
+                },
+                Node::El {
+                    name: "style",
+                    attrs: &[],
+                    children: &[Node::Text {
+                        value: "svg:has(.dbca-medium){--dbca-t:1;--dbca-p:running}@media \
+                                (prefers-reduced-motion: no-preference){@keyframes \
+                                dbcaTw{0%,100%{opacity:1}50%{opacity:.3}} @keyframes \
+                                dbcaComet{0%{transform:translate(16px,-6.6px);opacity:0}8%\
+                                {opacity:1}26%{transform:translate(-36px,15px);opacity:0}100%\
+                                {transform:translate(-36px,15px);opacity:0}} \
+                                .dbca-tw-small{animation:dbcaTw calc(var(--dbca-t,1)*4.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*1.1s)} \
+                                .dbca-tw-medium{animation:dbcaTw calc(var(--dbca-t,1)*5.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*2.2s)} \
+                                .dbca-comet{animation:dbcaComet calc(var(--dbca-t,1)*10.5s) \
+                                ease-in infinite}.dbca-tw-small,.dbca-tw-medium,.\
+                                dbca-comet{animation-play-state:var(--dbca-p,paused)}}",
+                    }],
+                },
+            ],
+        },
+        VariantDef {
+            name: "none",
+            weight: 1.0,
+            tags: &[],
+            elements: &[],
+        },
+        VariantDef {
+            name: "slow",
+            weight: 0.0,
+            tags: &["animation"],
+            elements: &[
+                Node::El {
+                    name: "g",
+                    attrs: &[("class", AttrVal::Lit("dbca-slow"))],
+                    children: &[],
+                },
+                Node::El {
+                    name: "style",
+                    attrs: &[],
+                    children: &[Node::Text {
+                        value: "svg:has(.dbca-slow){--dbca-t:1.15;--dbca-p:running}@media \
+                                (prefers-reduced-motion: no-preference){@keyframes \
+                                dbcaTw{0%,100%{opacity:1}50%{opacity:.3}} @keyframes \
+                                dbcaComet{0%{transform:translate(16px,-6.6px);opacity:0}8%\
+                                {opacity:1}26%{transform:translate(-36px,15px);opacity:0}100%\
+                                {transform:translate(-36px,15px);opacity:0}} \
+                                .dbca-tw-small{animation:dbcaTw calc(var(--dbca-t,1)*4.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*1.1s)} \
+                                .dbca-tw-medium{animation:dbcaTw calc(var(--dbca-t,1)*5.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*2.2s)} \
+                                .dbca-comet{animation:dbcaComet calc(var(--dbca-t,1)*10.5s) \
+                                ease-in infinite}.dbca-tw-small,.dbca-tw-medium,.\
+                                dbca-comet{animation-play-state:var(--dbca-p,paused)}}",
+                    }],
+                },
+            ],
+        },
+        VariantDef {
+            name: "slowest",
+            weight: 0.0,
+            tags: &["animation"],
+            elements: &[
+                Node::El {
+                    name: "g",
+                    attrs: &[("class", AttrVal::Lit("dbca-slowest"))],
+                    children: &[],
+                },
+                Node::El {
+                    name: "style",
+                    attrs: &[],
+                    children: &[Node::Text {
+                        value: "svg:has(.dbca-slowest){--dbca-t:1.35;--dbca-p:running}@media \
+                                (prefers-reduced-motion: no-preference){@keyframes \
+                                dbcaTw{0%,100%{opacity:1}50%{opacity:.3}} @keyframes \
+                                dbcaComet{0%{transform:translate(16px,-6.6px);opacity:0}8%\
+                                {opacity:1}26%{transform:translate(-36px,15px);opacity:0}100%\
+                                {transform:translate(-36px,15px);opacity:0}} \
+                                .dbca-tw-small{animation:dbcaTw calc(var(--dbca-t,1)*4.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*1.1s)} \
+                                .dbca-tw-medium{animation:dbcaTw calc(var(--dbca-t,1)*5.2s) \
+                                ease-in-out infinite calc(var(--dbca-t,1)*2.2s)} \
+                                .dbca-comet{animation:dbcaComet calc(var(--dbca-t,1)*10.5s) \
+                                ease-in infinite}.dbca-tw-small,.dbca-tw-medium,.\
+                                dbca-comet{animation-play-state:var(--dbca-p,paused)}}",
+                    }],
+                },
+            ],
+        },
+    ]),
 };
 
 static CANVAS: &[Node] = &[
@@ -2326,15 +2509,34 @@ static CANVAS: &[Node] = &[
     },
 ];
 
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const BG: ColorRef = ColorRef {
     key: "background",
     palette: Palette::new(&[
-        "#032729", "#032933", "#0d1e2f", "#131e37", "#181a22", "#1f2040", "#27193c", "#2f182d",
+        Rgb8::from_u24(0x032729),
+        Rgb8::from_u24(0x032933),
+        Rgb8::from_u24(0x0D1E2F),
+        Rgb8::from_u24(0x131E37),
+        Rgb8::from_u24(0x181A22),
+        Rgb8::from_u24(0x1F2040),
+        Rgb8::from_u24(0x27193C),
+        Rgb8::from_u24(0x2F182D),
     ]),
+    contrast_to: None,
+    not_equal_to: &[],
 };
+#[expect(clippy::unreadable_literal, reason = "hex color values")]
 const CON: ColorRef = ColorRef {
     key: "constellation",
-    palette: Palette::new(&["#c1e0f0", "#e7ecf0", "#e9dab2", "#ece8dd", "#f1d7d2"]),
+    palette: Palette::new(&[
+        Rgb8::from_u24(0xC1E0F0),
+        Rgb8::from_u24(0xE7ECF0),
+        Rgb8::from_u24(0xE9DAB2),
+        Rgb8::from_u24(0xECE8DD),
+        Rgb8::from_u24(0xF1D7D2),
+    ]),
+    contrast_to: None,
+    not_equal_to: &[],
 };
 
 // Curly quotes in METADATA are required for byte parity with DiceBear.
