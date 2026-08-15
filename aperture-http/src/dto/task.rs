@@ -90,8 +90,8 @@ impl From<Progress> for ProgressResponse {
 pub struct TaskResponse {
     /// Invocation id.
     pub id: TaskId,
-    /// The kind of task.
-    pub kind: String,
+    /// The key of the task's definition.
+    pub key: String,
     /// The parent invocation, if this task was spawned by another.
     pub parent_id: Option<TaskId>,
     /// Lifecycle state.
@@ -118,7 +118,7 @@ impl TaskResponse {
         let running = matches!(task.status, TaskStatus::Pending | TaskStatus::Running);
         Self {
             id: task.id,
-            kind: task.kind,
+            key: task.key,
             parent_id: task.parent_id,
             status: task.status.into(),
             input: task.input,
@@ -135,11 +135,11 @@ impl TaskResponse {
     }
 }
 
-/// A registered task kind, with its capabilities and JSON Schemas.
+/// A registered task definition, with its capabilities and JSON Schemas.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TaskDefinitionResponse {
-    /// The kind string.
-    pub kind: String,
+    /// The key string.
+    pub key: String,
     /// Whether the kind can be cancelled.
     pub cancellable: bool,
     /// Whether the kind is safe to interrupt across a restart.
@@ -153,7 +153,7 @@ pub struct TaskDefinitionResponse {
 impl From<TaskDescriptor> for TaskDefinitionResponse {
     fn from(descriptor: TaskDescriptor) -> Self {
         Self {
-            kind: descriptor.kind.to_owned(),
+            key: descriptor.key.to_owned(),
             cancellable: descriptor.capabilities.cancellable,
             resumable: descriptor.capabilities.resumable,
             input_schema: serde_json::to_value(&descriptor.input_schema).unwrap_or(Value::Null),
@@ -165,9 +165,9 @@ impl From<TaskDescriptor> for TaskDefinitionResponse {
 /// Body for `POST /api/v1/tasks`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTaskRequest {
-    /// The kind of task to create.
-    pub kind: String,
-    /// The task input, matching the kind's input schema.
+    /// The key of the task definition to create.
+    pub key: String,
+    /// The task input, matching the key's input schema.
     pub input: Value,
 }
 
@@ -222,8 +222,8 @@ pub struct TaskListParams {
     pub order: Option<OrderParam>,
     /// Only tasks in this state, or the `active`/`finished` groups.
     pub status: Option<TaskStatusParam>,
-    /// Only tasks of this kind.
-    pub kind: Option<String>,
+    /// Only tasks of this definition key.
+    pub key: Option<String>,
     /// Only children of this task.
     pub parent: Option<TaskId>,
     /// Only top-level tasks (no parent). Ignored when `parent` is set.

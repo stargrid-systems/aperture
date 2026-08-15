@@ -1,7 +1,7 @@
 //! Type-erased view of a [`TaskDefinition`].
 //!
 //! The registry stores definitions behind this trait so it can hold many kinds
-//! together. Erasure happens only here: JSON is decoded into the kind's typed
+//! together. Erasure happens only here: JSON is decoded into the key's typed
 //! input on the way in, and the typed output is encoded back out. The body
 //! never sees a [`Value`]. A blanket impl bridges every [`TaskDefinition`].
 
@@ -21,16 +21,16 @@ use crate::definition::{Capabilities, TaskDefinition};
 use crate::error::{RunError, TaskError};
 
 pub trait ErasedDefinition: Send + Sync + 'static {
-    fn kind(&self) -> &'static str;
+    fn key(&self) -> &'static str;
     fn capabilities(&self) -> Capabilities;
     fn input_name(&self) -> String;
     fn output_name(&self) -> String;
     fn input_schema(&self) -> RefOr<Schema>;
     fn output_schema(&self) -> RefOr<Schema>;
-    /// Pushes the named component schemas this kind references (its input and
+    /// Pushes the named component schemas this key references (its input and
     /// output types plus their dependencies) into `out`.
     fn collect_schemas(&self, out: &mut Vec<(String, RefOr<Schema>)>);
-    /// Checks that `input` decodes into the kind's input type.
+    /// Checks that `input` decodes into the key's input type.
     fn validate(&self, input: &Value) -> Result<(), TaskError>;
     /// Spawns the task onto `set`. The future decodes the input, runs the body,
     /// encodes the output, and records the outcome through `ctx`.
@@ -43,7 +43,7 @@ pub trait ErasedDefinition: Send + Sync + 'static {
 }
 
 impl<T: TaskDefinition> ErasedDefinition for T {
-    fn kind(&self) -> &'static str {
+    fn key(&self) -> &'static str {
         T::KEY
     }
 
@@ -92,7 +92,7 @@ impl<T: TaskDefinition> ErasedDefinition for T {
         ctx: TaskContext,
         set: &mut JoinSet<()>,
     ) -> AbortHandle {
-        let kind = T::KEY;
+        let key = T::KEY;
         let id = ctx.id();
         set.spawn(
             async move {
@@ -115,7 +115,7 @@ impl<T: TaskDefinition> ErasedDefinition for T {
                 });
                 ctx.complete(outcome).await;
             }
-            .instrument(tracing::info_span!("task", kind, id = id.get())),
+            .instrument(tracing::info_span!("task", key, id = id.get())),
         )
     }
 }

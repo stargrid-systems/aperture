@@ -2,7 +2,7 @@
 //!
 //! Definitions are registered once at startup. The registry is the single
 //! source of truth for what kinds exist: [`TaskRegistry`] looks up definitions
-//! by kind, and the HTTP layer projects [`TaskRegistry::descriptors`] into the
+//! by key, and the HTTP layer projects [`TaskRegistry::descriptors`] into the
 //! `OpenAPI` document.
 
 use std::collections::HashMap;
@@ -13,26 +13,26 @@ use utoipa::openapi::{RefOr, Schema};
 use crate::definition::{Capabilities, TaskDefinition};
 use crate::erased::ErasedDefinition;
 
-/// A public, schema-carrying description of one registered kind.
+/// A public, schema-carrying description of one registered key.
 pub struct TaskDescriptor {
-    /// The kind string.
-    pub kind: &'static str,
-    /// What the kind supports.
+    /// The key string.
+    pub key: &'static str,
+    /// What the key supports.
     pub capabilities: Capabilities,
-    /// Component name of the kind's input type.
+    /// Component name of the key's input type.
     pub input_name: String,
-    /// Component name of the kind's output type.
+    /// Component name of the key's output type.
     pub output_name: String,
-    /// Schema of the kind's input type.
+    /// Schema of the key's input type.
     pub input_schema: RefOr<Schema>,
-    /// Schema of the kind's output type.
+    /// Schema of the key's output type.
     pub output_schema: RefOr<Schema>,
     /// Named component schemas the input and output reference, including
     /// themselves and their dependencies.
     pub schemas: Vec<(String, RefOr<Schema>)>,
 }
 
-/// A registry of task definitions, keyed by kind.
+/// A registry of task definitions, keyed by definition key.
 #[derive(Default)]
 pub struct TaskRegistry {
     definitions: HashMap<&'static str, Arc<dyn ErasedDefinition>>,
@@ -45,12 +45,12 @@ impl TaskRegistry {
     }
 
     /// Registers `definition` under its [`TaskDefinition::KEY`], replacing any
-    /// previously registered definition for that kind.
+    /// previously registered definition for that key.
     pub fn register<T: TaskDefinition>(&mut self, definition: T) {
         self.definitions.insert(T::KEY, Arc::new(definition));
     }
 
-    /// A schema-carrying descriptor per registered kind.
+    /// A schema-carrying descriptor per registered key.
     pub fn descriptors(&self) -> Vec<TaskDescriptor> {
         self.definitions
             .values()
@@ -58,7 +58,7 @@ impl TaskRegistry {
                 let mut schemas = Vec::new();
                 definition.collect_schemas(&mut schemas);
                 TaskDescriptor {
-                    kind: definition.kind(),
+                    key: definition.key(),
                     capabilities: definition.capabilities(),
                     input_name: definition.input_name(),
                     output_name: definition.output_name(),
@@ -70,7 +70,7 @@ impl TaskRegistry {
             .collect()
     }
 
-    pub(crate) fn get(&self, kind: &str) -> Option<&Arc<dyn ErasedDefinition>> {
-        self.definitions.get(kind)
+    pub(crate) fn get(&self, key: &str) -> Option<&Arc<dyn ErasedDefinition>> {
+        self.definitions.get(key)
     }
 }

@@ -24,7 +24,7 @@ pub fn definitions_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(list_definitions))
 }
 
-/// Lists task invocations, optionally filtered by status, kind, and parent.
+/// Lists task invocations, optionally filtered by status, key, and parent.
 /// Running tasks carry live progress.
 #[utoipa::path(
     get,
@@ -48,7 +48,7 @@ async fn list_tasks(
     let page = tasks
         .list(
             params.status.map(Into::into),
-            params.kind.as_deref(),
+            params.key.as_deref(),
             parent,
             &json,
             &params.to_query(),
@@ -64,9 +64,9 @@ async fn list_tasks(
     Ok(Json(TaskResponse::page(page, &live)))
 }
 
-/// Creates a task of the given kind and starts it.
+/// Creates a task of the given definition key and starts it.
 ///
-/// The body input is validated against the kind's input schema.
+/// The body input is validated against the key's input schema.
 #[utoipa::path(
     post,
     path = "",
@@ -74,7 +74,7 @@ async fn list_tasks(
     request_body = CreateTaskRequest,
     responses(
         (status = 202, description = "Task created", body = TaskResponse),
-        (status = 400, description = "Unknown kind or invalid input"),
+        (status = 400, description = "Unknown key or invalid input"),
     ),
 )]
 async fn create_task(
@@ -88,7 +88,7 @@ async fn create_task(
         .await?;
     let task = state
         .tasks()
-        .create(&request.kind, request.input, auth.actor.id)
+        .create(&request.key, request.input, auth.actor.id)
         .await?;
     Ok((StatusCode::ACCEPTED, Json(TaskResponse::new(task, None))))
 }
@@ -127,7 +127,7 @@ async fn get_task(
     responses(
         (status = 202, description = "Cancellation requested"),
         (status = 404, description = "Unknown task"),
-        (status = 409, description = "Task kind cannot be cancelled"),
+        (status = 409, description = "Task key cannot be cancelled"),
         (status = 410, description = "Task has already finished"),
     ),
 )]
@@ -147,7 +147,8 @@ async fn cancel_task(
     }
 }
 
-/// Lists the registered task kinds with their capabilities and JSON Schemas.
+/// Lists the registered task definitions with their capabilities and JSON
+/// Schemas.
 #[utoipa::path(
     get,
     path = "",

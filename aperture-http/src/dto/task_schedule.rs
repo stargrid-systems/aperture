@@ -10,7 +10,7 @@ use crate::dto::{OrderParam, Page};
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TaskScheduleResponse {
     pub id: TaskScheduleId,
-    pub kind: String,
+    pub key: String,
     pub input: Value,
     pub interval: Interval,
     pub next_run_at: Timestamp,
@@ -24,7 +24,7 @@ impl From<TaskSchedule> for TaskScheduleResponse {
     fn from(schedule: TaskSchedule) -> Self {
         Self {
             id: schedule.id,
-            kind: schedule.kind,
+            key: schedule.key,
             input: schedule.input,
             interval: schedule.interval,
             next_run_at: schedule.next_run_at,
@@ -46,7 +46,7 @@ impl TaskScheduleResponse {
 /// Body for `POST /api/v1/task-schedules`.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateTaskScheduleRequest {
-    pub kind: String,
+    pub key: String,
     pub input: Value,
     pub interval: Interval,
 }

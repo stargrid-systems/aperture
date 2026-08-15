@@ -67,13 +67,13 @@ pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Res
     let already = existing
         .items
         .iter()
-        .any(|s| s.kind == RotateCertificateDefinition::KEY);
+        .any(|s| s.key == RotateCertificateDefinition::KEY);
     if already {
         return Ok(());
     }
     let now = Timestamp::now();
     repo.create(&NewTaskSchedule {
-        kind: RotateCertificateDefinition::KEY.to_owned(),
+        key: RotateCertificateDefinition::KEY.to_owned(),
         input: serde_json::json!({}),
         interval: Interval::new(ROTATION_INTERVAL)?,
         next_run_at: now,

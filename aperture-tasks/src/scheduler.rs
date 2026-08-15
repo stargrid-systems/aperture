@@ -53,7 +53,7 @@ impl Scheduler {
             match self
                 .inner
                 .tasks
-                .create(&schedule.kind, input, ActorId::SYSTEM)
+                .create(&schedule.key, input, ActorId::SYSTEM)
                 .await
             {
                 Ok(invocation) => {
@@ -73,7 +73,7 @@ impl Scheduler {
                     tracing::error!(
                         error = &err as &dyn Error,
                         schedule_id = schedule.id.get(),
-                        kind = %schedule.kind,
+                        key = %schedule.key,
                         "schedule spawn failed, advancing to next interval",
                     );
                     // Advance anyway so a permanently-broken schedule does not
@@ -172,13 +172,13 @@ mod tests {
 
     async fn create_schedule(
         storage: &Storage,
-        kind: &str,
+        key: &str,
         interval_micros: i64,
         next_run_at: i64,
     ) -> aperture_storage::TaskScheduleId {
         let repo = storage.task_schedules().unwrap();
         repo.create(&NewTaskSchedule {
-            kind: kind.to_owned(),
+            key: key.to_owned(),
             input: json!({}),
             interval: interval(interval_micros),
             next_run_at: ts(next_run_at),
