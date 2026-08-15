@@ -35,6 +35,7 @@ pub fn definitions_router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_TASKS,
+    extensions(("x-required-permission" = json!("task:read"))),
     params(TaskListParams),
     responses((status = 200, description = "Tasks", body = Page<TaskResponse>)),
 )]
@@ -76,6 +77,7 @@ async fn list_tasks(
     post,
     path = "",
     operation_id = operation_ids::CREATE_TASK,
+    extensions(("x-required-permission" = json!("task:create"))),
     request_body = CreateTaskRequest,
     responses(
         (status = 202, description = "Task created", body = TaskResponse),
@@ -103,6 +105,7 @@ async fn create_task(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK,
+    extensions(("x-required-permission" = json!("task:read"))),
     params(("id" = TaskId, Path, description = "Task id")),
     responses(
         (status = 200, description = "Task", body = TaskResponse),
@@ -128,6 +131,7 @@ async fn get_task(
     post,
     path = "/{id}/cancel",
     operation_id = operation_ids::CANCEL_TASK,
+    extensions(("x-required-permission" = json!("task:cancel"))),
     params(("id" = TaskId, Path, description = "Task id")),
     responses(
         (status = 202, description = "Cancellation requested"),

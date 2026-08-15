@@ -75,6 +75,7 @@ async fn list_api_keys(
     post,
     path = "",
     operation_id = operation_ids::CREATE_API_KEY,
+    extensions(("x-required-permission" = json!("api-key:create"))),
     request_body = CreateApiKeyRequest,
     responses((status = 201, description = "API key created", body = CreateApiKeyResponse)),
 )]
@@ -115,6 +116,7 @@ async fn create_api_key(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_API_KEY,
+    extensions(("x-required-permission" = json!("api-key:delete"))),
     params(("id" = ApiKeyId, Path, description = "API key id")),
     responses(
         (status = 204, description = "API key deleted"),

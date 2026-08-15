@@ -55,6 +55,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_ARTIFACTS,
+    extensions(("x-required-permission" = json!("artifact:read"))),
     params(ArtifactListParams),
     responses((status = 200, description = "Artifacts", body = Page<ArtifactSummaryResponse>)),
 )]
@@ -80,6 +81,7 @@ async fn list_artifacts(
     get,
     path = "/{key}",
     operation_id = operation_ids::GET_ARTIFACT,
+    extensions(("x-required-permission" = json!("artifact:read"))),
     params(("key" = ArtifactKey, Path, description = "Artifact key")),
     responses(
         (status = 200, description = "Artifact", body = ArtifactSummaryResponse),
@@ -106,6 +108,7 @@ async fn get_artifact(
     get,
     path = "/{key}/versions",
     operation_id = operation_ids::LIST_ARTIFACT_VERSIONS,
+    extensions(("x-required-permission" = json!("artifact:read"))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         VersionListParams,
@@ -141,6 +144,7 @@ async fn list_versions(
     get,
     path = "/{key}/versions/{digest}",
     operation_id = operation_ids::GET_ARTIFACT_VERSION,
+    extensions(("x-required-permission" = json!("artifact:read"))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         ("digest" = Digest, Path, description = "Content digest"),
@@ -170,6 +174,7 @@ async fn get_version(
     delete,
     path = "/{key}/versions/{digest}",
     operation_id = operation_ids::DELETE_ARTIFACT_VERSION,
+    extensions(("x-required-permission" = json!("artifact:evict"))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         ("digest" = Digest, Path, description = "Content digest"),
@@ -212,6 +217,7 @@ async fn delete_version(
     put,
     path = "/{key}",
     operation_id = operation_ids::UPLOAD_ARTIFACT,
+    extensions(("x-required-permission" = json!("artifact:write"))),
     params(("key" = ArtifactKey, Path, description = "Artifact key")),
     request_body(
         content_type = "application/octet-stream",
@@ -275,6 +281,7 @@ async fn upload_artifact(
     get,
     path = "/{key}/versions/{digest}/blob",
     operation_id = operation_ids::DOWNLOAD_ARTIFACT_BLOB,
+    extensions(("x-required-permission" = json!("artifact:download"))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         ("digest" = Digest, Path, description = "Content digest"),

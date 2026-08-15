@@ -59,6 +59,7 @@ pub struct CreateUserRequest {
     get,
     path = "",
     operation_id = operation_ids::LIST_USERS,
+    extensions(("x-required-permission" = json!("user:read"))),
     params(SimpleListParams),
     responses((status = 200, description = "Users", body = Page<UserResponse>)),
 )]
@@ -80,6 +81,7 @@ async fn list_users(
     post,
     path = "",
     operation_id = operation_ids::CREATE_USER,
+    extensions(("x-required-permission" = json!("user:create"))),
     request_body = CreateUserRequest,
     responses(
         (status = 201, description = "User created", body = UserResponse),
@@ -121,6 +123,7 @@ async fn create_user(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_USER,
+    extensions(("x-required-permission" = json!("user:read"))),
     params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 200, description = "User", body = UserResponse),
@@ -150,6 +153,7 @@ async fn get_user(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_USER,
+    extensions(("x-required-permission" = json!("user:delete"))),
     params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 204, description = "User deleted"),

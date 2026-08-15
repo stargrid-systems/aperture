@@ -147,3 +147,85 @@ pub fn app(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    /// Operations that need a session but no RBAC permission.
+    const SESSION_ONLY: &[&str] = &[
+        "getGatewayVersion",
+        "listApiKeys",
+        "getUserAvatar",
+        "logout",
+        "getCurrentActor",
+        "changePassword",
+    ];
+
+    /// Operations that need no authentication at all.
+    const PUBLIC: &[&str] = &[
+        "login",
+        "setup",
+        "getSetupStatus",
+        "listTaskDefinitions",
+        "getTaskDefinition",
+        "listSettingDefinitions",
+        "getSettingDefinition",
+    ];
+
+    const OBJECTS: &[&str] = &[
+        "artifact",
+        "task",
+        "task-schedule",
+        "log",
+        "user",
+        "api-key",
+        "setting",
+    ];
+
+    const ACTIONS: &[&str] = &[
+        "read", "download", "write", "evict", "create", "update", "delete", "cancel",
+    ];
+
+    #[test]
+    fn spec_documents_permissions_per_operation() {
+        let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+        for (_, item) in spec["paths"].as_object().expect("paths") {
+            for method in ["get", "post", "put", "patch", "delete"] {
+                let Some(op) = item.get(method) else {
+                    continue;
+                };
+                let op_id = op["operationId"].as_str().expect("operation id").to_owned();
+                let is_public = op["security"] == Value::Array(vec![serde_json::json!({})]);
+
+                assert_eq!(
+                    is_public,
+                    PUBLIC.contains(&op_id.as_str()),
+                    "{op_id} public flag mismatch"
+                );
+
+                let Some(permission) = op.get("x-required-permission") else {
+                    assert!(
+                        is_public || SESSION_ONLY.contains(&op_id.as_str()),
+                        "{op_id} documents no required permission"
+                    );
+                    continue;
+                };
+                let (object, action) = permission
+                    .as_str()
+                    .and_then(|perm| perm.split_once(':'))
+                    .unwrap_or(("", ""));
+                assert!(
+                    OBJECTS.contains(&object),
+                    "{op_id} unknown object {object:?}"
+                );
+                assert!(
+                    ACTIONS.contains(&action),
+                    "{op_id} unknown action {action:?}"
+                );
+            }
+        }
+    }
+}

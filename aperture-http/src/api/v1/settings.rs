@@ -30,6 +30,7 @@ pub fn definitions_router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_SETTINGS,
+    extensions(("x-required-permission" = json!("setting:read"))),
     responses((status = 200, description = "Settings", body = [SettingResponse])),
 )]
 async fn list_settings(
@@ -53,6 +54,7 @@ async fn list_settings(
     get,
     path = "/{key}",
     operation_id = operation_ids::GET_SETTING,
+    extensions(("x-required-permission" = json!("setting:read"))),
     params(("key" = String, Path, description = "Setting key")),
     responses(
         (status = 200, description = "Setting value", body = SettingResponse),
@@ -77,6 +79,7 @@ async fn get_setting(
     put,
     path = "/{key}",
     operation_id = operation_ids::UPDATE_SETTING,
+    extensions(("x-required-permission" = json!("setting:update"))),
     params(("key" = String, Path, description = "Setting key")),
     request_body = UpdateSettingRequest,
     responses(
