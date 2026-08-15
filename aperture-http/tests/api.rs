@@ -295,8 +295,8 @@ async fn lists_task_definitions_with_schemas() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|def| def["kind"] == "download")
-        .expect("download kind registered");
+        .find(|def| def["key"] == "download")
+        .expect("download key registered");
     assert_eq!(download["cancellable"], true);
     assert_eq!(download["resumable"], true);
     assert!(download["input_schema"].is_object());
@@ -344,7 +344,7 @@ async fn reads_recorded_tasks() {
     let (status, list) = get_json(&app, &token, "/api/v1/tasks").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["items"].as_array().unwrap().len(), 1);
-    assert_eq!(list["items"][0]["kind"], "download");
+    assert_eq!(list["items"][0]["key"], "download");
 
     let (status, task) = get_json(&app, &token, &format!("/api/v1/tasks/{id}")).await;
     assert_eq!(status, StatusCode::OK);
@@ -394,7 +394,7 @@ async fn filters_tasks_by_json_field() {
     let (status, list) = get_json(
         &app,
         &token,
-        "/api/v1/tasks?kind=download&input_path=key&input_value=spectra",
+        "/api/v1/tasks?key=download&input_path=key&input_value=spectra",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -437,7 +437,7 @@ async fn create_rejects_unknown_kind() {
         &app,
         &token,
         "/api/v1/tasks",
-        json!({"kind": "nope", "input": {}}),
+        json!({"key": "nope", "input": {}}),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -497,14 +497,14 @@ async fn task_schedule_lifecycle() {
         &token,
         "/api/v1/task-schedules",
         json!({
-            "kind": "download",
+            "key": "download",
             "input": {"key": "spectra"},
             "interval": "PT5M",
         }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(created["kind"], "download");
+    assert_eq!(created["key"], "download");
     assert_eq!(created["interval"], "PT5M");
     assert_eq!(created["input"]["key"], "spectra");
     assert_eq!(created["enabled"], true);
@@ -518,7 +518,7 @@ async fn task_schedule_lifecycle() {
     // Get.
     let (status, fetched) = get_json(&app, &token, &format!("/api/v1/task-schedules/{id}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(fetched["kind"], "download");
+    assert_eq!(fetched["key"], "download");
 
     // Patch only the interval. Enabled stays true.
     let (status, updated) = patch_json(
@@ -1046,13 +1046,13 @@ async fn no_role_token_is_denied_on_all_mutations() {
         (
             "POST",
             "/api/v1/tasks",
-            json!({"kind": "download", "input": {}}),
+            json!({"key": "download", "input": {}}),
         ),
         ("POST", "/api/v1/tasks/1/cancel", Value::Null),
         (
             "POST",
             "/api/v1/task-schedules",
-            json!({"kind": "download", "input": {}, "interval": "PT5M"}),
+            json!({"key": "download", "input": {}, "interval": "PT5M"}),
         ),
         ("PATCH", "/api/v1/task-schedules/1", json!({})),
         ("DELETE", "/api/v1/task-schedules/1", Value::Null),

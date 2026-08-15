@@ -72,7 +72,7 @@ async fn create_task_schedule(
     let repo = state.storage().task_schedules()?;
     let id = repo
         .create(&NewTaskSchedule {
-            kind: request.kind,
+            key: request.key,
             input: request.input,
             interval: request.interval,
             next_run_at: now,

@@ -79,14 +79,14 @@ impl TaskContext {
         ProgressHandle(Arc::clone(&self.progress))
     }
 
-    /// Spawns a sub-task of kind `T`, recorded as a child of this invocation.
+    /// Spawns a sub-task of key `T`, recorded as a child of this invocation.
     /// The child's cancellation is tied to this task's, so cancelling the
     /// parent cancels the child.
     ///
     /// # Errors
     ///
     /// Returns `TaskError::EncodeInput` if the input cannot be encoded, or a
-    /// storage or kind-resolution error from the spawn.
+    /// storage or key-resolution error from the spawn.
     pub async fn spawn_child<T: TaskDefinition>(
         &self,
         input: T::Input,

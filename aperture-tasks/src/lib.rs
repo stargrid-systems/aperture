@@ -1,13 +1,13 @@
 //! Task system for the Aperture gateway.
 //!
-//! A task is a tracked unit of work. Each kind of task is a [`TaskDefinition`]
+//! A task is a tracked unit of work. Each task is a [`TaskDefinition`]
 //! with a typed input and output, registered once in a [`TaskRegistry`].
 //! [`Tasks`] spawns tasks, records every invocation in storage, tracks the
 //! running ones, and hands back a typed [`TaskHandle`].
 //!
 //! Cancellation is cooperative: a body observes
 //! [`TaskContext::check_cancelled`] and unwinds. Capabilities on a definition
-//! declare whether a kind can be cancelled at all and whether it is safe to
+//! declare whether a key can be cancelled at all and whether it is safe to
 //! interrupt across a restart.
 //!
 //! [`Scheduler`] drives registered kinds on a periodic schedule.

@@ -152,8 +152,8 @@ pub fn app(state: AppState) -> Router {
 
 /// Projects registered task kinds into the `OpenAPI` spec.
 ///
-/// Adds each kind's input/output component schemas, builds a discriminated
-/// `CreateTaskInput` one-of over the per-kind create bodies, and points
+/// Adds each key's input/output component schemas, builds a discriminated
+/// `CreateTaskInput` one-of over the per-key create bodies, and points
 /// `POST /tasks` at it.
 fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
     if descriptors.is_empty() {
@@ -161,29 +161,29 @@ fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
     }
 
     let components = spec.components.get_or_insert_with(Default::default);
-    let mut union = OneOfBuilder::new().discriminator(Some(Discriminator::new("kind")));
+    let mut union = OneOfBuilder::new().discriminator(Some(Discriminator::new("key")));
     for descriptor in descriptors {
         for (name, schema) in &descriptor.schemas {
             match components.schemas.get(name) {
-                // Two kinds sharing a component name with the same shape (a
+                // Two keys sharing a component name with the same shape (a
                 // common type) is fine. A different shape under the same name
                 // would silently corrupt the generated client, so fail loudly.
                 Some(existing) => assert!(
                     schemas_equal(existing, schema),
-                    "task kinds define conflicting OpenAPI schemas for component {name:?}"
+                    "task keys define conflicting OpenAPI schemas for component {name:?}"
                 ),
                 None => {
                     components.schemas.insert(name.clone(), schema.clone());
                 }
             }
         }
-        let kind = ObjectBuilder::new()
+        let key = ObjectBuilder::new()
             .schema_type(Type::String)
-            .enum_values(Some([descriptor.kind]))
+            .enum_values(Some([descriptor.key]))
             .build();
         let variant = ObjectBuilder::new()
-            .property("kind", kind)
-            .required("kind")
+            .property("key", key)
+            .required("key")
             .property(
                 "input",
                 Ref::from_schema_name(descriptor.input_name.clone()),

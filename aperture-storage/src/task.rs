@@ -1,10 +1,10 @@
 //! Task catalog: the durable record of every task invocation.
 //!
 //! One row per invocation, identified by a surrogate `id`. The row holds the
-//! invocation's kind, its place in any parent/child hierarchy, its lifecycle
-//! status, and its JSON input and output objects. The shapes of those objects
-//! are opaque here. The task layer owns them and (de)serialization, so storage
-//! stays a plain record of what ran.
+//! invocation's definition key, its place in any parent/child hierarchy, its
+//! lifecycle status, and its JSON input and output objects. The shapes of those
+//! objects are opaque here. The task layer owns them and (de)serialization, so
+//! storage stays a plain record of what ran.
 
 use std::result::Result as StdResult;
 
@@ -31,7 +31,7 @@ mod col {
     pub const ID: &str = "id";
     pub const INITIATOR_ID: &str = "initiator_id";
     pub const INPUT: &str = "input";
-    pub const KIND: &str = "kind";
+    pub const KEY: &str = "key";
     pub const OUTPUT: &str = "output";
     pub const PARENT_ID: &str = "parent_id";
     pub const STARTED_AT: &str = "started_at";
@@ -42,7 +42,7 @@ mod col {
 /// order.
 const TASK_COLUMNS: Columns = Columns::new(&[
     col::ID,
-    col::KIND,
+    col::KEY,
     col::PARENT_ID,
     col::INITIATOR_ID,
     col::STATUS,
@@ -111,8 +111,8 @@ impl TaskStatus {
 pub struct TaskInvocation {
     /// Store-assigned id.
     pub id: TaskId,
-    /// The kind of task, matching a registered definition.
-    pub kind: String,
+    /// The key of the task's definition.
+    pub key: String,
     /// The parent invocation, if this task was spawned by another.
     pub parent_id: Option<TaskId>,
     /// The actor that initiated this task. Child tasks inherit the parent's.
@@ -283,14 +283,14 @@ impl TaskRepository {
     #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create(
         &self,
-        kind: &str,
+        key: &str,
         parent_id: Option<TaskId>,
         initiator_id: ActorId,
         input: &Value,
         created_at: Timestamp,
     ) -> Result<TaskId> {
         let params = params_from_iter([
-            kind.to_sql(),
+            key.to_sql(),
             parent_id.to_sql(),
             initiator_id.to_sql(),
             TaskStatus::Pending.to_sql(),
@@ -300,7 +300,7 @@ impl TaskRepository {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO tasks (kind, parent_id, initiator_id, status, input, created_at)
+                    INSERT INTO tasks (key, parent_id, initiator_id, status, input, created_at)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ),
                 params,
@@ -321,14 +321,14 @@ impl TaskRepository {
     #[tracing::instrument(level = "info", skip(self, input))]
     pub async fn create_running(
         &self,
-        kind: &str,
+        key: &str,
         parent_id: Option<TaskId>,
         initiator_id: ActorId,
         input: &Value,
         started_at: Timestamp,
     ) -> Result<TaskId> {
         let params = params_from_iter([
-            kind.to_sql(),
+            key.to_sql(),
             parent_id.to_sql(),
             initiator_id.to_sql(),
             TaskStatus::Running.to_sql(),
@@ -339,7 +339,7 @@ impl TaskRepository {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO tasks (kind, parent_id, initiator_id, status, input, created_at, started_at)
+                    INSERT INTO tasks (key, parent_id, initiator_id, status, input, created_at, started_at)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 ),
                 params,
@@ -432,7 +432,7 @@ impl TaskRepository {
     }
 
     /// Lists invocations, newest first, optionally filtered by `status`,
-    /// `kind`, `parent`, and any number of `json` field matches over the
+    /// `key`, `parent`, and any number of `json` field matches over the
     /// input/output payloads. All filters combine with `AND`.
     ///
     /// # Errors
@@ -443,7 +443,7 @@ impl TaskRepository {
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
-        kind: Option<&str>,
+        key: Option<&str>,
         parent: Option<ParentFilter>,
         json: &[JsonFilter<'_>],
         query: &ListQuery,
@@ -465,7 +465,7 @@ impl TaskRepository {
             }
             None => {}
         }
-        filters.eq_text_opt(col::KIND, kind);
+        filters.eq_text_opt(col::KEY, key);
         match parent {
             Some(ParentFilter::Root) => filters.raw("parent_id IS NULL"),
             Some(ParentFilter::Of(id)) => filters.eq_int(col::PARENT_ID, id.get()),
@@ -559,7 +559,7 @@ impl TryFrom<&Row> for TaskInvocation {
     fn try_from(row: &Row) -> Result<Self> {
         Ok(Self {
             id: TASK_COLUMNS.extract(row, col::ID)?,
-            kind: TASK_COLUMNS.extract(row, col::KIND)?,
+            key: TASK_COLUMNS.extract(row, col::KEY)?,
             parent_id: TASK_COLUMNS.extract(row, col::PARENT_ID)?,
             initiator_id: TASK_COLUMNS.extract(row, col::INITIATOR_ID)?,
             status: TASK_COLUMNS.extract(row, col::STATUS)?,

@@ -22,17 +22,17 @@ pub enum RunError {
     Failed(#[from] anyhow::Error),
 }
 
-/// Errors from operating the task system: resolving a kind, moving payloads
+/// Errors from operating the task system: resolving a key, moving payloads
 /// across the typed boundary, and recording invocations.
 #[derive(Debug, thiserror::Error)]
 pub enum TaskError {
-    /// No definition is registered for the requested kind.
-    #[error("no task definition registered for kind {0:?}")]
+    /// No definition is registered for the requested key.
+    #[error("no task definition registered for key {0:?}")]
     NotRegistered(String),
-    /// The task input could not be decoded into the kind's input type.
+    /// The task input could not be decoded into the key's input type.
     #[error("failed to decode task input")]
     DecodeInput(#[source] serde_json::Error),
-    /// The task output could not be decoded into the kind's output type.
+    /// The task output could not be decoded into the key's output type.
     #[error("failed to decode task output")]
     DecodeOutput(#[source] serde_json::Error),
     /// The task input could not be encoded to JSON.
