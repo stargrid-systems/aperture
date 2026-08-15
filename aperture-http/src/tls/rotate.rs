@@ -2,7 +2,7 @@
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
-use aperture_tasks::{Capabilities, Interval, RunError, TaskContext, TaskDefinition};
+use aperture_tasks::{Capabilities, Interval, RunError, TaskContext, TaskDefinition, keys};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -33,7 +33,8 @@ impl RotateCertificateDefinition {
 }
 
 impl TaskDefinition for RotateCertificateDefinition {
-    const KEY: &'static str = "rotate-certificate";
+    const KEY: &'static str = keys::ROTATE_CERTIFICATE;
+
     type Input = RotateCertificateInput;
     type Output = RotateCertificateOutput;
 

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use aperture_settings::{SettingDefinition, SettingError, SettingRegistry, Settings};
 use aperture_storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -14,7 +16,7 @@ impl SettingDefinition for SystemValue {
 
 fn registry() -> SettingRegistry {
     let mut registry = SettingRegistry::new();
-    registry.register(SystemValue::default());
+    registry.register(Arc::new(SystemValue::default()));
     registry
 }
 

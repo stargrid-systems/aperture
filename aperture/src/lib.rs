@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
@@ -149,29 +150,21 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
-/// Returns the `OpenAPI` specification, with the task kinds projected in.
-///
-/// # Errors
-///
-/// Returns an error if the in-memory storage cannot be opened.
-pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
-    let storage = Storage::open(":memory:").await?;
-    let artifacts = Artifacts::new(storage, PathBuf::from("."));
-    let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts);
-    Ok(aperture_http::openapi(&registry.descriptors()))
+/// Returns the static `OpenAPI` specification of the gateway API.
+pub fn openapi() -> OpenApiSpec {
+    aperture_http::openapi()
 }
 
 /// Registers every task kind the gateway supports.
 fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
-    registry.register(DownloadDefinition::new(artifacts.clone()));
-    registry.register(RotateCertificateDefinition::new(artifacts));
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
+    registry.register(Arc::new(RotateCertificateDefinition::new(artifacts)));
 }
 
 /// Registers every setting the gateway supports.
 fn register_settings(registry: &mut SettingRegistry) {
-    registry.register(AvatarStyle::default());
-    registry.register(AvatarAnimation::default());
+    registry.register(Arc::new(AvatarStyle::default()));
+    registry.register(Arc::new(AvatarAnimation::default()));
 }
 
 /// Resets the password for `username` and prints the new password to stdout.

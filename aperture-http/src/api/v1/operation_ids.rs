@@ -44,6 +44,9 @@ pub const CANCEL_TASK: &str = "cancelTask";
 /// `GET /api/v1/task-definitions`
 pub const LIST_TASK_DEFINITIONS: &str = "listTaskDefinitions";
 
+/// `GET /api/v1/task-definitions/{key}`
+pub const GET_TASK_DEFINITION: &str = "getTaskDefinition";
+
 /// `GET /api/v1/task-schedules`
 pub const LIST_TASK_SCHEDULES: &str = "listTaskSchedules";
 
@@ -127,3 +130,6 @@ pub const UPDATE_SETTING: &str = "updateSetting";
 
 /// `GET /api/v1/setting-definitions`
 pub const LIST_SETTING_DEFINITIONS: &str = "listSettingDefinitions";
+
+/// `GET /api/v1/setting-definitions/{key}`
+pub const GET_SETTING_DEFINITION: &str = "getSettingDefinition";

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::{env, fs, process, str};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
@@ -38,8 +39,8 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
 /// registers, so per-request reads fall back to definition defaults.
 fn test_settings(storage: &Storage) -> Settings {
     let mut registry = SettingRegistry::new();
-    registry.register(AvatarStyle::default());
-    registry.register(AvatarAnimation::default());
+    registry.register(Arc::new(AvatarStyle::default()));
+    registry.register(Arc::new(AvatarAnimation::default()));
     Settings::new(storage.settings().unwrap(), registry)
 }
 
@@ -67,7 +68,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         .unwrap();
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(artifacts.clone()));
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
@@ -286,35 +287,92 @@ async fn evicts_a_version() {
 }
 
 #[tokio::test]
-async fn lists_task_definitions_with_schemas() {
+async fn lists_task_definitions() {
     let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, json) = get_json(&app, &token, "/api/v1/task-definitions").await;
     assert_eq!(status, StatusCode::OK);
-    let download = json
-        .as_array()
-        .unwrap()
+    let items = json["items"].as_array().expect("paged items");
+    let download = items
         .iter()
         .find(|def| def["key"] == "download")
         .expect("download key registered");
     assert_eq!(download["cancellable"], true);
     assert_eq!(download["resumable"], true);
-    assert!(download["input_schema"].is_object());
+    assert!(json["next_cursor"].is_null());
 }
 
 #[tokio::test]
-async fn lists_setting_definitions_with_schemas() {
+async fn gets_task_definition_schema() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/task-definitions/download").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "download");
+    let schema = &json["input_schema"];
+    assert_eq!(
+        schema["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert!(
+        schema["$defs"].is_object(),
+        "download input should carry its dependencies: {schema}"
+    );
+
+    let (status, _) = get_json(&app, &token, "/api/v1/task-definitions/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn paginates_setting_definitions() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/setting-definitions?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
+    let cursor = json["next_cursor"]
+        .as_str()
+        .expect("another page")
+        .to_owned();
+
+    let (status, json) = get_json(
+        &app,
+        &token,
+        &format!("/api/v1/setting-definitions?limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
+    assert!(json["prev_cursor"].is_string());
+}
+
+#[tokio::test]
+async fn lists_setting_definitions() {
     let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, json) = get_json(&app, &token, "/api/v1/setting-definitions").await;
     assert_eq!(status, StatusCode::OK);
-    let style = json
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|def| def["key"] == "avatar_style")
-        .expect("avatar style registered");
-    assert!(style["value_schema"].is_object());
+    let items = json["items"].as_array().expect("paged items");
+    assert!(
+        items.iter().any(|def| def["key"] == "avatar_style"),
+        "avatar style registered: {json}"
+    );
+}
+
+#[tokio::test]
+async fn gets_setting_definition_schema() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/setting-definitions/avatar_style").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "avatar_style");
+    assert_eq!(
+        json["value_schema"]["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+
+    let (status, _) = get_json(&app, &token, "/api/v1/setting-definitions/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -805,7 +863,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
     let artifacts = Artifacts::new(storage.clone(), root);
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(artifacts.clone()));
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
@@ -894,7 +952,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
     let artifacts = Artifacts::new(storage.clone(), root);
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(artifacts.clone()));
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())

@@ -16,9 +16,12 @@ pub use self::log::{
     LogSpanListParams, LogSpanResponse, LogTargetListParams,
 };
 pub use self::page::Page;
-pub use self::settings::{SettingDefinitionResponse, SettingResponse, UpdateSettingRequest};
+pub use self::settings::{
+    SettingDefinitionResponse, SettingDefinitionSummary, SettingResponse, UpdateSettingRequest,
+};
 pub use self::task::{
-    CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
+    CreateTaskRequest, TaskDefinitionResponse, TaskDefinitionSummary, TaskListParams, TaskResponse,
+    TaskStatusParam,
 };
 pub use self::task_schedule::{
     CreateTaskScheduleRequest, TaskScheduleListParams, TaskScheduleResponse,
@@ -121,6 +124,15 @@ impl From<OrderParam> for aperture_artifacts::Order {
     }
 }
 
+impl From<OrderParam> for aperture_runtime::Order {
+    fn from(order: OrderParam) -> Self {
+        match order {
+            OrderParam::Asc => Self::Asc,
+            OrderParam::Desc => Self::Desc,
+        }
+    }
+}
+
 /// Pagination query parameters for endpoints with no extra filters.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[serde(default)]
@@ -136,6 +148,15 @@ impl SimpleListParams {
     /// Converts these params into a storage `ListQuery`.
     pub fn to_query(&self) -> aperture_artifacts::ListQuery {
         aperture_artifacts::ListQuery {
+            limit: self.limit,
+            cursor: self.cursor.clone(),
+            order: self.order.map(Into::into),
+        }
+    }
+
+    /// Converts these params into a registry `RegistryQuery`.
+    pub fn to_registry_query(&self) -> aperture_runtime::RegistryQuery {
+        aperture_runtime::RegistryQuery {
             limit: self.limit,
             cursor: self.cursor.clone(),
             order: self.order.map(Into::into),

@@ -116,6 +116,7 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use std::future::{Future, ready};
+    use std::sync::Arc;
 
     use aperture_storage::{Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch};
     use serde_json::{Value, json};
@@ -126,6 +127,7 @@ mod tests {
 
     impl crate::TaskDefinition for Ping {
         const KEY: &'static str = "ping";
+
         type Input = Value;
         type Output = ();
 
@@ -161,7 +163,7 @@ mod tests {
     async fn setup() -> Harness {
         let storage = Storage::open(":memory:").await.unwrap();
         let mut registry = crate::TaskRegistry::new();
-        registry.register(Ping);
+        registry.register(Arc::new(Ping));
         let tasks = Tasks::new(storage.tasks().unwrap(), registry);
         let schedules = storage.task_schedules().unwrap();
         Harness {
@@ -231,7 +233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_advances_past_unknown_kind_so_it_doesnt_loop() {
+    async fn tick_advances_past_unknown_key_so_it_doesnt_loop() {
         let Harness { scheduler, storage } = setup().await;
         let now = Timestamp::now().as_microsecond();
         let id = create_schedule(&storage, "does-not-exist", 60_000_000, now - 1_000_000).await;

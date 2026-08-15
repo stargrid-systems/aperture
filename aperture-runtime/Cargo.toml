@@ -13,9 +13,12 @@ workspace = true
 
 [dependencies]
 futures-util = { workspace = true }
+hex = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["std"] }
+utoipa = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

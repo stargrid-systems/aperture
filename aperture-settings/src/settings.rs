@@ -12,10 +12,10 @@ use jiff::Timestamp;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
+use crate::SettingRegistry;
 use crate::change::SettingChange;
 use crate::definition::SettingDefinition;
 use crate::error::SettingError;
-use crate::registry::SettingRegistry;
 
 /// Capacity of the in-process change feed.
 const CHANGE_FEED_CAPACITY: usize = 64;
@@ -130,10 +130,9 @@ impl Settings {
     ///
     /// Returns a storage error if any read fails.
     pub async fn list(&self) -> Result<Vec<(String, Value)>, SettingError> {
-        let mut keys: Vec<&'static str> = self.inner.registry.keys().collect();
-        keys.sort_unstable();
-        let mut result = Vec::with_capacity(keys.len());
-        for key in keys {
+        let registry = &self.inner.registry;
+        let mut result = Vec::with_capacity(registry.len());
+        for key in registry.keys() {
             let value = self.get_value(key).await?;
             result.push((key.to_owned(), value));
         }

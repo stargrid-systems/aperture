@@ -5,15 +5,13 @@
 
 use aperture_settings::Settings;
 use aperture_storage::{ApiKeyId, Storage, UserId};
-use aperture_tasks::{TaskDescriptor, Tasks};
+use aperture_tasks::Tasks;
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
-use utoipa::openapi::RefOr;
-use utoipa::openapi::schema::{Discriminator, ObjectBuilder, OneOfBuilder, Ref, Schema, Type};
 use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
@@ -117,12 +115,14 @@ fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi()).nest("/api", api_routes())
 }
 
-/// Returns the generated `OpenAPI` specification for the gateway API, with the
-/// registered task kinds projected in.
-pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
+/// Returns the static `OpenAPI` specification of the gateway API.
+///
+/// The spec describes the API surface itself; the per-definition JSON Schemas
+/// live behind the definitions endpoints instead, so the spec stays a stable
+/// contract for code generation.
+pub fn openapi() -> OpenApiSpec {
     let mut spec = self::api_router().split_for_parts().1;
     auth::add_security_schemes(&mut spec);
-    project_tasks(&mut spec, descriptors);
     spec
 }
 
@@ -133,8 +133,7 @@ pub fn openapi(descriptors: &[TaskDescriptor]) -> OpenApiSpec {
 /// A [`TraceLayer`] creates a span for each request so per-request tracing
 /// shows up in the log viewer.
 pub fn app(state: AppState) -> Router {
-    let (api, mut doc) = self::api_router().split_for_parts();
-    project_tasks(&mut doc, &state.tasks().registry().descriptors());
+    let (api, doc) = self::api_router().split_for_parts();
     Router::<AppState>::new()
         .merge(api)
         .route(
@@ -148,71 +147,4 @@ pub fn app(state: AppState) -> Router {
         .layer(from_fn_with_state(state.clone(), auth::auth_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
-}
-
-/// Projects registered task kinds into the `OpenAPI` spec.
-///
-/// Adds each key's input/output component schemas, builds a discriminated
-/// `CreateTaskInput` one-of over the per-key create bodies, and points
-/// `POST /tasks` at it.
-fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
-    if descriptors.is_empty() {
-        return;
-    }
-
-    let components = spec.components.get_or_insert_with(Default::default);
-    let mut union = OneOfBuilder::new().discriminator(Some(Discriminator::new("key")));
-    for descriptor in descriptors {
-        for (name, schema) in &descriptor.schemas {
-            match components.schemas.get(name) {
-                // Two keys sharing a component name with the same shape (a
-                // common type) is fine. A different shape under the same name
-                // would silently corrupt the generated client, so fail loudly.
-                Some(existing) => assert!(
-                    schemas_equal(existing, schema),
-                    "task keys define conflicting OpenAPI schemas for component {name:?}"
-                ),
-                None => {
-                    components.schemas.insert(name.clone(), schema.clone());
-                }
-            }
-        }
-        let key = ObjectBuilder::new()
-            .schema_type(Type::String)
-            .enum_values(Some([descriptor.key]))
-            .build();
-        let variant = ObjectBuilder::new()
-            .property("key", key)
-            .required("key")
-            .property(
-                "input",
-                Ref::from_schema_name(descriptor.input_name.clone()),
-            )
-            .required("input")
-            .build();
-        union = union.item(variant);
-    }
-
-    components.schemas.insert(
-        "CreateTaskInput".to_owned(),
-        Schema::OneOf(union.build()).into(),
-    );
-    set_create_body(spec);
-}
-
-/// Compares two component schemas by their serialized form.
-fn schemas_equal(a: &RefOr<Schema>, b: &RefOr<Schema>) -> bool {
-    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
-}
-
-/// Points the `POST /tasks` request body at the `CreateTaskInput` union.
-fn set_create_body(spec: &mut OpenApiSpec) {
-    let schema = RefOr::Ref(Ref::from_schema_name("CreateTaskInput"));
-    if let Some(item) = spec.paths.paths.get_mut("/api/v1/tasks")
-        && let Some(operation) = item.post.as_mut()
-        && let Some(body) = operation.request_body.as_mut()
-        && let Some(content) = body.content.get_mut("application/json")
-    {
-        content.schema = Some(schema);
-    }
 }
