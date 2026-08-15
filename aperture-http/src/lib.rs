@@ -4,7 +4,7 @@
 //! Spectra frontend served as a fallback.
 
 use aperture_settings::Settings;
-use aperture_storage::{ApiKeyId, Storage, UserId};
+use aperture_storage::{ApiKeyId, ArtifactKey, Storage, UserId};
 use aperture_tasks::Tasks;
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
@@ -108,7 +108,7 @@ impl AppState {
     // TODO(utoipa): These types are only referenced indirectly as field types
     // of IntoParams structs. utoipa does not discover their schemas
     // automatically. See: <https://github.com/stargrid-systems/aperture/issues/110>.
-    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam, ApiKeyId, UserId)),
+    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam, ApiKeyId, ArtifactKey, UserId)),
     modifiers(&SecurityAddon),
     security(
         ("SessionCookie" = []),
