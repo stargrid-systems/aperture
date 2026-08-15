@@ -1132,7 +1132,7 @@
     },
     "/api/v1/task-definitions": {
       "get": {
-        "summary": "Lists the registered task kinds with their capabilities and JSON Schemas.",
+        "summary": "Lists the registered task definitions with their capabilities and JSON\nSchemas.",
         "operationId": "listTaskDefinitions",
         "responses": {
           "200": {
@@ -1325,7 +1325,7 @@
     },
     "/api/v1/tasks": {
       "get": {
-        "summary": "Lists task invocations, optionally filtered by status, kind, and parent.\nRunning tasks carry live progress.",
+        "summary": "Lists task invocations, optionally filtered by status, key, and parent.\nRunning tasks carry live progress.",
         "operationId": "listTasks",
         "parameters": [
           {
@@ -1369,9 +1369,9 @@
             }
           },
           {
-            "name": "kind",
+            "name": "key",
             "in": "query",
-            "description": "Only tasks of this kind.",
+            "description": "Only tasks of this definition key.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1446,8 +1446,8 @@
         }
       },
       "post": {
-        "summary": "Creates a task of the given kind and starts it.",
-        "description": "The body input is validated against the kind's input schema.",
+        "summary": "Creates a task of the given definition key and starts it.",
+        "description": "The body input is validated against the key's input schema.",
         "operationId": "createTask",
         "requestBody": {
           "content": {
@@ -1471,7 +1471,7 @@
             }
           },
           "400": {
-            "description": "Unknown kind or invalid input"
+            "description": "Unknown key or invalid input"
           }
         }
       }
@@ -1531,7 +1531,7 @@
             "description": "Unknown task"
           },
           "409": {
-            "description": "Task kind cannot be cancelled"
+            "description": "Task key cannot be cancelled"
           },
           "410": {
             "description": "Task has already finished"
@@ -2004,17 +2004,17 @@
           {
             "type": "object",
             "required": [
-              "kind",
+              "key",
               "input"
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/DownloadInput"
+                "$ref": "#/components/schemas/RotateCertificateInput"
               },
-              "kind": {
+              "key": {
                 "type": "string",
                 "enum": [
-                  "download"
+                  "rotate-certificate"
                 ]
               }
             }
@@ -2022,40 +2022,40 @@
           {
             "type": "object",
             "required": [
-              "kind",
+              "key",
               "input"
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/RotateCertificateInput"
+                "$ref": "#/components/schemas/DownloadInput"
               },
-              "kind": {
+              "key": {
                 "type": "string",
                 "enum": [
-                  "rotate-certificate"
+                  "download"
                 ]
               }
             }
           }
         ],
         "discriminator": {
-          "propertyName": "kind"
+          "propertyName": "key"
         }
       },
       "CreateTaskRequest": {
         "type": "object",
         "description": "Body for `POST /api/v1/tasks`.",
         "required": [
-          "kind",
+          "key",
           "input"
         ],
         "properties": {
           "input": {
-            "description": "The task input, matching the kind's input schema."
+            "description": "The task input, matching the key's input schema."
           },
-          "kind": {
+          "key": {
             "type": "string",
-            "description": "The kind of task to create."
+            "description": "The key of the task definition to create."
           }
         }
       },
@@ -2063,7 +2063,7 @@
         "type": "object",
         "description": "Body for `POST /api/v1/task-schedules`.",
         "required": [
-          "kind",
+          "key",
           "input",
           "interval"
         ],
@@ -2072,7 +2072,7 @@
           "interval": {
             "$ref": "#/components/schemas/Interval"
           },
-          "kind": {
+          "key": {
             "type": "string"
           }
         }
@@ -3004,7 +3004,7 @@
               "description": "One task invocation, returned by the task endpoints.",
               "required": [
                 "id",
-                "kind",
+                "key",
                 "status",
                 "input",
                 "created_at"
@@ -3037,9 +3037,9 @@
                 "input": {
                   "description": "The input the task was created with."
                 },
-                "kind": {
+                "key": {
                   "type": "string",
-                  "description": "The kind of task."
+                  "description": "The key of the task's definition."
                 },
                 "output": {
                   "description": "The output, once the task succeeds."
@@ -3111,7 +3111,7 @@
               "type": "object",
               "required": [
                 "id",
-                "kind",
+                "key",
                 "input",
                 "interval",
                 "next_run_at",
@@ -3133,7 +3133,7 @@
                 "interval": {
                   "$ref": "#/components/schemas/Interval"
                 },
-                "kind": {
+                "key": {
                   "type": "string"
                 },
                 "last_run_at": {
@@ -3382,9 +3382,9 @@
       },
       "TaskDefinitionResponse": {
         "type": "object",
-        "description": "A registered task kind, with its capabilities and JSON Schemas.",
+        "description": "A registered task definition, with its capabilities and JSON Schemas.",
         "required": [
-          "kind",
+          "key",
           "cancellable",
           "resumable",
           "input_schema",
@@ -3398,9 +3398,9 @@
           "input_schema": {
             "description": "JSON Schema of the kind's input."
           },
-          "kind": {
+          "key": {
             "type": "string",
-            "description": "The kind string."
+            "description": "The key string."
           },
           "output_schema": {
             "description": "JSON Schema of the kind's output."
@@ -3420,7 +3420,7 @@
         "description": "One task invocation, returned by the task endpoints.",
         "required": [
           "id",
-          "kind",
+          "key",
           "status",
           "input",
           "created_at"
@@ -3453,9 +3453,9 @@
           "input": {
             "description": "The input the task was created with."
           },
-          "kind": {
+          "key": {
             "type": "string",
-            "description": "The kind of task."
+            "description": "The key of the task's definition."
           },
           "output": {
             "description": "The output, once the task succeeds."
@@ -3504,7 +3504,7 @@
         "type": "object",
         "required": [
           "id",
-          "kind",
+          "key",
           "input",
           "interval",
           "next_run_at",
@@ -3526,7 +3526,7 @@
           "interval": {
             "$ref": "#/components/schemas/Interval"
           },
-          "kind": {
+          "key": {
             "type": "string"
           },
           "last_run_at": {
