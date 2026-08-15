@@ -82,7 +82,7 @@ pub async fn serve(
     let auth = AuthHandle::new(storage.clone()).await?;
 
     let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts.clone());
+    register_definitions(&mut registry, artifacts.clone());
     let tasks = Tasks::new(storage.tasks()?, registry);
 
     let mut setting_registry = SettingRegistry::new();
@@ -155,8 +155,8 @@ pub fn openapi() -> OpenApiSpec {
     aperture_http::openapi()
 }
 
-/// Registers every task kind the gateway supports.
-fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
+/// Registers every task definition the gateway supports.
+fn register_definitions(registry: &mut TaskRegistry, artifacts: Artifacts) {
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     registry.register(Arc::new(RotateCertificateDefinition::new(artifacts)));
 }

@@ -1,6 +1,7 @@
 //! The generic response-page type.
 
 use aperture_artifacts::Page as StoragePage;
+use aperture_runtime::RegistryPage;
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -22,6 +23,15 @@ impl<T> Page<T> {
             next_cursor: page.next_cursor,
             prev_cursor: page.prev_cursor,
             items: page.items.into_iter().map(map).collect(),
+        }
+    }
+
+    /// Maps a registry page into a response page.
+    pub fn from_registry<S: ?Sized>(page: RegistryPage<S>, map: impl Fn(&S) -> T) -> Self {
+        Self {
+            next_cursor: page.next_cursor,
+            prev_cursor: page.prev_cursor,
+            items: page.items.iter().map(|entry| map(entry.as_ref())).collect(),
         }
     }
 }

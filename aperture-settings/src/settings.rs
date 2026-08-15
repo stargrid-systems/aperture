@@ -52,7 +52,7 @@ impl Settings {
         self.inner.changes.subscribe()
     }
 
-    /// The registry of keys, for projecting schemas.
+    /// The registry of definitions, for listings and schema lookup.
     pub fn registry(&self) -> &SettingRegistry {
         &self.inner.registry
     }

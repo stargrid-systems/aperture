@@ -2,7 +2,7 @@
 //! pagination.
 
 use std::collections::BTreeMap;
-use std::str;
+use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
 
 /// An entry stored in a [`Registry`].
@@ -15,7 +15,7 @@ pub trait RegistryEntry: Send + Sync + 'static {
     fn key(&self) -> &'static str;
 }
 
-/// Sort direction for a registry listing.
+/// Sort direction for a listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Order {
     /// Ascending.
@@ -25,7 +25,9 @@ pub enum Order {
 }
 
 impl Order {
-    const fn flip(self) -> Self {
+    /// The opposite direction.
+    #[must_use]
+    pub const fn flip(self) -> Self {
         match self {
             Self::Asc => Self::Desc,
             Self::Desc => Self::Asc,
@@ -36,7 +38,9 @@ impl Order {
 /// How much of a registry to return and where to resume from.
 #[derive(Debug, Clone, Default)]
 pub struct RegistryQuery {
-    /// Maximum entries to return. Clamped to `1..=200`. Defaults to 50.
+    /// Maximum entries to return. Clamped to
+    /// [`DEFAULT_LIMIT`](RegistryQuery::DEFAULT_LIMIT) and
+    /// [`MAX_LIMIT`](RegistryQuery::MAX_LIMIT). Defaults to 50.
     pub limit: Option<u32>,
     /// Opaque cursor from a page's `next_cursor` or `prev_cursor`.
     pub cursor: Option<String>,
@@ -44,12 +48,20 @@ pub struct RegistryQuery {
     pub order: Option<Order>,
 }
 
+impl RegistryQuery {
+    /// The page size used when `limit` is not given.
+    pub const DEFAULT_LIMIT: u32 = 50;
+
+    /// The largest page size a query may return.
+    pub const MAX_LIMIT: u32 = 200;
+}
+
 /// A cursor string was not issued by this registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidCursor;
 
 /// A page of registry entries plus the cursors for the neighbouring pages.
-pub struct RegistryPage<T: ?Sized + Send + Sync + 'static> {
+pub struct RegistryPage<T: ?Sized> {
     /// The entries in this page, in base order.
     pub items: Vec<Arc<T>>,
     /// Cursor to pass as `?cursor=` for the next page. None at the end.
@@ -67,22 +79,38 @@ enum Step {
     Before,
 }
 
-fn encode_cursor(key: &str, step: Step) -> String {
-    let mut buf = vec![u8::from(matches!(step, Step::Before))];
-    buf.extend_from_slice(key.as_bytes());
-    hex::encode(buf)
+/// A keyset position in a registry listing.
+struct Cursor {
+    key: String,
+    step: Step,
 }
 
-fn decode_cursor(encoded: &str) -> Option<(String, Step)> {
-    let buf = hex::decode(encoded).ok()?;
-    let (flag, key) = buf.split_first()?;
-    let step = if flag & 0b1 != 0 {
-        Step::Before
-    } else {
-        Step::After
-    };
-    let key = str::from_utf8(key).ok()?.to_owned();
-    Some((key, step))
+impl Cursor {
+    /// Encodes the cursor as an opaque hex string.
+    fn encode(key: &str, step: Step) -> String {
+        let mut buf = vec![u8::from(matches!(step, Step::Before))];
+        buf.extend_from_slice(key.as_bytes());
+        hex::encode(buf)
+    }
+
+    /// Decodes a cursor issued by [`Cursor::encode`].
+    ///
+    /// Returns `None` for anything else: wrong framing, an unknown flag, or
+    /// an empty key.
+    fn decode(encoded: &str) -> Option<Self> {
+        let buf = hex::decode(encoded).ok()?;
+        let (flag, key) = buf.split_first()?;
+        let step = match *flag {
+            0 => Step::After,
+            1 => Step::Before,
+            _ => return None,
+        };
+        if key.is_empty() {
+            return None;
+        }
+        let key = str::from_utf8(key).ok()?.to_owned();
+        Some(Self { key, step })
+    }
 }
 
 /// A registry of definitions keyed by a static string.
@@ -152,15 +180,16 @@ impl<T: ?Sized + RegistryEntry> Registry<T> {
     /// Returns [`InvalidCursor`] if `query.cursor` is not a cursor issued by
     /// this registry.
     pub fn list(&self, query: &RegistryQuery) -> Result<RegistryPage<T>, InvalidCursor> {
-        const DEFAULT_LIMIT: u32 = 50;
-        const MAX_LIMIT: u32 = 200;
-        let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT) as usize;
+        let limit = query
+            .limit
+            .unwrap_or(RegistryQuery::DEFAULT_LIMIT)
+            .clamp(1, RegistryQuery::MAX_LIMIT) as usize;
         let base_order = query.order.unwrap_or(Order::Asc);
-        let (position, step) = match query.cursor.as_deref().and_then(decode_cursor) {
-            Some((key, step)) => (Some(key), step),
-            None if query.cursor.is_some() => return Err(InvalidCursor),
-            None => (None, Step::After),
-        };
+        let cursor = query.cursor.as_deref().and_then(Cursor::decode);
+        if cursor.is_none() && query.cursor.is_some() {
+            return Err(InvalidCursor);
+        }
+        let step = cursor.as_ref().map_or(Step::After, |cursor| cursor.step);
 
         // Fetch travelling from the cursor, one extra entry to detect more
         // pages.
@@ -168,19 +197,30 @@ impl<T: ?Sized + RegistryEntry> Registry<T> {
             Step::After => base_order,
             Step::Before => base_order.flip(),
         };
-        let mut batch: Vec<&Arc<T>> = match query_order {
-            Order::Asc => self
+        let mut batch: Vec<&Arc<T>> = match (query_order, cursor.as_ref()) {
+            (Order::Asc, None) => self
                 .entries
-                .iter()
-                .filter(|(key, _)| after_cursor(key, position.as_deref(), Order::Asc))
+                .range::<str, _>(..)
                 .map(|(_, entry)| entry)
                 .take(limit + 1)
                 .collect(),
-            Order::Desc => self
+            (Order::Asc, Some(cursor)) => self
                 .entries
-                .iter()
+                .range::<str, _>((Excluded(cursor.key.as_str()), Unbounded))
+                .map(|(_, entry)| entry)
+                .take(limit + 1)
+                .collect(),
+            (Order::Desc, None) => self
+                .entries
+                .range::<str, _>(..)
                 .rev()
-                .filter(|(key, _)| after_cursor(key, position.as_deref(), Order::Desc))
+                .map(|(_, entry)| entry)
+                .take(limit + 1)
+                .collect(),
+            (Order::Desc, Some(cursor)) => self
+                .entries
+                .range::<str, _>((Unbounded, Excluded(cursor.key.as_str())))
+                .rev()
                 .map(|(_, entry)| entry)
                 .take(limit + 1)
                 .collect(),
@@ -195,7 +235,7 @@ impl<T: ?Sized + RegistryEntry> Registry<T> {
         }
 
         let cursor_at = |entry: Option<&Arc<T>>, step: Step| {
-            entry.map(|entry| encode_cursor(entry.key(), step))
+            entry.map(|entry| Cursor::encode(entry.key(), step))
         };
         let (next_cursor, prev_cursor) = match step {
             // Forward: more ahead iff we fetched an extra. A previous page
@@ -204,7 +244,8 @@ impl<T: ?Sized + RegistryEntry> Registry<T> {
                 has_extra
                     .then(|| cursor_at(batch.last().copied(), Step::After))
                     .flatten(),
-                position
+                cursor
+                    .as_ref()
                     .is_some()
                     .then(|| cursor_at(batch.first().copied(), Step::Before))
                     .flatten(),
@@ -224,15 +265,6 @@ impl<T: ?Sized + RegistryEntry> Registry<T> {
             next_cursor,
             prev_cursor,
         })
-    }
-}
-
-/// Whether `key` sits strictly after `cursor` in `order` direction.
-fn after_cursor(key: &str, cursor: Option<&str>, order: Order) -> bool {
-    match (cursor, order) {
-        (Some(cursor), Order::Asc) => key > cursor,
-        (Some(cursor), Order::Desc) => key < cursor,
-        (None, _) => true,
     }
 }
 
@@ -348,14 +380,16 @@ mod tests {
     #[test]
     fn rejects_foreign_cursors() {
         let registry = registry(&["a"]);
-        let result = registry.list(&RegistryQuery {
-            cursor: Some("not-a-cursor".to_owned()),
-            ..RegistryQuery::default()
-        });
-        let Err(err) = result else {
-            panic!("expected an invalid cursor error");
-        };
-        assert_eq!(err, InvalidCursor);
+        for encoded in ["not-a-cursor", "00", "02aa", &hex::encode("a")] {
+            let result = registry.list(&RegistryQuery {
+                cursor: Some(encoded.to_owned()),
+                ..RegistryQuery::default()
+            });
+            let Err(err) = result else {
+                panic!("expected cursor {encoded:?} to be rejected");
+            };
+            assert_eq!(err, InvalidCursor);
+        }
     }
 
     #[test]
@@ -363,7 +397,7 @@ mod tests {
         let registry = registry(&["a", "b"]);
         let page = registry
             .list(&RegistryQuery {
-                cursor: Some(encode_cursor("a", Step::Before)),
+                cursor: Some(Cursor::encode("a", Step::Before)),
                 ..RegistryQuery::default()
             })
             .unwrap();

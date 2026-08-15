@@ -109,6 +109,7 @@ async fn update_setting(
     path = "",
     operation_id = operation_ids::LIST_SETTING_DEFINITIONS,
     params(SimpleListParams),
+    security(()),
     responses((
         status = 200,
         description = "Setting definitions",
@@ -122,19 +123,13 @@ async fn list_setting_definitions(
     let page = state
         .settings()
         .registry()
-        .list(&params.to_registry_query())
+        .list(&params.to_query())
         .map_err(|_| ApiError::BAD_REQUEST)?;
-    Ok(Json(Page {
-        items: page
-            .items
-            .iter()
-            .map(|definition| SettingDefinitionSummary {
-                key: definition.key().to_owned(),
-            })
-            .collect(),
-        next_cursor: page.next_cursor,
-        prev_cursor: page.prev_cursor,
-    }))
+    Ok(Json(Page::from_registry(page, |definition| {
+        SettingDefinitionSummary {
+            key: definition.key().to_owned(),
+        }
+    })))
 }
 
 /// Returns one registered setting definition with its full JSON Schema.
@@ -143,6 +138,7 @@ async fn list_setting_definitions(
     path = "/{key}",
     operation_id = operation_ids::GET_SETTING_DEFINITION,
     params(("key" = String, Path, description = "Setting definition key")),
+    security(()),
     responses(
         (status = 200, description = "Setting definition", body = SettingDefinitionResponse),
         (status = 404, description = "Unknown setting definition key"),

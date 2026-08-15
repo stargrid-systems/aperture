@@ -1,7 +1,7 @@
-//! Globally unique registry keys for built-in task kinds.
+//! Globally unique registry keys for built-in task definitions.
 //!
 //! Every task definition must have a unique key. These consts are the single
-//! source of truth so that there is no risk of collisions between task kinds
+//! source of truth so that there is no risk of collisions between definitions
 //! defined across multiple crates.
 
 /// Fetches an artifact into the blob store.

@@ -11,9 +11,7 @@ use axum::response::{IntoResponse, Response};
 use cookie::time::Duration as CookieDuration;
 use cookie::{Cookie, SameSite};
 use utoipa::openapi::Components;
-use utoipa::openapi::security::{
-    ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityRequirement, SecurityScheme,
-};
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 
 use crate::{AppState, OpenApiSpec};
 
@@ -139,21 +137,23 @@ pub fn clear_session_cookie() -> String {
         .to_string()
 }
 
-/// Adds session-cookie and bearer-token security schemes plus a default
-/// security requirement to the spec. Endpoints annotated with
-/// `security(())` override the default and are documented as public.
-pub fn add_security_schemes(spec: &mut OpenApiSpec) {
-    let components = spec.components.get_or_insert_with(Components::new);
-    components.security_schemes.insert(
-        "SessionCookie".to_owned(),
-        SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new(SESSION_COOKIE))),
-    );
-    components.security_schemes.insert(
-        "BearerAuth".to_owned(),
-        SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
-    );
-    spec.security = Some(vec![
-        SecurityRequirement::default().add::<&str, [&str; 0], &str>("SessionCookie", []),
-        SecurityRequirement::default().add::<&str, [&str; 0], &str>("BearerAuth", []),
-    ]);
+/// Adds the session-cookie and bearer-token security schemes to the spec.
+///
+/// The default security requirement lives on the `#[openapi]` attribute;
+/// handlers annotated with `security(())` override it and are documented as
+/// public.
+pub struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, spec: &mut OpenApiSpec) {
+        let components = spec.components.get_or_insert_with(Components::new);
+        components.security_schemes.insert(
+            "SessionCookie".to_owned(),
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new(SESSION_COOKIE))),
+        );
+        components.security_schemes.insert(
+            "BearerAuth".to_owned(),
+            SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+        );
+    }
 }

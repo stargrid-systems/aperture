@@ -1,5 +1,4 @@
-//! Runtime composition primitives: a definition registry, JSON Schema
-//! derivation, workers, worker sets, and a supervisor.
+//! Runtime composition primitives.
 //!
 //! Aperture is built out of long-running background tasks (the HTTP server,
 //! the task scheduler, the log worker). Each implements [`Worker`]. A
@@ -9,11 +8,9 @@
 //! Workers that themselves own multiple subtasks (for example, the HTTP
 //! server's listener + reload watcher) compose via [`WorkerSet`].
 //!
-//! [`Registry`] is a generic keyed map for type-erased definitions. Each
-//! domain (tasks, settings) instantiates it with its own erased trait, which
-//! implements [`RegistryEntry`] so the registry owns keyed registration and
-//! cursor pagination. [`json_schema`] turns a type's `OpenAPI` component into
-//! a standalone JSON Schema document.
+//! [`Registry`] is a generic keyed map for type-erased definitions, and
+//! [`json_schema`] turns a type's `OpenAPI` component into a standalone JSON
+//! Schema document.
 
 use std::future::Future;
 

@@ -16,6 +16,7 @@ use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
+use self::auth::SecurityAddon;
 pub use self::avatar::{AvatarAnimation, AvatarStyle};
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 pub use self::server::HttpServer;
@@ -107,23 +108,21 @@ impl AppState {
     // TODO(utoipa): These types are only referenced indirectly as field types
     // of IntoParams structs. utoipa does not discover their schemas
     // automatically. See: <https://github.com/stargrid-systems/aperture/issues/110>.
-    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam, ApiKeyId, UserId))
+    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam, ApiKeyId, UserId)),
+    modifiers(&SecurityAddon),
+    security(
+        ("SessionCookie" = []),
+        ("BearerAuth" = [])
+    )
 )]
 struct ApiDoc;
-
 fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi()).nest("/api", api_routes())
 }
 
 /// Returns the static `OpenAPI` specification of the gateway API.
-///
-/// The spec describes the API surface itself; the per-definition JSON Schemas
-/// live behind the definitions endpoints instead, so the spec stays a stable
-/// contract for code generation.
 pub fn openapi() -> OpenApiSpec {
-    let mut spec = self::api_router().split_for_parts().1;
-    auth::add_security_schemes(&mut spec);
-    spec
+    self::api_router().split_for_parts().1
 }
 
 /// Builds the full axum application.

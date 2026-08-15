@@ -2,7 +2,7 @@
 //!
 //! Two concerns are kept apart. [`RunError`] is what a task body returns from
 //! its `run` function: the body was cancelled or it failed. [`TaskError`] is
-//! the system error for operating the task system: resolving kinds, encoding
+//! the system error for operating the task system: resolving keys, encoding
 //! and decoding payloads, and talking to storage.
 
 use aperture_storage::{StorageError, TaskId};

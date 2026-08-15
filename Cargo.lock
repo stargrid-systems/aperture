@@ -265,6 +265,7 @@ name = "aperture-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aperture-runtime",
  "hex",
  "jiff",
  "password-hash",

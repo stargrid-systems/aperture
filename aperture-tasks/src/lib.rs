@@ -10,7 +10,7 @@
 //! declare whether a key can be cancelled at all and whether it is safe to
 //! interrupt across a restart.
 //!
-//! [`Scheduler`] drives registered kinds on a periodic schedule.
+//! [`Scheduler`] drives registered definitions on a periodic schedule.
 
 use aperture_runtime::Registry;
 pub use aperture_storage::{

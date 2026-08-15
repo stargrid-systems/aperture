@@ -115,15 +115,6 @@ pub enum OrderParam {
     Desc,
 }
 
-impl From<OrderParam> for aperture_artifacts::Order {
-    fn from(order: OrderParam) -> Self {
-        match order {
-            OrderParam::Asc => Self::Asc,
-            OrderParam::Desc => Self::Desc,
-        }
-    }
-}
-
 impl From<OrderParam> for aperture_runtime::Order {
     fn from(order: OrderParam) -> Self {
         match order {
@@ -138,25 +129,20 @@ impl From<OrderParam> for aperture_runtime::Order {
 #[serde(default)]
 #[into_params(parameter_in = Query)]
 pub struct SimpleListParams {
+    /// Maximum number of items to return. Clamped to `1..=200`, defaults to
+    /// 50.
     #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
+    /// Cursor from a page's `next_cursor` or `prev_cursor`.
     pub cursor: Option<String>,
+    /// Sort direction. Defaults to ascending.
     pub order: Option<OrderParam>,
 }
 
 impl SimpleListParams {
-    /// Converts these params into a storage `ListQuery`.
+    /// Converts these params into a `ListQuery`.
     pub fn to_query(&self) -> aperture_artifacts::ListQuery {
         aperture_artifacts::ListQuery {
-            limit: self.limit,
-            cursor: self.cursor.clone(),
-            order: self.order.map(Into::into),
-        }
-    }
-
-    /// Converts these params into a registry `RegistryQuery`.
-    pub fn to_registry_query(&self) -> aperture_runtime::RegistryQuery {
-        aperture_runtime::RegistryQuery {
             limit: self.limit,
             cursor: self.cursor.clone(),
             order: self.order.map(Into::into),
