@@ -129,9 +129,8 @@ mod tests {
     use std::borrow::Cow;
 
     use utoipa::ToSchema;
-    use utoipa::openapi::Ref;
-    use utoipa::openapi::RefOr;
     use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
+    use utoipa::openapi::{Ref, RefOr};
 
     use super::*;
 
@@ -157,10 +156,7 @@ mod tests {
         }
 
         fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
-            schemas.push((
-                "Node".to_owned(),
-                RefOr::Ref(Ref::from_schema_name("Node")),
-            ));
+            schemas.push(("Node".to_owned(), RefOr::Ref(Ref::from_schema_name("Node"))));
         }
     }
 
