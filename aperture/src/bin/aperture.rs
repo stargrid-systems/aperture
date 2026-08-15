@@ -97,7 +97,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn emit_openapi() -> anyhow::Result<()> {
-    let doc = aperture::openapi();
+    let doc = aperture_http::openapi();
     let json = serde_json::to_string_pretty(&doc)?;
     println!("{json}");
     Ok(())

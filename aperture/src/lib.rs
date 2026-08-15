@@ -7,8 +7,8 @@ use std::sync::Arc;
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
 use aperture_http::{
-    AppState, AvatarAnimation, AvatarStyle, HttpServer, OpenApiSpec, RotateCertificateDefinition,
-    Spectra, SpectraConfig, SpectraWorker, install_default_rotation_schedule,
+    AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
+    SpectraConfig, SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
 use aperture_settings::{SettingRegistry, Settings};
@@ -82,7 +82,7 @@ pub async fn serve(
     let auth = AuthHandle::new(storage.clone()).await?;
 
     let mut registry = TaskRegistry::new();
-    register_definitions(&mut registry, artifacts.clone());
+    register_tasks(&mut registry, artifacts.clone());
     let tasks = Tasks::new(storage.tasks()?, registry);
 
     let mut setting_registry = SettingRegistry::new();
@@ -150,13 +150,8 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
-/// Returns the static `OpenAPI` specification of the gateway API.
-pub fn openapi() -> OpenApiSpec {
-    aperture_http::openapi()
-}
-
 /// Registers every task definition the gateway supports.
-fn register_definitions(registry: &mut TaskRegistry, artifacts: Artifacts) {
+fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts) {
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     registry.register(Arc::new(RotateCertificateDefinition::new(artifacts)));
 }
