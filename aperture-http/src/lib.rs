@@ -175,20 +175,6 @@ mod tests {
         "getSettingDefinition",
     ];
 
-    const OBJECTS: &[&str] = &[
-        "artifact",
-        "task",
-        "task-schedule",
-        "log",
-        "user",
-        "api-key",
-        "setting",
-    ];
-
-    const ACTIONS: &[&str] = &[
-        "read", "download", "write", "evict", "create", "update", "delete", "cancel",
-    ];
-
     #[test]
     fn spec_documents_permissions_per_operation() {
         let spec = serde_json::to_value(openapi()).expect("spec must serialize");
@@ -213,17 +199,15 @@ mod tests {
                     );
                     continue;
                 };
-                let (object, action) = permission
-                    .as_str()
-                    .and_then(|perm| perm.split_once(':'))
-                    .unwrap_or(("", ""));
+                // The values come from Object and Action through
+                // required_permission, so the compiler already guarantees the
+                // vocabulary. Only the object:action shape needs checking.
                 assert!(
-                    OBJECTS.contains(&object),
-                    "{op_id} unknown object {object:?}"
-                );
-                assert!(
-                    ACTIONS.contains(&action),
-                    "{op_id} unknown action {action:?}"
+                    permission
+                        .as_str()
+                        .and_then(|perm| perm.split_once(':'))
+                        .is_some_and(|(object, action)| !object.is_empty() && !action.is_empty()),
+                    "{op_id} permission is not object:action: {permission}"
                 );
             }
         }

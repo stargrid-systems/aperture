@@ -1,4 +1,4 @@
-use aperture_auth::{Action, AuthenticatedActor, Object};
+use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
 use aperture_storage::{EventFilter, SpanFilter, SpanId, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -27,7 +27,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_LOGS,
-    extensions(("x-required-permission" = json!("log:read"))),
+    extensions(("x-required-permission" = json!(required_permission(Object::Log, Action::Read)))),
     params(LogListParams),
     responses((status = 200, description = "Log events", body = Page<LogEventResponse>)),
 )]
@@ -65,7 +65,7 @@ async fn list_logs(
     get,
     path = "/targets",
     operation_id = operation_ids::LIST_LOG_TARGETS,
-    extensions(("x-required-permission" = json!("log:read"))),
+    extensions(("x-required-permission" = json!(required_permission(Object::Log, Action::Read)))),
     params(LogTargetListParams),
     responses((status = 200, description = "Target names", body = Page<String>)),
 )]
@@ -90,7 +90,7 @@ async fn list_log_targets(
     get,
     path = "/boots",
     operation_id = operation_ids::LIST_LOG_BOOTS,
-    extensions(("x-required-permission" = json!("log:read"))),
+    extensions(("x-required-permission" = json!(required_permission(Object::Log, Action::Read)))),
     params(SimpleListParams),
     responses((status = 200, description = "Boot sessions", body = Page<BootResponse>)),
 )]
@@ -120,7 +120,7 @@ async fn list_log_boots(
     get,
     path = "/spans",
     operation_id = operation_ids::LIST_SPANS,
-    extensions(("x-required-permission" = json!("log:read"))),
+    extensions(("x-required-permission" = json!(required_permission(Object::Log, Action::Read)))),
     params(LogSpanListParams),
     responses((status = 200, description = "Spans", body = Page<LogSpanResponse>)),
 )]
@@ -162,7 +162,7 @@ async fn list_spans(
     get,
     path = "/spans/{id}",
     operation_id = operation_ids::GET_SPAN,
-    extensions(("x-required-permission" = json!("log:read"))),
+    extensions(("x-required-permission" = json!(required_permission(Object::Log, Action::Read)))),
     params(("id" = SpanId, Path, description = "Span id")),
     responses(
         (status = 200, description = "Span with events", body = LogSpanDetailResponse),
