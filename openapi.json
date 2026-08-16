@@ -85,7 +85,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "api-key:create"
       }
     },
     "/api/v1/api-keys/{id}": {
@@ -110,7 +111,8 @@
           "404": {
             "description": "Unknown API key"
           }
-        }
+        },
+        "x-required-permission": "api-key:delete"
       }
     },
     "/api/v1/artifacts": {
@@ -170,7 +172,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "artifact:read"
       }
     },
     "/api/v1/artifacts/{key}": {
@@ -202,7 +205,8 @@
           "404": {
             "description": "Unknown artifact"
           }
-        }
+        },
+        "x-required-permission": "artifact:read"
       },
       "put": {
         "summary": "Uploads a new artifact version.",
@@ -247,7 +251,8 @@
           "413": {
             "description": "Body exceeded the maximum upload size"
           }
-        }
+        },
+        "x-required-permission": "artifact:write"
       }
     },
     "/api/v1/artifacts/{key}/versions": {
@@ -334,7 +339,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "artifact:read"
       }
     },
     "/api/v1/artifacts/{key}/versions/{digest}": {
@@ -375,7 +381,8 @@
           "404": {
             "description": "Unknown version"
           }
-        }
+        },
+        "x-required-permission": "artifact:read"
       },
       "delete": {
         "summary": "Evicts one stored version and its blob, if no other version needs it.",
@@ -407,7 +414,8 @@
           "404": {
             "description": "Unknown version"
           }
-        }
+        },
+        "x-required-permission": "artifact:evict"
       }
     },
     "/api/v1/artifacts/{key}/versions/{digest}/blob": {
@@ -470,7 +478,8 @@
           "404": {
             "description": "Unknown version"
           }
-        }
+        },
+        "x-required-permission": "artifact:download"
       }
     },
     "/api/v1/auth/change-password": {
@@ -744,7 +753,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "log:read"
       }
     },
     "/api/v1/logs/boots": {
@@ -792,7 +802,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "log:read"
       }
     },
     "/api/v1/logs/spans": {
@@ -921,7 +932,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "log:read"
       }
     },
     "/api/v1/logs/spans/{id}": {
@@ -953,7 +965,8 @@
           "404": {
             "description": "Unknown span"
           }
-        }
+        },
+        "x-required-permission": "log:read"
       }
     },
     "/api/v1/logs/targets": {
@@ -1010,7 +1023,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "log:read"
       }
     },
     "/api/v1/setting-definitions": {
@@ -1031,7 +1045,10 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {}
+        ]
       }
     },
     "/api/v1/settings": {
@@ -1052,7 +1069,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "setting:read"
       }
     },
     "/api/v1/settings/{key}": {
@@ -1084,7 +1102,8 @@
           "404": {
             "description": "Unknown setting key"
           }
-        }
+        },
+        "x-required-permission": "setting:read"
       },
       "put": {
         "summary": "Replaces the value of one setting key.",
@@ -1127,7 +1146,8 @@
           "404": {
             "description": "Unknown setting key"
           }
-        }
+        },
+        "x-required-permission": "setting:update"
       }
     },
     "/api/v1/task-definitions": {
@@ -1148,7 +1168,10 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {}
+        ]
       }
     },
     "/api/v1/task-schedules": {
@@ -1196,7 +1219,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "task-schedule:read"
       },
       "post": {
         "summary": "Creates a new periodic task schedule.",
@@ -1225,7 +1249,8 @@
           "422": {
             "description": "Invalid input"
           }
-        }
+        },
+        "x-required-permission": "task-schedule:create"
       }
     },
     "/api/v1/task-schedules/{id}": {
@@ -1257,7 +1282,8 @@
           "404": {
             "description": "Unknown task schedule"
           }
-        }
+        },
+        "x-required-permission": "task-schedule:read"
       },
       "delete": {
         "summary": "Deletes a task schedule.",
@@ -1280,7 +1306,8 @@
           "404": {
             "description": "Unknown task schedule"
           }
-        }
+        },
+        "x-required-permission": "task-schedule:delete"
       },
       "patch": {
         "summary": "Updates a task schedule's interval and/or enabled flag.",
@@ -1320,7 +1347,8 @@
           "404": {
             "description": "Unknown task schedule"
           }
-        }
+        },
+        "x-required-permission": "task-schedule:update"
       }
     },
     "/api/v1/tasks": {
@@ -1443,7 +1471,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "task:read"
       },
       "post": {
         "summary": "Creates a task of the given definition key and starts it.",
@@ -1473,7 +1502,8 @@
           "400": {
             "description": "Unknown key or invalid input"
           }
-        }
+        },
+        "x-required-permission": "task:create"
       }
     },
     "/api/v1/tasks/{id}": {
@@ -1505,7 +1535,8 @@
           "404": {
             "description": "Unknown task"
           }
-        }
+        },
+        "x-required-permission": "task:read"
       }
     },
     "/api/v1/tasks/{id}/cancel": {
@@ -1536,7 +1567,8 @@
           "410": {
             "description": "Task has already finished"
           }
-        }
+        },
+        "x-required-permission": "task:cancel"
       }
     },
     "/api/v1/users": {
@@ -1584,7 +1616,8 @@
               }
             }
           }
-        }
+        },
+        "x-required-permission": "user:read"
       },
       "post": {
         "summary": "Creates a new user.",
@@ -1613,7 +1646,8 @@
           "403": {
             "description": "Insufficient permissions"
           }
-        }
+        },
+        "x-required-permission": "user:create"
       }
     },
     "/api/v1/users/{id}": {
@@ -1645,7 +1679,8 @@
           "404": {
             "description": "Unknown user"
           }
-        }
+        },
+        "x-required-permission": "user:read"
       },
       "delete": {
         "summary": "Deletes a user.",
@@ -1668,7 +1703,8 @@
           "404": {
             "description": "Unknown user"
           }
-        }
+        },
+        "x-required-permission": "user:delete"
       }
     },
     "/api/v1/users/{id}/avatar": {
@@ -2009,12 +2045,12 @@
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/RotateCertificateInput"
+                "$ref": "#/components/schemas/DownloadInput"
               },
               "key": {
                 "type": "string",
                 "enum": [
-                  "rotate-certificate"
+                  "download"
                 ]
               }
             }
@@ -2027,12 +2063,12 @@
             ],
             "properties": {
               "input": {
-                "$ref": "#/components/schemas/DownloadInput"
+                "$ref": "#/components/schemas/RotateCertificateInput"
               },
               "key": {
                 "type": "string",
                 "enum": [
-                  "download"
+                  "rotate-certificate"
                 ]
               }
             }
