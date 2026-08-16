@@ -158,20 +158,18 @@ mod tests {
         const KEY: &'static str = "test.large";
     }
 
-    /// Fixed-layout payloads (e.g. `ArtifactWritten`) travel inline.
-    /// Payloads carrying a `serde_json::Value` (e.g. `SettingChange`, 96
-    /// bytes with `preserve_order` enabled workspace-wide by the pinned
-    /// dicebear crates) spill to the heap fallback, covered below.
+    /// The real artifact payloads must stay inline: if a field grows past
+    /// 64 bytes, every emit starts allocating and this fails.
+    ///
+    /// The envelope round-trip is omitted: the dev-dep cycle with
+    /// aperture-artifacts builds a second copy of this crate for tests, so
+    /// the payloads implement the other copy's `EventDefinition` trait.
     #[test]
-    fn fixed_layout_payloads_fit_inline() {
-        // Mirrors ArtifactWritten (String + Option<String>).
-        #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
-        struct Written {
-            key: String,
-            digest: Option<String>,
-        }
+    fn real_artifact_payloads_stay_inline() {
+        use aperture_artifacts::{ArtifactRemoved, ArtifactWritten};
 
-        assert!(size_of::<Written>() <= size_of::<S8>());
+        assert!(size_of::<ArtifactWritten>() <= size_of::<S8>());
+        assert!(size_of::<ArtifactRemoved>() <= size_of::<S8>());
     }
 
     #[test]

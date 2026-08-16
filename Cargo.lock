@@ -196,6 +196,7 @@ dependencies = [
 name = "aperture-events"
 version = "0.1.0"
 dependencies = [
+ "aperture-artifacts",
  "aperture-runtime",
  "aperture-storage",
  "jiff",

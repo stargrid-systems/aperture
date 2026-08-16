@@ -25,4 +25,5 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 utoipa = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
+aperture-artifacts = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

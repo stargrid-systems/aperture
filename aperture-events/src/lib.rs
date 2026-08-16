@@ -17,8 +17,22 @@
 //!
 //! The [`EventRegistry`] holds the registered event kinds and serves their
 //! payload schemas.
-
-pub use aperture_storage::{Event, EventFilter, EventId, EventRepository, NewEvent};
+//!
+//! # Delivery and durability guarantees
+//!
+//! - `emit` dispatches to subscribers, queues for the recorder, then returns.
+//!   An `Ok` means queued, not persisted: the recorder flushes batches, at the
+//!   latest 200 ms after the first pending event.
+//! - The recorder queue never drops events. When it is full, `emit` applies
+//!   backpressure. When no recorder drains the bus, `emit` fails with
+//!   `EventError::RecorderClosed`.
+//! - A failing recorder flush is retried with backoff for up to 30 s, then the
+//!   batch is dropped and the loss is logged with the id range.
+//! - Subscriber delivery is at-most-once. A slow subscriber's events are
+//!   dropped, and the next `recv` reports `Delivery::Lagged(n)` before the next
+//!   event.
+//! - Ordering is per consumer. Concurrent emits may reach a subscriber in a
+//!   different order than the recorder persists them.
 
 pub use self::bus::EventBus;
 pub use self::definition::EventDefinition;

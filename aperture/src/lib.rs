@@ -224,7 +224,27 @@ async fn open_storage(data_dir: &Path) -> anyhow::Result<Storage> {
 mod tests {
     use std::path::PathBuf;
 
+    use aperture_events::EventDefinition;
+
     use super::*;
+
+    #[test]
+    fn registers_every_emitted_event_kind() {
+        let mut registry = EventRegistry::new();
+        register_events(&mut registry);
+
+        let mut registered: Vec<_> = registry.keys().collect();
+        registered.sort_unstable();
+
+        let mut emitted = [
+            ArtifactRemoved::KEY,
+            ArtifactWritten::KEY,
+            SettingChange::KEY,
+        ];
+        emitted.sort_unstable();
+
+        assert_eq!(registered, emitted);
+    }
 
     #[tokio::test]
     async fn serve_rejects_when_no_listeners_configured() {

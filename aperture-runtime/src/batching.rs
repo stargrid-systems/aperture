@@ -35,8 +35,9 @@ pub trait BatchSink<T>: Send + 'static {
 ///
 /// Flushes when a batch reaches `flush_batch` items, when
 /// `flush_interval` elapses with a pending batch, and once more after the
-/// queue is fully drained on exit. The queue is not buffered anywhere else:
-/// an item handed to the driver is either flushed or the process exits.
+/// queue is fully drained on exit. The queue is not buffered anywhere else.
+/// The driver itself never discards items: every drained item is handed to
+/// the sink, and the sink owns what a failed flush means.
 pub async fn run_batched<T, S>(
     mut rx: mpsc::Receiver<T>,
     stop: Stop,
