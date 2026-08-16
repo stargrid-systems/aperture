@@ -121,17 +121,17 @@ pub async fn serve(
     );
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(artifacts, tls_addr, plain_addr, app, &event_bus).await?;
-
     let event_recorder = EventRecorder::connect(&event_bus, storage.events()?)
         .expect("event recorder connected twice");
+
+    let server = HttpServer::start(artifacts, tls_addr, plain_addr, app, &event_bus).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
-    supervisor.spawn("events", event_recorder);
-    supervisor.spawn("log", log_worker);
     supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
+    supervisor.spawn_last("events", event_recorder);
+    supervisor.spawn_last("log", log_worker);
 
     supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())
