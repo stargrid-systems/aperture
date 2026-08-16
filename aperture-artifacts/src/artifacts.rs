@@ -628,6 +628,7 @@ mod tests {
     use std::time::Duration;
     use std::{env, fs, process};
 
+    use aperture_events::Delivery;
     use aperture_storage::Storage;
     use tokio::time::timeout;
 
@@ -678,7 +679,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let event = rx.recv().await.expect("bus emitted an event");
+        let event = match rx.recv().await.expect("bus emitted an event") {
+            Delivery::Event(event) => event,
+            Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
+        };
         assert_eq!(event.payload.key, key.as_str());
         assert_eq!(
             event.payload.digest,
@@ -725,7 +729,10 @@ mod tests {
             .evict_version(&key, &artifact.digest)
             .await
             .unwrap();
-        let event = rx.recv().await.expect("bus emitted an event");
+        let event = match rx.recv().await.expect("bus emitted an event") {
+            Delivery::Event(event) => event,
+            Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
+        };
         assert_eq!(event.payload.key, key.as_str());
         cleanup(&dir);
     }

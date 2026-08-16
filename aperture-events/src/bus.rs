@@ -1,7 +1,7 @@
 //! Event bus: dispatches events to subscribers and to the recorder channel.
 
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aperture_storage::ActorId;
@@ -44,6 +44,7 @@ struct Subscriber {
     id: u64,
     filter: Subscription,
     sender: mpsc::Sender<EventEnvelope>,
+    dropped: Arc<AtomicUsize>,
 }
 
 impl Inner {
@@ -89,16 +90,18 @@ impl EventBus {
         }
     }
 
-    /// Emits an event: queues it for recording and dispatches it to
-    /// matching subscribers. No serialization happens here.
+    /// Emits an event: dispatches it to matching subscribers, then queues it
+    /// for recording. No serialization happens here.
     ///
-    /// Blocks while the recorder queue is full (see `RECORDER_CAPACITY`);
-    /// until then emission is allocation-cheap for payloads up to 64 bytes.
+    /// Subscribers are dispatched to before the recorder queue is awaited, so
+    /// a slow recorder never delays live subscribers. Blocks while the
+    /// recorder queue is full (see `RECORDER_CAPACITY`); until then emission
+    /// is allocation-cheap for payloads up to 64 bytes.
     ///
     /// # Errors
     ///
-    /// Returns [`EventError::RecorderClosed`] if no recorder is draining
-    /// the bus anymore.
+    /// Returns [`EventError::RecorderClosed`] if no recorder is draining the
+    /// bus anymore. Subscribers may have been dispatched to regardless.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn emit<D: EventDefinition>(
         &self,
@@ -106,17 +109,18 @@ impl EventBus {
         actor: ActorId,
     ) -> Result<EventEnvelope, EventError> {
         let envelope = EventEnvelope::new(payload, actor, Timestamp::now());
+        self.dispatch(&envelope);
         self.inner
             .recorder_tx
             .send(envelope.clone())
             .await
             .map_err(|_| EventError::RecorderClosed)?;
-        self.dispatch(&envelope);
         Ok(envelope)
     }
 
     /// Dispatches `event` to matching subscribers. Best-effort: a full
-    /// channel drops the event and logs a warning.
+    /// channel drops the event, logs a warning, and counts it on the
+    /// subscriber's drop counter.
     fn dispatch(&self, event: &EventEnvelope) {
         let subs = self
             .inner
@@ -128,6 +132,7 @@ impl EventBus {
                 continue;
             }
             if let Err(mpsc::error::TrySendError::Full(_)) = sub.sender.try_send(event.clone()) {
+                sub.dropped.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(
                     key = event.key(),
                     "event subscriber channel full, dropping event"
@@ -136,12 +141,18 @@ impl EventBus {
         }
     }
 
-    /// Registers a subscriber with `filter` and returns its receiver + guard.
+    /// Registers a subscriber with `filter` and returns its receiver,
+    /// guard, and drop counter.
     fn add_subscriber(
         &self,
         filter: Subscription,
-    ) -> (mpsc::Receiver<EventEnvelope>, SubscriptionGuard) {
+    ) -> (
+        mpsc::Receiver<EventEnvelope>,
+        SubscriptionGuard,
+        Arc<AtomicUsize>,
+    ) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let dropped = Arc::new(AtomicUsize::new(0));
         let id = self
             .inner
             .next_subscriber_id
@@ -154,18 +165,19 @@ impl EventBus {
                 id,
                 filter,
                 sender: tx,
+                dropped: dropped.clone(),
             });
         let guard = SubscriptionGuard {
             inner: Arc::downgrade(&self.inner),
             id,
         };
-        (rx, guard)
+        (rx, guard, dropped)
     }
 
     /// Subscribes to events matching `filter`.
     pub fn subscribe(&self, filter: Subscription) -> EventStream {
-        let (rx, guard) = self.add_subscriber(filter);
-        EventStream { rx, guard }
+        let (rx, guard, dropped) = self.add_subscriber(filter);
+        EventStream { rx, guard, dropped }
     }
 
     /// Subscribes to all events.
@@ -176,10 +188,11 @@ impl EventBus {
     /// Subscribes to events of type `D`, yielding typed payloads with full
     /// metadata. Payloads are handed over by downcast, not deserialization.
     pub fn subscribe_typed<D: EventDefinition>(&self) -> TypedEventStream<D> {
-        let (rx, guard) = self.add_subscriber(Subscription::Key(D::KEY));
+        let (rx, guard, dropped) = self.add_subscriber(Subscription::Key(D::KEY));
         TypedEventStream {
             rx,
             guard,
+            dropped,
             _marker: PhantomData,
         }
     }
@@ -191,6 +204,7 @@ mod tests {
     use utoipa::ToSchema;
 
     use super::*;
+    use crate::stream::Delivery;
 
     #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
     struct Probe {
@@ -207,7 +221,10 @@ mod tests {
         let mut stream = bus.subscribe_typed::<Probe>();
 
         let envelope = bus.emit(Probe { n: 5 }, ActorId::SYSTEM).await.unwrap();
-        let event = stream.recv().await.expect("event delivered");
+        let event = match stream.recv().await.expect("event delivered") {
+            Delivery::Event(event) => event,
+            Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
+        };
 
         assert_eq!(event.id, envelope.id);
         assert_eq!(event.key, Probe::KEY);
@@ -231,12 +248,47 @@ mod tests {
         let mut stream = bus.subscribe_all();
 
         bus.emit(Probe { n: 5 }, ActorId::SYSTEM).await.unwrap();
-        let envelope = stream.recv().await.expect("event delivered");
+        let envelope = match stream.recv().await.expect("event delivered") {
+            Delivery::Event(event) => event,
+            Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
+        };
         assert_eq!(envelope.key(), Probe::KEY);
         assert_eq!(
             envelope.payload_json().unwrap(),
             serde_json::json!({ "n": 5 })
         );
+    }
+
+    #[tokio::test]
+    async fn slow_subscriber_is_told_about_dropped_events() {
+        let bus = EventBus::new();
+        let mut stream = bus.subscribe(Subscription::Key(Probe::KEY));
+
+        for n in 0..(u32::try_from(CHANNEL_CAPACITY).unwrap() + 10) {
+            bus.emit(Probe { n }, ActorId::SYSTEM).await.unwrap();
+        }
+
+        match stream.recv().await.expect("delivery") {
+            Delivery::Lagged(dropped) => assert_eq!(dropped, 10),
+            Delivery::Event(_) => panic!("expected a lag report first"),
+        }
+        assert!(matches!(stream.recv().await, Some(Delivery::Event(_))));
+    }
+
+    #[tokio::test]
+    async fn typed_subscribers_get_lag_reports_too() {
+        let bus = EventBus::new();
+        let mut stream = bus.subscribe_typed::<Probe>();
+
+        for n in 0..(u32::try_from(CHANNEL_CAPACITY).unwrap() + 4) {
+            bus.emit(Probe { n }, ActorId::SYSTEM).await.unwrap();
+        }
+
+        match stream.recv().await.expect("delivery") {
+            Delivery::Lagged(dropped) => assert_eq!(dropped, 4),
+            Delivery::Event(_) => panic!("expected a lag report first"),
+        }
+        assert!(matches!(stream.recv().await, Some(Delivery::Event(_))));
     }
 
     #[tokio::test]

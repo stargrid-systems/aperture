@@ -26,7 +26,7 @@ pub use self::erased::ErasedEventDefinition;
 pub use self::error::EventError;
 pub use self::payload::EventEnvelope;
 pub use self::recorder::EventRecorder;
-pub use self::stream::{EventStream, TypedEvent, TypedEventStream};
+pub use self::stream::{Delivery, EventStream, TypedEvent, TypedEventStream};
 pub use self::subscription::Subscription;
 
 mod bus;
