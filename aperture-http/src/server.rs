@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use aperture_artifacts::Artifacts;
+use aperture_events::EventBus;
 use aperture_runtime::{Stop, Worker, WorkerSet};
 use axum::Router;
 use axum::serve::Listener;
@@ -64,6 +65,7 @@ impl HttpServer {
         tls_addr: Option<SocketAddr>,
         plain_addr: Option<SocketAddr>,
         app: Router,
+        event_bus: &EventBus,
     ) -> anyhow::Result<Self> {
         let mut server = Self::new();
         // The bound HTTPS port, so redirects target the real listener. With an
@@ -78,7 +80,7 @@ impl HttpServer {
             let bound = tcp_listener.local_addr().unwrap_or(tls_addr);
             https_port = Some(bound.port());
             tracing::info!(%bound, "aperture listening (https)");
-            let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener).await?;
+            let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener, event_bus).await?;
             server = server.serve_tls(endpoint, app.clone());
         }
 

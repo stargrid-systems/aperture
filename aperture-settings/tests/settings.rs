@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use aperture_events::EventBus;
 use aperture_settings::{SettingDefinition, SettingError, SettingRegistry, Settings};
 use aperture_storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -20,10 +21,15 @@ fn registry() -> SettingRegistry {
     registry
 }
 
+async fn make_settings() -> Settings {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let event_bus = EventBus::new(storage.events().unwrap());
+    Settings::new(storage.settings().unwrap(), registry(), event_bus)
+}
+
 #[tokio::test]
 async fn get_value_returns_default_when_nothing_stored() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let settings = Settings::new(storage.settings().unwrap(), registry());
+    let settings = make_settings().await;
 
     let value = settings.get_value("system").await.unwrap();
     assert_eq!(value, serde_json::json!({"hostname": null}));
@@ -31,8 +37,7 @@ async fn get_value_returns_default_when_nothing_stored() {
 
 #[tokio::test]
 async fn get_typed_returns_default_when_nothing_stored() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let settings = Settings::new(storage.settings().unwrap(), registry());
+    let settings = make_settings().await;
 
     let value = settings.get::<SystemValue>().await.unwrap();
     assert_eq!(value, SystemValue { hostname: None });
@@ -40,8 +45,7 @@ async fn get_typed_returns_default_when_nothing_stored() {
 
 #[tokio::test]
 async fn set_then_get_round_trips() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let settings = Settings::new(storage.settings().unwrap(), registry());
+    let settings = make_settings().await;
 
     settings
         .set_value(
@@ -58,8 +62,7 @@ async fn set_then_get_round_trips() {
 
 #[tokio::test]
 async fn get_value_rejects_unregistered_key() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let settings = Settings::new(storage.settings().unwrap(), registry());
+    let settings = make_settings().await;
 
     let err = settings.get_value("unknown").await.unwrap_err();
     assert!(matches!(err, SettingError::NotRegistered(_)));
@@ -67,8 +70,7 @@ async fn get_value_rejects_unregistered_key() {
 
 #[tokio::test]
 async fn set_value_rejects_unregistered_key() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let settings = Settings::new(storage.settings().unwrap(), registry());
+    let settings = make_settings().await;
 
     let err = settings
         .set_value(
@@ -83,8 +85,7 @@ async fn set_value_rejects_unregistered_key() {
 
 #[tokio::test]
 async fn set_value_rejects_value_that_does_not_deserialize() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let settings = Settings::new(storage.settings().unwrap(), registry());
+    let settings = make_settings().await;
 
     let err = settings
         .set_value(
@@ -102,8 +103,7 @@ async fn set_value_rejects_value_that_does_not_deserialize() {
 
 #[tokio::test]
 async fn list_returns_registered_keys_with_defaults() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let settings = Settings::new(storage.settings().unwrap(), registry());
+    let settings = make_settings().await;
 
     let entries = settings.list().await.unwrap();
     assert_eq!(entries.len(), 1);

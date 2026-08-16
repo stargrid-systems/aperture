@@ -133,6 +133,7 @@ dependencies = [
  "anyhow",
  "aperture-artifacts",
  "aperture-auth",
+ "aperture-events",
  "aperture-http",
  "aperture-runtime",
  "aperture-settings",
@@ -155,6 +156,7 @@ name = "aperture-artifacts"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aperture-events",
  "aperture-storage",
  "aperture-tasks",
  "jiff",
@@ -191,12 +193,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "aperture-events"
+version = "0.1.0"
+dependencies = [
+ "aperture-storage",
+ "jiff",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "aperture-http"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "aperture-artifacts",
  "aperture-auth",
+ "aperture-events",
  "aperture-runtime",
  "aperture-settings",
  "aperture-storage",
@@ -249,6 +266,7 @@ dependencies = [
 name = "aperture-settings"
 version = "0.1.0"
 dependencies = [
+ "aperture-events",
  "aperture-runtime",
  "aperture-storage",
  "jiff",

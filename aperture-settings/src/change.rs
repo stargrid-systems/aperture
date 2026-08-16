@@ -1,46 +1,25 @@
-//! Change feed for the settings store.
-//!
-//! [`Settings::subscribe`] returns a [`Receiver`] that observes every
-//! successful write. The feed is in-process and best-effort: late subscribers
-//! do not see events from before they subscribed, and a full channel drops
-//! events (the next subscriber-visible event still arrives).
-//!
-//! Use the feed to react to setting changes without coupling writers to
-//! consumers.
-//!
-//! [`Settings::subscribe`]: crate::Settings::subscribe
-//! [`Receiver`]: tokio::sync::broadcast::Receiver
+//! Setting change event: emitted when a setting value is written.
 
-use aperture_storage::ActorId;
-use jiff::Timestamp;
+use aperture_events::EventDefinition;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
 
 use crate::definition::SettingDefinition;
 
-/// A setting was written.
-#[derive(Debug, Clone, PartialEq)]
+/// A setting was written. Emitted through the event bus as
+/// `"setting.changed"`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[expect(clippy::derive_partial_eq_without_eq)]
 pub struct SettingChange {
     pub(crate) key: String,
     pub(crate) value: Value,
-    pub(crate) actor: ActorId,
-    pub(crate) timestamp: Timestamp,
 }
 
 impl SettingChange {
     /// Checks whether this change is for setting `D`.
     pub fn is<D: SettingDefinition>(&self) -> bool {
         self.key == D::KEY
-    }
-
-    /// The actor that performed the change.
-    pub const fn actor(&self) -> ActorId {
-        self.actor
-    }
-
-    /// When the change was written.
-    pub const fn timestamp(&self) -> Timestamp {
-        self.timestamp
     }
 
     /// Decodes the change as setting `D`.
@@ -76,6 +55,10 @@ impl SettingChange {
         }
         Ok(serde_json::from_value(self.value.clone())?)
     }
+}
+
+impl EventDefinition for SettingChange {
+    const KEY: &'static str = "setting.changed";
 }
 
 /// Errors from decoding a [`SettingChange`].

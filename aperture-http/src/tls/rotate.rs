@@ -116,7 +116,8 @@ mod tests {
     async fn fresh_store() -> Artifacts {
         let storage = Storage::open(":memory:").await.unwrap();
         let dir = TempDir::new();
-        Artifacts::new(storage, dir.0.clone())
+        let event_bus = aperture_events::EventBus::new(storage.events().unwrap());
+        Artifacts::new(storage, dir.0.clone(), event_bus)
     }
 
     #[tokio::test]

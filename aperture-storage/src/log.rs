@@ -18,7 +18,7 @@ db_id! {
 
 db_id! {
     /// Primary key of a row in the `log_events` table.
-    pub struct EventId;
+    pub struct LogEventId;
 }
 
 mod col {
@@ -38,8 +38,8 @@ mod col {
     pub const TIMESTAMP: &str = "timestamp";
 }
 
-/// Columns selected for an [`Event`], in [`Event::try_from`] order.
-const EVENT_COLUMNS: Columns = Columns::new(&[
+/// Columns selected for an [`LogEvent`], in [`LogEvent::try_from`] order.
+const LOG_EVENT_COLUMNS: Columns = Columns::new(&[
     col::ID,
     col::SPAN_ID,
     col::LEVEL,
@@ -172,8 +172,8 @@ pub struct Span {
 
 /// A persisted tracing event (log record).
 #[derive(Debug, Clone)]
-pub struct Event {
-    pub id: EventId,
+pub struct LogEvent {
+    pub id: LogEventId,
     pub boot_id: Uuid,
     pub span_id: Option<SpanId>,
     pub level: Level,
@@ -196,7 +196,7 @@ pub struct BootInfo {
 
 /// Filters for log event queries.
 #[derive(Default)]
-pub struct EventFilter {
+pub struct LogEventFilter {
     pub min_level: Option<Level>,
     pub target: Vec<String>,
     pub query: Option<String>,
@@ -247,7 +247,7 @@ pub struct SpanRecord<'a> {
 
 /// Plain-data description of an event to persist via
 /// [`LogBatch::insert_event`].
-pub struct EventRecord<'a> {
+pub struct LogEventRecord<'a> {
     pub boot_id: Uuid,
     pub span_tracing_id: Option<u64>,
     pub level: Level,
@@ -323,9 +323,9 @@ impl LogRepository {
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn list_events(
         &self,
-        filter: &EventFilter,
+        filter: &LogEventFilter,
         query: &ListQuery,
-    ) -> Result<Page<Event>> {
+    ) -> Result<Page<LogEvent>> {
         let paginator = Paginator::new(query, Order::Desc)?;
         let keyset = Keyset::with_id(col::TIMESTAMP, paginator.query_order());
 
@@ -360,7 +360,7 @@ impl LogRepository {
 
         let sql = format!(
             sql!(SELECT {cols} FROM log_events_resolved {where_clause} ORDER BY {order} LIMIT {limit}),
-            cols = EVENT_COLUMNS,
+            cols = LOG_EVENT_COLUMNS,
             where_clause = filters.where_clause(),
             order = keyset.order_by(),
             limit = paginator.fetch_limit(),
@@ -373,7 +373,7 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(Event::try_from(&row)?);
+            items.push(LogEvent::try_from(&row)?);
         }
         Ok(paginator.finish(items, |event| {
             (
@@ -524,10 +524,10 @@ impl LogRepository {
     ///
     /// Returns `StorageError` if the query fails or a row cannot be decoded.
     #[tracing::instrument(level = "info", skip(self))]
-    pub async fn events_for_span(&self, span_id: SpanId) -> Result<Vec<Event>> {
+    pub async fn events_for_span(&self, span_id: SpanId) -> Result<Vec<LogEvent>> {
         let sql = format!(
             sql!(SELECT {cols} FROM log_events_resolved WHERE span_id = ?1 ORDER BY timestamp),
-            cols = EVENT_COLUMNS,
+            cols = LOG_EVENT_COLUMNS,
         );
         let mut rows = self
             .connection
@@ -536,7 +536,7 @@ impl LogRepository {
             .map_err(StorageError::from_turso)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
-            items.push(Event::try_from(&row)?);
+            items.push(LogEvent::try_from(&row)?);
         }
         Ok(items)
     }
@@ -670,7 +670,7 @@ impl LogBatch<'_> {
     /// # Errors
     ///
     /// Returns `StorageError::Database` if the insert fails.
-    pub async fn insert_event(&mut self, record: EventRecord<'_>) -> Result<()> {
+    pub async fn insert_event(&mut self, record: LogEventRecord<'_>) -> Result<()> {
         let params = params_from_iter([
             record.span_tracing_id.to_sql(),
             record.level.to_sql(),
@@ -749,7 +749,7 @@ impl LogBatch<'_> {
             "dropped".to_owned(),
             serde_json::Value::Number(count.into()),
         );
-        self.insert_event(EventRecord {
+        self.insert_event(LogEventRecord {
             span_tracing_id: None,
             level: Level::Warn,
             target: "aperture::log",
@@ -774,21 +774,21 @@ impl LogBatch<'_> {
     }
 }
 
-impl TryFrom<&turso::Row> for Event {
+impl TryFrom<&turso::Row> for LogEvent {
     type Error = StorageError;
 
     fn try_from(row: &turso::Row) -> Result<Self> {
         Ok(Self {
-            id: EVENT_COLUMNS.extract(row, col::ID)?,
-            span_id: EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
-            level: EVENT_COLUMNS.extract(row, col::LEVEL)?,
-            target: EVENT_COLUMNS.extract(row, col::TARGET)?,
-            message: EVENT_COLUMNS.extract(row, col::MESSAGE)?,
-            timestamp: EVENT_COLUMNS.extract(row, col::TIMESTAMP)?,
-            file: EVENT_COLUMNS.extract(row, col::FILE)?,
-            line: EVENT_COLUMNS.extract(row, col::LINE)?,
-            boot_id: EVENT_COLUMNS.extract(row, col::BOOT_ID)?,
-            fields: EVENT_COLUMNS.extract(row, col::FIELDS)?,
+            id: LOG_EVENT_COLUMNS.extract(row, col::ID)?,
+            span_id: LOG_EVENT_COLUMNS.extract(row, col::SPAN_ID)?,
+            level: LOG_EVENT_COLUMNS.extract(row, col::LEVEL)?,
+            target: LOG_EVENT_COLUMNS.extract(row, col::TARGET)?,
+            message: LOG_EVENT_COLUMNS.extract(row, col::MESSAGE)?,
+            timestamp: LOG_EVENT_COLUMNS.extract(row, col::TIMESTAMP)?,
+            file: LOG_EVENT_COLUMNS.extract(row, col::FILE)?,
+            line: LOG_EVENT_COLUMNS.extract(row, col::LINE)?,
+            boot_id: LOG_EVENT_COLUMNS.extract(row, col::BOOT_ID)?,
+            fields: LOG_EVENT_COLUMNS.extract(row, col::FIELDS)?,
         })
     }
 }

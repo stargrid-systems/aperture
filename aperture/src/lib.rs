@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
+use aperture_events::EventBus;
 use aperture_http::{
     AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
     SpectraConfig, SpectraWorker, install_default_rotation_schedule,
@@ -72,7 +73,9 @@ pub async fn serve(
 
     init_crypto_provider();
     let boot_id = Uuid::new_v4();
-    let (artifacts, storage) = open_artifacts(&data_dir).await?;
+    let storage = open_storage(&data_dir).await?;
+    let event_bus = EventBus::new(storage.events()?);
+    let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"), event_bus.clone());
 
     let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
 
@@ -87,7 +90,7 @@ pub async fn serve(
 
     let mut setting_registry = SettingRegistry::new();
     register_settings(&mut setting_registry);
-    let settings = Settings::new(storage.settings()?, setting_registry);
+    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
 
     let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
@@ -114,7 +117,7 @@ pub async fn serve(
     );
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(artifacts, tls_addr, plain_addr, app).await?;
+    let server = HttpServer::start(artifacts, tls_addr, plain_addr, app, &event_bus).await?;
 
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
@@ -192,19 +195,14 @@ pub async fn reset_password(username: &str, data_dir: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-/// Opens the storage database and blob store under `data_dir`.
-///
-/// Returns the artifact manager and the storage handle so callers can build
-/// their own repositories alongside it.
-async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Artifacts, Storage)> {
+/// Opens the storage database under `data_dir`.
+async fn open_storage(data_dir: &Path) -> anyhow::Result<Storage> {
     fs::create_dir_all(data_dir).await?;
     let db_path = data_dir.join("aperture.db");
     let db_path = db_path.to_str().ok_or_else(|| {
         anyhow::format_err!("data dir is not valid UTF-8: {}", data_dir.display())
     })?;
-    let storage = Storage::open(db_path).await?;
-    let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"));
-    Ok((artifacts, storage))
+    Ok(Storage::open(db_path).await?)
 }
 
 #[cfg(test)]

@@ -384,16 +384,17 @@ mod tests {
         }
     }
 
-    async fn fresh_store() -> (Artifacts, TempDir) {
+    async fn fresh_store() -> (Artifacts, aperture_events::EventBus, TempDir) {
         let storage = Storage::open(":memory:").await.unwrap();
         let dir = TempDir::new();
-        let artifacts = Artifacts::new(storage, dir.0.clone());
-        (artifacts, dir)
+        let event_bus = aperture_events::EventBus::new(storage.events().unwrap());
+        let artifacts = Artifacts::new(storage, dir.0.clone(), event_bus.clone());
+        (artifacts, event_bus, dir)
     }
 
     #[tokio::test]
     async fn fresh_cert_does_not_need_rotation() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
         assert!(!needs_rotation(&artifacts).await.unwrap());
@@ -401,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_cert_needs_rotation() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
@@ -439,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_certificates_regenerates_only_leaf_when_ca_pair_intact() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
@@ -471,7 +472,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_certificates_regenerates_everything_when_ca_pair_missing() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
@@ -512,7 +513,7 @@ mod tests {
     #[tokio::test]
     async fn load_server_config_succeeds_after_ensure() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
         let config = load_server_config(&artifacts).await.unwrap();
@@ -522,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn load_server_config_fails_on_corrupt_key() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
@@ -537,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn reload_certificates_swaps_shared_config() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
@@ -556,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn rotate_if_due_returns_false_for_fresh_cert() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
@@ -570,7 +571,7 @@ mod tests {
         use x509_parser::extensions::GeneralName as X509GeneralName;
 
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
@@ -644,14 +645,14 @@ mod tests {
 
         install_crypto();
 
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 
         let config = load_shared_config(&artifacts).await.unwrap();
         let old = config.load_full();
 
-        let reload = TlsReload::new(artifacts.clone(), config.clone());
+        let reload = TlsReload::new(artifacts.clone(), config.clone(), &bus);
         let token = CancellationToken::new();
         let handle = tokio::spawn(reload.run(token.clone()));
 
@@ -692,7 +693,7 @@ mod tests {
 
         install_crypto();
 
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         ensure_certificates(&artifacts, bind_addr).await.unwrap();
 
@@ -746,7 +747,7 @@ mod tests {
     #[tokio::test]
     async fn reload_fails_on_half_written_key() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
         ensure_certificates(&artifacts, addr).await.unwrap();
 

@@ -1,5 +1,5 @@
 use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
-use aperture_storage::{EventFilter, SpanFilter, SpanId, SpanParentFilter};
+use aperture_storage::{LogEventFilter, SpanFilter, SpanId, SpanParentFilter};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use utoipa_axum::router::OpenApiRouter;
@@ -45,7 +45,7 @@ async fn list_logs(
         .fields
         .map(JsonQueryString::into_pairs)
         .unwrap_or_default();
-    let filter = EventFilter {
+    let filter = LogEventFilter {
         min_level: params.min_level.map(Into::into),
         target: params.target,
         query: params.q,

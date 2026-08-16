@@ -48,6 +48,7 @@ pub enum Object {
     User,
     ApiKey,
     Setting,
+    Event,
 }
 
 impl Object {
@@ -61,6 +62,7 @@ impl Object {
             Self::User => "user",
             Self::ApiKey => "api-key",
             Self::Setting => "setting",
+            Self::Event => "event",
         }
     }
 }
@@ -205,12 +207,14 @@ pub async fn seed_builtin_policies(e: &mut Enforcer, storage: &Storage) -> casbi
         policy(Role::Operator, Object::TaskSchedule, "*"),
         policy(Role::Operator, Object::Log, Action::Read),
         policy(Role::Operator, Object::Setting, "*"),
+        policy(Role::Operator, Object::Event, Action::Read),
         // Viewer: read-only on non-sensitive data. No artifact downloads.
         policy(Role::Viewer, Object::Artifact, Action::Read),
         policy(Role::Viewer, Object::Task, Action::Read),
         policy(Role::Viewer, Object::TaskSchedule, Action::Read),
         policy(Role::Viewer, Object::Log, Action::Read),
         policy(Role::Viewer, Object::Setting, Action::Read),
+        policy(Role::Viewer, Object::Event, Action::Read),
     ];
     e.add_policies(policies).await?;
 

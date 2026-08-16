@@ -128,6 +128,12 @@ pub const GET_SETTING: &str = "getSetting";
 /// `PUT /api/v1/settings/{scope}`
 pub const UPDATE_SETTING: &str = "updateSetting";
 
+/// `GET /api/v1/events`
+pub const LIST_EVENTS: &str = "listEvents";
+
+/// `GET /api/v1/events/{id}`
+pub const GET_EVENT: &str = "getEvent";
+
 /// `GET /api/v1/setting-definitions`
 pub const LIST_SETTING_DEFINITIONS: &str = "listSettingDefinitions";
 

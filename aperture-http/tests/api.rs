@@ -3,6 +3,7 @@ use std::{env, fs, process, str};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, Role, Username};
+use aperture_events::EventBus;
 use aperture_http::{AppState, AvatarAnimation, AvatarStyle, Spectra, SpectraConfig, app};
 use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, ArtifactId};
@@ -41,7 +42,8 @@ fn test_settings(storage: &Storage) -> Settings {
     let mut registry = SettingRegistry::new();
     registry.register(Arc::new(AvatarStyle::default()));
     registry.register(Arc::new(AvatarAnimation::default()));
-    Settings::new(storage.settings().unwrap(), registry)
+    let event_bus = EventBus::new(storage.events().unwrap());
+    Settings::new(storage.settings().unwrap(), registry, event_bus)
 }
 
 async fn seeded_app() -> (Router, Artifacts, Storage, String) {
@@ -54,7 +56,11 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root);
+    let artifacts = Artifacts::new(
+        storage.clone(),
+        root,
+        EventBus::new(storage.events().unwrap()),
+    );
 
     let repo = storage.artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:ffff", 1_000))
@@ -860,7 +866,11 @@ async fn app_with_role(role: Role) -> (Router, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root);
+    let artifacts = Artifacts::new(
+        storage.clone(),
+        root,
+        EventBus::new(storage.events().unwrap()),
+    );
 
     let mut registry = TaskRegistry::new();
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
@@ -949,7 +959,11 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root);
+    let artifacts = Artifacts::new(
+        storage.clone(),
+        root,
+        EventBus::new(storage.events().unwrap()),
+    );
 
     let mut registry = TaskRegistry::new();
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
