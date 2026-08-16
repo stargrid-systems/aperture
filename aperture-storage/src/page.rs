@@ -7,42 +7,25 @@
 //! correct even when rows are inserted between page fetches, as long as the
 //! sort field and direction do not change.
 
+use aperture_runtime::RegistryQuery;
+pub use aperture_runtime::{Order, RegistryQuery as ListQuery};
 use turso::Value;
 
 use crate::error::{Result, StorageError};
 
-const DEFAULT_LIMIT: u32 = 50;
-const MAX_LIMIT: u32 = 200;
-
-/// Sort direction for a listing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Order {
-    /// Ascending.
-    Asc,
-    /// Descending.
-    Desc,
+/// The SQL keyword for a sort direction.
+const fn keyword(order: Order) -> &'static str {
+    match order {
+        Order::Asc => "ASC",
+        Order::Desc => "DESC",
+    }
 }
 
-impl Order {
-    const fn flip(self) -> Self {
-        match self {
-            Self::Asc => Self::Desc,
-            Self::Desc => Self::Asc,
-        }
-    }
-
-    const fn keyword(self) -> &'static str {
-        match self {
-            Self::Asc => "ASC",
-            Self::Desc => "DESC",
-        }
-    }
-
-    const fn comparison(self) -> &'static str {
-        match self {
-            Self::Asc => ">",
-            Self::Desc => "<",
-        }
+/// The keyset comparison for travel in `order` direction.
+const fn comparison(order: Order) -> &'static str {
+    match order {
+        Order::Asc => ">",
+        Order::Desc => "<",
     }
 }
 
@@ -64,17 +47,6 @@ pub struct Page<T> {
     pub next_cursor: Option<String>,
     /// Cursor for the previous page, or `None` at the start.
     pub prev_cursor: Option<String>,
-}
-
-/// How much to return and where to resume from.
-#[derive(Debug, Clone, Default)]
-pub struct ListQuery {
-    /// Maximum rows to return. Clamped to `1..=200`. Defaults to 50.
-    pub limit: Option<u32>,
-    /// Opaque cursor from a page's `next_cursor` or `prev_cursor`.
-    pub cursor: Option<String>,
-    /// Sort direction. Each listing applies its own default.
-    pub order: Option<Order>,
 }
 
 /// The sort key value carried by a cursor.
@@ -182,7 +154,7 @@ impl Keyset {
 
     /// The `ORDER BY` body (without the keyword).
     pub(crate) fn order_by(&self) -> String {
-        let dir = self.order.keyword();
+        let dir = keyword(self.order);
         if self.tiebreak {
             format!("{} {dir}, id {dir}", self.column)
         } else {
@@ -202,7 +174,7 @@ impl Keyset {
             return (String::new(), Vec::new());
         };
         let col = self.column;
-        let op = self.order.comparison();
+        let op = comparison(self.order);
         if self.tiebreak {
             let sql = format!(
                 "({col} {op} ?{} OR ({col} = ?{} AND id {op} ?{}))",
@@ -251,7 +223,10 @@ impl Paginator {
         };
         let step = cursor.as_ref().map_or(Step::After, |cursor| cursor.step);
         Ok(Self {
-            limit: query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT),
+            limit: query
+                .limit
+                .unwrap_or(RegistryQuery::DEFAULT_LIMIT)
+                .clamp(1, RegistryQuery::MAX_LIMIT),
             cursor,
             step,
             base_order: query.order.unwrap_or(default_order),

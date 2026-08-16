@@ -1,5 +1,6 @@
 use aperture_storage::{
-    LogEventFilter, LogEventRecord, Level, ListQuery, SpanFilter, SpanParentFilter, SpanRecord, Storage,
+    Level, ListQuery, LogEventFilter, LogEventRecord, SpanFilter, SpanParentFilter, SpanRecord,
+    Storage,
 };
 use jiff::Timestamp;
 

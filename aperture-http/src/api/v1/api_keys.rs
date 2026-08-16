@@ -1,4 +1,4 @@
-use aperture_auth::{Action, AuthenticatedActor, Object, RawApiKey, Role};
+use aperture_auth::{Action, AuthenticatedActor, Object, RawApiKey, Role, required_permission};
 use aperture_storage::ApiKeyId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -75,6 +75,7 @@ async fn list_api_keys(
     post,
     path = "",
     operation_id = operation_ids::CREATE_API_KEY,
+    extensions(("x-required-permission" = json!(required_permission(Object::ApiKey, Action::Create)))),
     request_body = CreateApiKeyRequest,
     responses((status = 201, description = "API key created", body = CreateApiKeyResponse)),
 )]
@@ -115,6 +116,7 @@ async fn create_api_key(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_API_KEY,
+    extensions(("x-required-permission" = json!(required_permission(Object::ApiKey, Action::Delete)))),
     params(("id" = ApiKeyId, Path, description = "API key id")),
     responses(
         (status = 204, description = "API key deleted"),

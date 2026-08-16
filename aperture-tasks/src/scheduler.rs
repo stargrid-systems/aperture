@@ -53,7 +53,7 @@ impl Scheduler {
             match self
                 .inner
                 .tasks
-                .create(&schedule.kind, input, ActorId::SYSTEM)
+                .create(&schedule.key, input, ActorId::SYSTEM)
                 .await
             {
                 Ok(invocation) => {
@@ -73,7 +73,7 @@ impl Scheduler {
                     tracing::error!(
                         error = &err as &dyn Error,
                         schedule_id = schedule.id.get(),
-                        kind = %schedule.kind,
+                        key = %schedule.key,
                         "schedule spawn failed, advancing to next interval",
                     );
                     // Advance anyway so a permanently-broken schedule does not
@@ -116,6 +116,7 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use std::future::{Future, ready};
+    use std::sync::Arc;
 
     use aperture_storage::{Interval, ListQuery, NewTaskSchedule, Storage, TaskSchedulePatch};
     use serde_json::{Value, json};
@@ -125,7 +126,8 @@ mod tests {
     struct Ping;
 
     impl crate::TaskDefinition for Ping {
-        const KIND: &'static str = "ping";
+        const KEY: &'static str = "ping";
+
         type Input = Value;
         type Output = ();
 
@@ -161,7 +163,7 @@ mod tests {
     async fn setup() -> Harness {
         let storage = Storage::open(":memory:").await.unwrap();
         let mut registry = crate::TaskRegistry::new();
-        registry.register(Ping);
+        registry.register(Arc::new(Ping));
         let tasks = Tasks::new(storage.tasks().unwrap(), registry);
         let schedules = storage.task_schedules().unwrap();
         Harness {
@@ -172,13 +174,13 @@ mod tests {
 
     async fn create_schedule(
         storage: &Storage,
-        kind: &str,
+        key: &str,
         interval_micros: i64,
         next_run_at: i64,
     ) -> aperture_storage::TaskScheduleId {
         let repo = storage.task_schedules().unwrap();
         repo.create(&NewTaskSchedule {
-            kind: kind.to_owned(),
+            key: key.to_owned(),
             input: json!({}),
             interval: interval(interval_micros),
             next_run_at: ts(next_run_at),
@@ -231,7 +233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_advances_past_unknown_kind_so_it_doesnt_loop() {
+    async fn tick_advances_past_unknown_key_so_it_doesnt_loop() {
         let Harness { scheduler, storage } = setup().await;
         let now = Timestamp::now().as_microsecond();
         let id = create_schedule(&storage, "does-not-exist", 60_000_000, now - 1_000_000).await;

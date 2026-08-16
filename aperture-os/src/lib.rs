@@ -9,18 +9,18 @@
 //! [`EventBus`].
 
 use std::error::Error as StdError;
+use std::sync::Arc;
 
 use anyhow::Context;
 use aperture_events::{EventBus, EventRegistry};
 use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_tasks::{TaskRegistry, Tasks};
 
+pub use self::error::HostnameError;
 use self::event::HostnameApplied;
 use self::hostname::{ApplyHostnameDefinition, ApplyHostnameInput};
-use self::setting::HostnameSetting;
-
-pub use self::error::HostnameError;
 pub use self::setting::Hostname;
+use self::setting::HostnameSetting;
 pub use self::worker::OsWorker;
 
 mod avahi;
@@ -51,9 +51,9 @@ pub async fn register(
     let conn = zbus::Connection::system()
         .await
         .context("failed to connect to system D-Bus")?;
-    task_registry.register(ApplyHostnameDefinition::new(conn.clone()));
-    setting_registry.register(HostnameSetting::default());
-    event_registry.register(HostnameApplied::default());
+    task_registry.register(Arc::new(ApplyHostnameDefinition::new(conn.clone())));
+    setting_registry.register(Arc::new(HostnameSetting::default()));
+    event_registry.register(Arc::new(HostnameApplied::default()));
     Ok(OsRegistration { conn })
 }
 

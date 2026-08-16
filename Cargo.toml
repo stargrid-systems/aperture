@@ -11,6 +11,7 @@ members = [
     "aperture-settings",
     "aperture-storage",
     "aperture-tasks",
+    "dicebear-lite",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
 aperture-settings = { version = "0.1.0", path = "aperture-settings" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
 aperture-tasks = { version = "0.1.0", path = "aperture-tasks" }
+dicebear-lite = { version = "0.1.0", path = "dicebear-lite" }
 
 anyhow = { version = "1", default-features = false }
 arc-swap = { version = "1", default-features = false }

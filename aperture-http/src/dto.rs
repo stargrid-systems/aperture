@@ -17,9 +17,12 @@ pub use self::log::{
     LogSpanListParams, LogSpanResponse, LogTargetListParams,
 };
 pub use self::page::Page;
-pub use self::settings::{SettingResponse, UpdateSettingRequest};
+pub use self::settings::{
+    SettingDefinitionResponse, SettingDefinitionSummary, SettingResponse, UpdateSettingRequest,
+};
 pub use self::task::{
-    CreateTaskRequest, TaskDefinitionResponse, TaskListParams, TaskResponse, TaskStatusParam,
+    CreateTaskRequest, TaskDefinitionResponse, TaskDefinitionSummary, TaskListParams, TaskResponse,
+    TaskStatusParam,
 };
 pub use self::task_schedule::{
     CreateTaskScheduleRequest, TaskScheduleListParams, TaskScheduleResponse,
@@ -114,7 +117,7 @@ pub enum OrderParam {
     Desc,
 }
 
-impl From<OrderParam> for aperture_artifacts::Order {
+impl From<OrderParam> for aperture_runtime::Order {
     fn from(order: OrderParam) -> Self {
         match order {
             OrderParam::Asc => Self::Asc,
@@ -128,14 +131,18 @@ impl From<OrderParam> for aperture_artifacts::Order {
 #[serde(default)]
 #[into_params(parameter_in = Query)]
 pub struct SimpleListParams {
+    /// Maximum number of items to return. Clamped to `1..=200`, defaults to
+    /// 50.
     #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
+    /// Cursor from a page's `next_cursor` or `prev_cursor`.
     pub cursor: Option<String>,
+    /// Sort direction. Defaults to ascending.
     pub order: Option<OrderParam>,
 }
 
 impl SimpleListParams {
-    /// Converts these params into a storage `ListQuery`.
+    /// Converts these params into a `ListQuery`.
     pub fn to_query(&self) -> aperture_artifacts::ListQuery {
         aperture_artifacts::ListQuery {
             limit: self.limit,

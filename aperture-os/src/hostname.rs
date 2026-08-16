@@ -1,7 +1,7 @@
 //! systemd-hostnamed integration: applying the system hostname.
 
 use anyhow::Context;
-use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
+use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition, keys};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use zbus::proxy;
@@ -50,7 +50,8 @@ impl ApplyHostnameDefinition {
 }
 
 impl TaskDefinition for ApplyHostnameDefinition {
-    const KIND: &'static str = "apply-hostname";
+    const KEY: &'static str = keys::APPLY_HOSTNAME;
+
     type Input = ApplyHostnameInput;
     type Output = ApplyHostnameOutput;
 

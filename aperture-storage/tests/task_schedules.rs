@@ -10,9 +10,9 @@ fn interval(micros: i64) -> Interval {
     Interval::from_micros(micros).unwrap()
 }
 
-fn new_schedule(kind: &str, interval_micros: i64, next_run_at: i64) -> NewTaskSchedule {
+fn new_schedule(key: &str, interval_micros: i64, next_run_at: i64) -> NewTaskSchedule {
     NewTaskSchedule {
-        kind: kind.to_owned(),
+        key: key.to_owned(),
         input: json!({}),
         interval: interval(interval_micros),
         next_run_at: ts(next_run_at),
@@ -30,7 +30,7 @@ async fn create_get_list_update_delete() {
         .await
         .unwrap();
     let fetched = repo.get(id).await.unwrap().unwrap();
-    assert_eq!(fetched.kind, "rotate-certificate");
+    assert_eq!(fetched.key, "rotate-certificate");
     assert_eq!(fetched.interval, interval(86_400_000_000));
     assert_eq!(fetched.next_run_at, ts(1_000));
     assert!(fetched.enabled);
@@ -122,7 +122,7 @@ async fn list_due_returns_only_enabled_past_due() {
 
     let due = repo.list_due(ts(1_000), 16).await.unwrap();
     assert_eq!(due.len(), 1);
-    assert_eq!(due[0].kind, "a");
+    assert_eq!(due[0].key, "a");
 }
 
 #[tokio::test]

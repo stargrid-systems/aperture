@@ -23,7 +23,7 @@ mod col {
     pub const ID: &str = "id";
     pub const INPUT: &str = "input";
     pub const INTERVAL_US: &str = "interval_us";
-    pub const KIND: &str = "kind";
+    pub const KEY: &str = "key";
     pub const LAST_RUN_AT: &str = "last_run_at";
     pub const LAST_TASK_ID: &str = "last_task_id";
     pub const NEXT_RUN_AT: &str = "next_run_at";
@@ -33,7 +33,7 @@ mod col {
 /// order.
 const SCHEDULE_COLUMNS: Columns = Columns::new(&[
     col::ID,
-    col::KIND,
+    col::KEY,
     col::INPUT,
     col::INTERVAL_US,
     col::NEXT_RUN_AT,
@@ -47,7 +47,7 @@ const SCHEDULE_COLUMNS: Columns = Columns::new(&[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSchedule {
     pub id: TaskScheduleId,
-    pub kind: String,
+    pub key: String,
     pub input: Value,
     pub interval: Interval,
     pub next_run_at: Timestamp,
@@ -59,7 +59,7 @@ pub struct TaskSchedule {
 
 #[derive(Debug, Clone)]
 pub struct NewTaskSchedule {
-    pub kind: String,
+    pub key: String,
     pub input: Value,
     pub interval: Interval,
     pub next_run_at: Timestamp,
@@ -89,7 +89,7 @@ impl TaskScheduleRepository {
     #[tracing::instrument(level = "info", skip(self, new))]
     pub async fn create(&self, new: &NewTaskSchedule) -> Result<TaskScheduleId> {
         let params = params_from_iter([
-            new.kind.to_sql(),
+            new.key.to_sql(),
             new.input.to_sql(),
             new.interval.to_sql(),
             new.next_run_at.to_sql(),
@@ -100,7 +100,7 @@ impl TaskScheduleRepository {
             .execute(
                 sql!(
                     INSERT INTO task_schedules
-                        (kind, input, interval_us, next_run_at, created_at, enabled)
+                        (key, input, interval_us, next_run_at, created_at, enabled)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 ),
                 params,
@@ -294,7 +294,7 @@ impl TryFrom<&Row> for TaskSchedule {
     fn try_from(row: &Row) -> Result<Self> {
         Ok(Self {
             id: SCHEDULE_COLUMNS.extract(row, col::ID)?,
-            kind: SCHEDULE_COLUMNS.extract(row, col::KIND)?,
+            key: SCHEDULE_COLUMNS.extract(row, col::KEY)?,
             input: SCHEDULE_COLUMNS.extract(row, col::INPUT)?,
             interval: SCHEDULE_COLUMNS.extract(row, col::INTERVAL_US)?,
             next_run_at: SCHEDULE_COLUMNS.extract(row, col::NEXT_RUN_AT)?,

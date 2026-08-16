@@ -1,4 +1,4 @@
-use aperture_auth::{Action, AuthenticatedActor, Object};
+use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
 use aperture_storage::EventId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -21,6 +21,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_EVENTS,
+    extensions(("x-required-permission" = json!(required_permission(Object::Event, Action::Read)))),
     params(EventListParams),
     responses((status = 200, description = "Domain events", body = Page<EventResponse>)),
 )]
@@ -34,9 +35,7 @@ async fn list_events(
         .require(&auth.subject, Object::Event, Action::Read)
         .await?;
     let events = state.storage().events()?;
-    let page = events
-        .list(&params.to_filter(), &params.to_query())
-        .await?;
+    let page = events.list(&params.to_filter(), &params.to_query()).await?;
     Ok(Json(EventResponse::page(page)))
 }
 
@@ -45,6 +44,7 @@ async fn list_events(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_EVENT,
+    extensions(("x-required-permission" = json!(required_permission(Object::Event, Action::Read)))),
     params(("id" = EventId, Path, description = "Event id")),
     responses(
         (status = 200, description = "Event", body = EventResponse),

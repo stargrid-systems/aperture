@@ -1,36 +1,47 @@
 //! Type-erased view of a [`TaskDefinition`].
 //!
-//! The registry stores definitions behind this trait so it can hold many kinds
-//! together. Erasure happens only here: JSON is decoded into the kind's typed
+//! The registry stores definitions behind this trait so it can hold many keys
+//! together. Erasure happens only here: JSON is decoded into the key's typed
 //! input on the way in, and the typed output is encoded back out. The body
 //! never sees a [`Value`]. A blanket impl bridges every [`TaskDefinition`].
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
+use aperture_runtime::{RegistryEntry, json_schema};
 use futures_util::FutureExt;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::Instrument;
-use utoipa::openapi::{RefOr, Schema};
-use utoipa::{PartialSchema, ToSchema};
 
 use crate::context::TaskContext;
 use crate::definition::{Capabilities, TaskDefinition};
 use crate::error::{RunError, TaskError};
 
-pub trait ErasedDefinition: Send + Sync + 'static {
-    fn kind(&self) -> &'static str;
-    fn capabilities(&self) -> Capabilities;
-    fn input_name(&self) -> String;
-    fn output_name(&self) -> String;
-    fn input_schema(&self) -> RefOr<Schema>;
-    fn output_schema(&self) -> RefOr<Schema>;
-    /// Pushes the named component schemas this kind references (its input and
-    /// output types plus their dependencies) into `out`.
-    fn collect_schemas(&self, out: &mut Vec<(String, RefOr<Schema>)>);
-    /// Checks that `input` decodes into the kind's input type.
+/// A public description of one registered key: identity and capabilities.
+/// The JSON Schemas are derived on demand from the erased trait object.
+pub struct TaskDescriptor {
+    /// The key string.
+    pub key: &'static str,
+    /// What the key supports.
+    pub capabilities: Capabilities,
+}
+
+pub trait ErasedTaskDefinition: Send + Sync + 'static {
+    /// The key this definition is registered under.
+    fn key(&self) -> &'static str;
+    /// Builds a descriptor with identity and capabilities.
+    fn descriptor(&self) -> TaskDescriptor;
+    /// A standalone JSON Schema document of the key's input type.
+    fn input_schema(&self) -> Value;
+    /// A standalone JSON Schema document of the key's output type.
+    fn output_schema(&self) -> Value;
+    /// Checks that `input` decodes into the key's input type.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TaskError::DecodeInput` if the input does not deserialize.
     fn validate(&self, input: &Value) -> Result<(), TaskError>;
     /// Spawns the task onto `set`. The future decodes the input, runs the body,
     /// encodes the output, and records the outcome through `ctx`.
@@ -42,42 +53,30 @@ pub trait ErasedDefinition: Send + Sync + 'static {
     ) -> AbortHandle;
 }
 
-impl<T: TaskDefinition> ErasedDefinition for T {
-    fn kind(&self) -> &'static str {
-        T::KIND
+impl RegistryEntry for dyn ErasedTaskDefinition {
+    fn key(&self) -> &'static str {
+        ErasedTaskDefinition::key(self)
+    }
+}
+
+impl<T: TaskDefinition> ErasedTaskDefinition for T {
+    fn key(&self) -> &'static str {
+        T::KEY
     }
 
-    fn capabilities(&self) -> Capabilities {
-        TaskDefinition::capabilities(self)
+    fn descriptor(&self) -> TaskDescriptor {
+        TaskDescriptor {
+            key: T::KEY,
+            capabilities: TaskDefinition::capabilities(self),
+        }
     }
 
-    fn input_name(&self) -> String {
-        <T::Input as ToSchema>::name().into_owned()
+    fn input_schema(&self) -> Value {
+        json_schema::<T::Input>()
     }
 
-    fn output_name(&self) -> String {
-        <T::Output as ToSchema>::name().into_owned()
-    }
-
-    fn input_schema(&self) -> RefOr<Schema> {
-        <T::Input as PartialSchema>::schema()
-    }
-
-    fn output_schema(&self) -> RefOr<Schema> {
-        <T::Output as PartialSchema>::schema()
-    }
-
-    fn collect_schemas(&self, out: &mut Vec<(String, RefOr<Schema>)>) {
-        out.push((
-            <T::Input as ToSchema>::name().into_owned(),
-            <T::Input as PartialSchema>::schema(),
-        ));
-        out.push((
-            <T::Output as ToSchema>::name().into_owned(),
-            <T::Output as PartialSchema>::schema(),
-        ));
-        <T::Input as ToSchema>::schemas(out);
-        <T::Output as ToSchema>::schemas(out);
+    fn output_schema(&self) -> Value {
+        json_schema::<T::Output>()
     }
 
     fn validate(&self, input: &Value) -> Result<(), TaskError> {
@@ -92,7 +91,7 @@ impl<T: TaskDefinition> ErasedDefinition for T {
         ctx: TaskContext,
         set: &mut JoinSet<()>,
     ) -> AbortHandle {
-        let kind = T::KIND;
+        let key = T::KEY;
         let id = ctx.id();
         set.spawn(
             async move {
@@ -115,7 +114,7 @@ impl<T: TaskDefinition> ErasedDefinition for T {
                 });
                 ctx.complete(outcome).await;
             }
-            .instrument(tracing::info_span!("task", kind, id = id.get())),
+            .instrument(tracing::info_span!("task", key, id = id.get())),
         )
     }
 }

@@ -44,7 +44,7 @@ async fn create_then_finish_records_lifecycle() {
         .unwrap();
 
     let task = repo.get(id).await.unwrap().unwrap();
-    assert_eq!(task.kind, "download");
+    assert_eq!(task.key, "download");
     assert_eq!(task.status, TaskStatus::Pending);
     assert_eq!(task.parent_id, None);
     assert_eq!(task.input, json!({"key": "spectra"}));

@@ -39,11 +39,7 @@ impl Automation {
     ///
     /// Takes ownership of the task runtime lifecycle: call this once at
     /// startup and spawn the result as a [`Worker`].
-    pub fn new(
-        tasks: Tasks,
-        schedule_repo: TaskScheduleRepository,
-        event_bus: &EventBus,
-    ) -> Self {
+    pub fn new(tasks: Tasks, schedule_repo: TaskScheduleRepository, event_bus: &EventBus) -> Self {
         let scheduler = Scheduler::new(schedule_repo, tasks.clone());
         Self {
             tasks,

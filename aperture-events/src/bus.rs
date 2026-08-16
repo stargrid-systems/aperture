@@ -1,9 +1,8 @@
 //! Event bus: persists events and dispatches to filtered subscribers.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use aperture_storage::{ActorId, Event, EventRepository, NewEvent};
 use jiff::Timestamp;
@@ -121,13 +120,7 @@ impl EventBus {
     }
 
     /// Registers a subscriber with `filter` and returns its receiver + guard.
-    fn add_subscriber(
-        &self,
-        filter: Subscription,
-    ) -> (
-        mpsc::Receiver<Event>,
-        SubscriptionGuard,
-    ) {
+    fn add_subscriber(&self, filter: Subscription) -> (mpsc::Receiver<Event>, SubscriptionGuard) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         self.inner

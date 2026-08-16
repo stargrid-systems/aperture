@@ -1,4 +1,4 @@
-use aperture_auth::{Action, AuthenticatedActor, Object};
+use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
 use aperture_storage::TaskScheduleId;
 use aperture_tasks::NewTaskSchedule;
 use axum::Json;
@@ -31,6 +31,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_TASK_SCHEDULES,
+    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Read)))),
     params(TaskScheduleListParams),
     responses((status = 200, description = "Task schedules", body = Page<TaskScheduleResponse>)),
 )]
@@ -53,6 +54,7 @@ async fn list_task_schedules(
     post,
     path = "",
     operation_id = operation_ids::CREATE_TASK_SCHEDULE,
+    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Create)))),
     request_body = CreateTaskScheduleRequest,
     responses(
         (status = 201, description = "Task schedule created", body = TaskScheduleResponse),
@@ -72,7 +74,7 @@ async fn create_task_schedule(
     let repo = state.storage().task_schedules()?;
     let id = repo
         .create(&NewTaskSchedule {
-            kind: request.kind,
+            key: request.key,
             input: request.input,
             interval: request.interval,
             next_run_at: now,
@@ -88,6 +90,7 @@ async fn create_task_schedule(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK_SCHEDULE,
+    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Read)))),
     params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     responses(
         (status = 200, description = "Task schedule", body = TaskScheduleResponse),
@@ -117,6 +120,7 @@ async fn get_task_schedule(
     patch,
     path = "/{id}",
     operation_id = operation_ids::UPDATE_TASK_SCHEDULE,
+    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Update)))),
     params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     request_body = UpdateTaskScheduleRequest,
     responses(
@@ -148,6 +152,7 @@ async fn update_task_schedule(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_TASK_SCHEDULE,
+    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Delete)))),
     params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     responses(
         (status = 204, description = "Task schedule deleted"),

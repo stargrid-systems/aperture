@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use aperture_runtime::{Stop, Worker};
-use aperture_storage::{LogEventRecord, Level, LogRepository, SpanRecord};
+use aperture_storage::{Level, LogEventRecord, LogRepository, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};

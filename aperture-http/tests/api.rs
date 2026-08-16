@@ -1,15 +1,16 @@
-use std::{env, fs, process};
+use std::sync::Arc;
+use std::{env, fs, process, str};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, Role, Username};
 use aperture_events::EventBus;
-use aperture_http::{AppState, Spectra, SpectraConfig, app};
+use aperture_http::{AppState, AvatarAnimation, AvatarStyle, Spectra, SpectraConfig, app};
 use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, ArtifactId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::header::{CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION, SET_COOKIE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LOCATION, SET_COOKIE};
 use axum::http::{HeaderValue, Request, StatusCode};
 use axum::response::Response;
 use jiff::Timestamp;
@@ -35,6 +36,16 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
     }
 }
 
+/// Builds a `Settings` whose registry knows about every setting the gateway
+/// registers, so per-request reads fall back to definition defaults.
+fn test_settings(storage: &Storage) -> Settings {
+    let mut registry = SettingRegistry::new();
+    registry.register(Arc::new(AvatarStyle::default()));
+    registry.register(Arc::new(AvatarAnimation::default()));
+    let event_bus = EventBus::new(storage.events().unwrap());
+    Settings::new(storage.settings().unwrap(), registry, event_bus)
+}
+
 async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     // Unique per call so parallel tests in the same binary do not stomp on
     // each other's blob store.
@@ -45,7 +56,11 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new(storage.events().unwrap()));
+    let artifacts = Artifacts::new(
+        storage.clone(),
+        root,
+        EventBus::new(storage.events().unwrap()),
+    );
 
     let repo = storage.artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:ffff", 1_000))
@@ -59,7 +74,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         .unwrap();
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(artifacts.clone()));
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
@@ -82,7 +97,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, Role::Admin).await.unwrap();
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new(), EventBus::new(storage.events().unwrap()));
+    let settings = test_settings(&storage);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -92,7 +107,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         settings,
         auth,
     );
-    (app(state, &[]), artifacts, storage, raw_key.as_str().to_owned())
+    (app(state), artifacts, storage, raw_key.as_str().to_owned())
 }
 
 async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
@@ -278,20 +293,92 @@ async fn evicts_a_version() {
 }
 
 #[tokio::test]
-async fn lists_task_definitions_with_schemas() {
+async fn lists_task_definitions() {
     let (app, _artifacts, _storage, token) = seeded_app().await;
 
     let (status, json) = get_json(&app, &token, "/api/v1/task-definitions").await;
     assert_eq!(status, StatusCode::OK);
-    let download = json
-        .as_array()
-        .unwrap()
+    let items = json["items"].as_array().expect("paged items");
+    let download = items
         .iter()
-        .find(|def| def["kind"] == "download")
-        .expect("download kind registered");
+        .find(|def| def["key"] == "download")
+        .expect("download key registered");
     assert_eq!(download["cancellable"], true);
     assert_eq!(download["resumable"], true);
-    assert!(download["input_schema"].is_object());
+    assert!(json["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn gets_task_definition_schema() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/task-definitions/download").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "download");
+    let schema = &json["input_schema"];
+    assert_eq!(
+        schema["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert!(
+        schema["$defs"].is_object(),
+        "download input should carry its dependencies: {schema}"
+    );
+
+    let (status, _) = get_json(&app, &token, "/api/v1/task-definitions/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn paginates_setting_definitions() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/setting-definitions?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
+    let cursor = json["next_cursor"]
+        .as_str()
+        .expect("another page")
+        .to_owned();
+
+    let (status, json) = get_json(
+        &app,
+        &token,
+        &format!("/api/v1/setting-definitions?limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
+    assert!(json["prev_cursor"].is_string());
+}
+
+#[tokio::test]
+async fn lists_setting_definitions() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/setting-definitions").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    assert!(
+        items.iter().any(|def| def["key"] == "avatar_style"),
+        "avatar style registered: {json}"
+    );
+}
+
+#[tokio::test]
+async fn gets_setting_definition_schema() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/setting-definitions/avatar_style").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "avatar_style");
+    assert_eq!(
+        json["value_schema"]["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+
+    let (status, _) = get_json(&app, &token, "/api/v1/setting-definitions/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -321,7 +408,7 @@ async fn reads_recorded_tasks() {
     let (status, list) = get_json(&app, &token, "/api/v1/tasks").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["items"].as_array().unwrap().len(), 1);
-    assert_eq!(list["items"][0]["kind"], "download");
+    assert_eq!(list["items"][0]["key"], "download");
 
     let (status, task) = get_json(&app, &token, &format!("/api/v1/tasks/{id}")).await;
     assert_eq!(status, StatusCode::OK);
@@ -371,7 +458,7 @@ async fn filters_tasks_by_json_field() {
     let (status, list) = get_json(
         &app,
         &token,
-        "/api/v1/tasks?kind=download&input_path=key&input_value=spectra",
+        "/api/v1/tasks?key=download&input_path=key&input_value=spectra",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -414,7 +501,7 @@ async fn create_rejects_unknown_kind() {
         &app,
         &token,
         "/api/v1/tasks",
-        json!({"kind": "nope", "input": {}}),
+        json!({"key": "nope", "input": {}}),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -474,14 +561,14 @@ async fn task_schedule_lifecycle() {
         &token,
         "/api/v1/task-schedules",
         json!({
-            "kind": "download",
+            "key": "download",
             "input": {"key": "spectra"},
             "interval": "PT5M",
         }),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(created["kind"], "download");
+    assert_eq!(created["key"], "download");
     assert_eq!(created["interval"], "PT5M");
     assert_eq!(created["input"]["key"], "spectra");
     assert_eq!(created["enabled"], true);
@@ -495,7 +582,7 @@ async fn task_schedule_lifecycle() {
     // Get.
     let (status, fetched) = get_json(&app, &token, &format!("/api/v1/task-schedules/{id}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(fetched["kind"], "download");
+    assert_eq!(fetched["key"], "download");
 
     // Patch only the interval. Enabled stays true.
     let (status, updated) = patch_json(
@@ -779,10 +866,14 @@ async fn app_with_role(role: Role) -> (Router, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new(storage.events().unwrap()));
+    let artifacts = Artifacts::new(
+        storage.clone(),
+        root,
+        EventBus::new(storage.events().unwrap()),
+    );
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(artifacts.clone()));
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
@@ -805,7 +896,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, role).await.unwrap();
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new(), EventBus::new(storage.events().unwrap()));
+    let settings = test_settings(&storage);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -815,7 +906,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
         settings,
         auth,
     );
-    (app(state, &[]), raw_key.as_str().to_owned())
+    (app(state), raw_key.as_str().to_owned())
 }
 
 #[tokio::test]
@@ -868,10 +959,14 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new(storage.events().unwrap()));
+    let artifacts = Artifacts::new(
+        storage.clone(),
+        root,
+        EventBus::new(storage.events().unwrap()),
+    );
 
     let mut registry = TaskRegistry::new();
-    registry.register(DownloadDefinition::new(artifacts.clone()));
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
@@ -885,7 +980,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         ActorId::SYSTEM,
     );
 
-    let settings = Settings::new(storage.settings().unwrap(), SettingRegistry::new(), EventBus::new(storage.events().unwrap()));
+    let settings = test_settings(&storage);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -895,7 +990,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         settings,
         auth.clone(),
     );
-    (app(state, &[]), auth, storage)
+    (app(state), auth, storage)
 }
 
 /// Creates a user and returns an API key carrying `role`.
@@ -1023,13 +1118,13 @@ async fn no_role_token_is_denied_on_all_mutations() {
         (
             "POST",
             "/api/v1/tasks",
-            json!({"kind": "download", "input": {}}),
+            json!({"key": "download", "input": {}}),
         ),
         ("POST", "/api/v1/tasks/1/cancel", Value::Null),
         (
             "POST",
             "/api/v1/task-schedules",
-            json!({"kind": "download", "input": {}, "interval": "PT5M"}),
+            json!({"key": "download", "input": {}, "interval": "PT5M"}),
         ),
         ("PATCH", "/api/v1/task-schedules/1", json!({})),
         ("DELETE", "/api/v1/task-schedules/1", Value::Null),
@@ -1292,14 +1387,23 @@ async fn change_password_rejected_for_api_key_auth() {
 }
 
 #[tokio::test]
-async fn current_user_returns_identity_and_role() {
-    let (app, auth, _storage) = fresh_app().await;
+async fn current_actor_returns_identity_and_role() {
+    let (app, auth, storage) = fresh_app().await;
 
     // API-key caller: resolves to its owning user actor, carries the key's role.
     let (api_actor, token) = key_for_role(&auth, "alice", Role::Operator).await;
+    let alice_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(api_actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
     let (status, json) = get_json(&app, &token, "/api/v1/auth/me").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["actor_id"], api_actor.get().to_string());
+    assert_eq!(json["user_id"], alice_id.get().to_string());
     assert_eq!(json["username"], "alice");
     assert_eq!(json["roles"], serde_json::json!(["operator"]));
     assert_eq!(json["must_change_password"], false);
@@ -1313,6 +1417,14 @@ async fn current_user_returns_identity_and_role() {
     auth.assign_role(&aperture_auth::actor_subject(actor.id), Role::Admin)
         .await
         .unwrap();
+    let carol_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(actor.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
     let cookie = login(&app, "carol", &pw).await.expect("login");
 
     let response = app
@@ -1328,13 +1440,14 @@ async fn current_user_returns_identity_and_role() {
         .unwrap();
     let (status, json) = read_json(response).await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["user_id"], carol_id.get().to_string());
     assert_eq!(json["username"], "carol");
     assert_eq!(json["display_name"], "carol");
     assert_eq!(json["roles"], serde_json::json!(["admin"]));
 }
 
 #[tokio::test]
-async fn current_user_requires_authentication() {
+async fn current_actor_requires_authentication() {
     let (app, _auth, _storage) = fresh_app().await;
 
     let status = app
@@ -1349,4 +1462,200 @@ async fn current_user_requires_authentication() {
         .unwrap()
         .status();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn user_avatar_returns_svg_and_requires_auth() {
+    let (app, auth, storage) = fresh_app().await;
+    let (actor, token) = key_for_role(&auth, "dave", Role::Viewer).await;
+    let user_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let uri = format!("/api/v1/users/{}/avatar", user_id.get());
+
+    // Unauthenticated requests are rejected.
+    let status = app
+        .clone()
+        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Authenticated requests get inline SVG plus a strong ETag.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE).unwrap(),
+        "image/svg+xml"
+    );
+    // The representation can be reconfigured at runtime, so it is not immutable.
+    assert_eq!(
+        response.headers().get(CACHE_CONTROL).unwrap(),
+        "public, max-age=31536000"
+    );
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .expect("avatar response carries an ETag")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        etag.starts_with("\"avatar-") && etag.ends_with('"'),
+        "expected a strong avatar etag, got {etag}"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let svg = str::from_utf8(&body).unwrap();
+    assert!(svg.starts_with("<svg "), "got: {svg}");
+    assert!(svg.ends_with("</svg>"));
+
+    // The same user always renders the same avatar.
+    let again = get_bytes(&app, &token, &uri).await;
+    assert_eq!(again, body);
+}
+
+#[tokio::test]
+async fn avatar_style_setting_changes_output_and_etag() {
+    let (app, auth, storage) = fresh_app().await;
+    let (actor, token) = key_for_role(&auth, "dave", Role::Admin).await;
+    let user_id = storage
+        .users()
+        .unwrap()
+        .find_by_actor_id(actor)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let uri = format!("/api/v1/users/{}/avatar", user_id.get());
+
+    // Baseline GET with the default (constellation) style.
+    let baseline = get_avatar(&app, &token, &uri).await;
+    let default_etag = baseline.etag;
+    let default_body = baseline.body;
+
+    // Flip the style to "planets" through the settings API.
+    let body = serde_json::to_vec(&json!({"value": "planets"})).unwrap();
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/settings/avatar_style")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+
+    // The new representation has a different ETag and SVG body.
+    let after = get_avatar(&app, &token, &uri).await;
+    assert_ne!(
+        after.etag, default_etag,
+        "changing the style must change the ETag"
+    );
+    assert_ne!(
+        after.body, default_body,
+        "changing the style must change the SVG body"
+    );
+
+    // An If-None-Match carrying the stale ETag still returns the new body.
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header(IF_NONE_MATCH, &default_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::OK);
+
+    // An If-None-Match carrying the current ETag yields a 304 with an empty
+    // body and the same ETag echoed back.
+    let fresh = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header(IF_NONE_MATCH, &after.etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fresh.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        fresh.headers().get(ETAG).unwrap().to_str().unwrap(),
+        after.etag
+    );
+    let fresh_body = to_bytes(fresh.into_body(), usize::MAX).await.unwrap();
+    assert!(fresh_body.is_empty(), "304 body must be empty");
+}
+
+struct AvatarResponse {
+    etag: String,
+    body: bytes::Bytes,
+}
+
+async fn get_avatar(app: &Router, token: &str, uri: &str) -> AvatarResponse {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    AvatarResponse { etag, body }
+}
+
+async fn get_bytes(app: &Router, token: &str, uri: &str) -> bytes::Bytes {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    to_bytes(response.into_body(), usize::MAX).await.unwrap()
 }

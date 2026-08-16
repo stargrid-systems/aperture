@@ -28,6 +28,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .nest("/logs", logs::router())
         .nest("/events", events::router())
         .nest("/settings", settings::router())
+        .nest("/setting-definitions", settings::definitions_router())
         .nest("/users", users::router())
         .nest("/api-keys", api_keys::router())
 }

@@ -728,7 +728,9 @@ mod tests {
 
         let (artifacts, _bus, _dir) = fresh_store().await;
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        ensure_certificates(&artifacts, bind_addr, None).await.unwrap();
+        ensure_certificates(&artifacts, bind_addr, None)
+            .await
+            .unwrap();
 
         let shared = load_shared_config(&artifacts).await.unwrap();
 

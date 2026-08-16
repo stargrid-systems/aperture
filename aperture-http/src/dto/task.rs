@@ -90,8 +90,8 @@ impl From<Progress> for ProgressResponse {
 pub struct TaskResponse {
     /// Invocation id.
     pub id: TaskId,
-    /// The kind of task.
-    pub kind: String,
+    /// The key of the task's definition.
+    pub key: String,
     /// The parent invocation, if this task was spawned by another.
     pub parent_id: Option<TaskId>,
     /// Lifecycle state.
@@ -118,7 +118,7 @@ impl TaskResponse {
         let running = matches!(task.status, TaskStatus::Pending | TaskStatus::Running);
         Self {
             id: task.id,
-            kind: task.kind,
+            key: task.key,
             parent_id: task.parent_id,
             status: task.status.into(),
             input: task.input,
@@ -135,39 +135,48 @@ impl TaskResponse {
     }
 }
 
-/// A registered task kind, with its capabilities and JSON Schemas.
+/// A registered task definition in a listing.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct TaskDefinitionResponse {
-    /// The kind string.
-    pub kind: String,
-    /// Whether the kind can be cancelled.
+pub struct TaskDefinitionSummary {
+    /// The key string.
+    pub key: String,
+    /// Whether the key can be cancelled.
     pub cancellable: bool,
-    /// Whether the kind is safe to interrupt across a restart.
+    /// Whether the key is safe to interrupt across a restart.
     pub resumable: bool,
-    /// JSON Schema of the kind's input.
-    pub input_schema: Value,
-    /// JSON Schema of the kind's output.
-    pub output_schema: Value,
 }
 
-impl From<TaskDescriptor> for TaskDefinitionResponse {
+impl From<TaskDescriptor> for TaskDefinitionSummary {
     fn from(descriptor: TaskDescriptor) -> Self {
         Self {
-            kind: descriptor.kind.to_owned(),
+            key: descriptor.key.to_owned(),
             cancellable: descriptor.capabilities.cancellable,
             resumable: descriptor.capabilities.resumable,
-            input_schema: serde_json::to_value(&descriptor.input_schema).unwrap_or(Value::Null),
-            output_schema: serde_json::to_value(&descriptor.output_schema).unwrap_or(Value::Null),
         }
     }
+}
+
+/// One registered task definition, with full JSON Schemas.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TaskDefinitionResponse {
+    /// The key string.
+    pub key: String,
+    /// Whether the key can be cancelled.
+    pub cancellable: bool,
+    /// Whether the key is safe to interrupt across a restart.
+    pub resumable: bool,
+    /// Standalone JSON Schema (draft 2020-12) of the key's input type.
+    pub input_schema: Value,
+    /// Standalone JSON Schema (draft 2020-12) of the key's output type.
+    pub output_schema: Value,
 }
 
 /// Body for `POST /api/v1/tasks`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTaskRequest {
-    /// The kind of task to create.
-    pub kind: String,
-    /// The task input, matching the kind's input schema.
+    /// The key of the task definition to create.
+    pub key: String,
+    /// The task input, matching the key's input schema.
     pub input: Value,
 }
 
@@ -222,8 +231,8 @@ pub struct TaskListParams {
     pub order: Option<OrderParam>,
     /// Only tasks in this state, or the `active`/`finished` groups.
     pub status: Option<TaskStatusParam>,
-    /// Only tasks of this kind.
-    pub kind: Option<String>,
+    /// Only tasks of this definition key.
+    pub key: Option<String>,
     /// Only children of this task.
     pub parent: Option<TaskId>,
     /// Only top-level tasks (no parent). Ignored when `parent` is set.

@@ -24,11 +24,11 @@ use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
+use crate::TaskRegistry;
 use crate::context::TaskContext;
 use crate::definition::{Capabilities, TaskDefinition};
 use crate::error::{RunError, TaskError};
 use crate::progress::{Progress, ProgressState};
-use crate::registry::TaskRegistry;
 
 /// Whether a tracked task is still running or has settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +48,7 @@ struct TaskShared {
 /// A task currently being tracked in the live registry.
 struct RunningTask {
     shared: Arc<TaskShared>,
-    kind: String,
+    key: String,
     parent_id: Option<TaskId>,
     capabilities: Capabilities,
     started_at: Timestamp,
@@ -60,11 +60,11 @@ struct RunningTask {
 pub struct ActiveTask {
     /// The invocation id.
     pub id: TaskId,
-    /// The kind of task.
-    pub kind: String,
+    /// The key of the task's definition.
+    pub key: String,
     /// The parent invocation, if any.
     pub parent_id: Option<TaskId>,
-    /// What the kind supports.
+    /// What the key supports.
     pub capabilities: Capabilities,
     /// Live progress.
     pub progress: Progress,
@@ -86,7 +86,7 @@ pub struct Tasks {
 }
 
 impl Tasks {
-    /// Creates a task runtime backed by `tasks` repository and the kinds in
+    /// Creates a task runtime backed by `tasks` repository and the keys in
     /// `registry`.
     pub fn new(tasks: TaskRepository, registry: TaskRegistry) -> Self {
         Self {
@@ -99,17 +99,17 @@ impl Tasks {
         }
     }
 
-    /// The registry of kinds, for projecting schemas and capabilities.
+    /// The registry of definitions, for listings and schema lookup.
     pub fn registry(&self) -> &TaskRegistry {
         &self.inner.registry
     }
 
-    /// Spawns a top-level task of kind `T` and returns a typed handle to it.
+    /// Spawns a top-level task of key `T` and returns a typed handle to it.
     ///
     /// # Errors
     ///
     /// Returns `TaskError::EncodeInput` if the input cannot be encoded, or a
-    /// storage or kind-resolution error from the spawn.
+    /// storage or key-resolution error from the spawn.
     pub async fn spawn<T: TaskDefinition>(
         &self,
         input: T::Input,
@@ -117,30 +117,30 @@ impl Tasks {
     ) -> Result<TaskHandle<T::Output>, TaskError> {
         let value = serde_json::to_value(input).map_err(TaskError::EncodeInput)?;
         self.inner
-            .spawn_value::<T::Output>(T::KIND, value, None, initiator)
+            .spawn_value::<T::Output>(T::KEY, value, None, initiator)
             .await
     }
 
-    /// Spawns a top-level task by kind string, validating `input` against the
-    /// kind's input type, and returns the created invocation. Used by the API,
-    /// which does not await a typed output.
+    /// Spawns a top-level task by definition key, validating `input` against
+    /// the key's input type, and returns the created invocation. Used by the
+    /// API, which does not await a typed output.
     ///
     /// # Errors
     ///
-    /// Returns `TaskError::NotRegistered` if `kind` is unknown,
+    /// Returns `TaskError::NotRegistered` if `key` is unknown,
     /// `TaskError::DecodeInput` if the input fails validation, or a storage
     /// error if recording the invocation fails.
     pub async fn create(
         &self,
-        kind: &str,
+        key: &str,
         input: Value,
         initiator: ActorId,
     ) -> Result<TaskInvocation, TaskError> {
-        let (invocation, _phase) = self.inner.start(kind, input, None, initiator).await?;
+        let (invocation, _phase) = self.inner.start(key, input, None, initiator).await?;
         Ok(invocation)
     }
 
-    /// Lists recorded invocations, optionally filtered by status, kind, parent,
+    /// Lists recorded invocations, optionally filtered by status, key, parent,
     /// and any number of `json` field matches over the input/output payloads.
     ///
     /// # Errors
@@ -149,7 +149,7 @@ impl Tasks {
     pub async fn list(
         &self,
         status: Option<StatusFilter>,
-        kind: Option<&str>,
+        key: Option<&str>,
         parent: Option<ParentFilter>,
         json: &[JsonFilter<'_>],
         query: &ListQuery,
@@ -157,7 +157,7 @@ impl Tasks {
         Ok(self
             .inner
             .tasks
-            .list(status, kind, parent, json, query)
+            .list(status, key, parent, json, query)
             .await?)
     }
 
@@ -171,7 +171,7 @@ impl Tasks {
     }
 
     /// Requests cooperative cancellation of the running task `id`. Returns
-    /// `true` if cancellation was requested and `false` if the kind is not
+    /// `true` if cancellation was requested and `false` if the key is not
     /// cancellable. Returns [`TaskError::AlreadySettled`] if the task
     /// exists but has finished, and [`TaskError::NotFound`] if no such task
     /// exists.
@@ -213,7 +213,7 @@ impl Tasks {
             .iter()
             .map(|(id, task)| ActiveTask {
                 id: *id,
-                kind: task.kind.clone(),
+                key: task.key.clone(),
                 parent_id: task.parent_id,
                 capabilities: task.capabilities,
                 progress: task.shared.progress.snapshot(),
@@ -323,22 +323,22 @@ impl TasksInner {
     /// completion phase.
     pub(crate) async fn start(
         self: &Arc<Self>,
-        kind: &str,
+        key: &str,
         input: Value,
         parent_id: Option<TaskId>,
         initiator: ActorId,
     ) -> Result<(TaskInvocation, watch::Receiver<Phase>), TaskError> {
         let definition = Arc::clone(
             self.registry
-                .get(kind)
-                .ok_or_else(|| TaskError::NotRegistered(kind.to_owned()))?,
+                .get(key)
+                .ok_or_else(|| TaskError::NotRegistered(key.to_owned()))?,
         );
         definition.validate(&input)?;
 
         let now = Timestamp::now();
         let id = self
             .tasks
-            .create_running(kind, parent_id, initiator, &input, now)
+            .create_running(key, parent_id, initiator, &input, now)
             .await?;
 
         let cancel = parent_id
@@ -358,7 +358,7 @@ impl TasksInner {
             cancel,
             Arc::clone(&shared.progress),
         );
-        let capabilities = definition.capabilities();
+        let capabilities = definition.descriptor().capabilities;
 
         // Hold the registry lock across spawn and insert so the body cannot
         // settle (and try to remove the entry) before it exists, and so the
@@ -373,7 +373,7 @@ impl TasksInner {
                 id,
                 RunningTask {
                     shared: Arc::clone(&shared),
-                    kind: kind.to_owned(),
+                    key: key.to_owned(),
                     parent_id,
                     capabilities,
                     started_at: now,
@@ -384,7 +384,7 @@ impl TasksInner {
 
         let invocation = TaskInvocation {
             id,
-            kind: kind.to_owned(),
+            key: key.to_owned(),
             parent_id,
             initiator_id: initiator,
             status: TaskStatus::Running,
@@ -401,12 +401,12 @@ impl TasksInner {
     /// Spawns a task and returns a typed handle to its output.
     pub(crate) async fn spawn_value<O>(
         self: &Arc<Self>,
-        kind: &str,
+        key: &str,
         input: Value,
         parent_id: Option<TaskId>,
         initiator: ActorId,
     ) -> Result<TaskHandle<O>, TaskError> {
-        let (invocation, phase) = self.start(kind, input, parent_id, initiator).await?;
+        let (invocation, phase) = self.start(key, input, parent_id, initiator).await?;
         Ok(TaskHandle {
             id: invocation.id,
             inner: Arc::clone(self),

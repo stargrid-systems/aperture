@@ -29,7 +29,8 @@ struct DoubleOut {
 struct Double;
 
 impl TaskDefinition for Double {
-    const KIND: &'static str = "double";
+    const KEY: &'static str = "double";
+
     type Input = DoubleIn;
     type Output = DoubleOut;
 
@@ -60,7 +61,8 @@ struct Probe {
 }
 
 impl TaskDefinition for Probe {
-    const KIND: &'static str = "probe";
+    const KEY: &'static str = "probe";
+
     type Input = Empty;
     type Output = Empty;
 
@@ -92,7 +94,8 @@ struct Parent {
 }
 
 impl TaskDefinition for Parent {
-    const KIND: &'static str = "parent";
+    const KEY: &'static str = "parent";
+
     type Input = Empty;
     type Output = Empty;
 
@@ -116,7 +119,8 @@ impl TaskDefinition for Parent {
 struct Boom;
 
 impl TaskDefinition for Boom {
-    const KIND: &'static str = "boom";
+    const KEY: &'static str = "boom";
+
     type Input = Empty;
     type Output = Empty;
 
@@ -133,7 +137,8 @@ impl TaskDefinition for Boom {
 struct Fail;
 
 impl TaskDefinition for Fail {
-    const KIND: &'static str = "fail";
+    const KEY: &'static str = "fail";
+
     type Input = Empty;
     type Output = Empty;
 
@@ -169,7 +174,7 @@ fn probe(cancellable: bool) -> (Probe, Arc<Notify>, Arc<Notify>) {
 async fn spawn_and_wait_returns_decoded_output() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
-    registry.register(Double);
+    registry.register(Arc::new(Double));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
@@ -190,7 +195,7 @@ async fn live_progress_is_visible_while_running() {
     let storage = Storage::open(":memory:").await.unwrap();
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
-    registry.register(probe);
+    registry.register(Arc::new(probe));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
@@ -216,7 +221,7 @@ async fn cancellable_task_records_cancelled() {
     let storage = Storage::open(":memory:").await.unwrap();
     let (probe, ready, _gate) = probe(true);
     let mut registry = TaskRegistry::new();
-    registry.register(probe);
+    registry.register(Arc::new(probe));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
@@ -239,7 +244,7 @@ async fn cancel_is_refused_for_non_cancellable_kind() {
     let storage = Storage::open(":memory:").await.unwrap();
     let (probe, ready, gate) = probe(false);
     let mut registry = TaskRegistry::new();
-    registry.register(probe);
+    registry.register(Arc::new(probe));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
@@ -266,8 +271,8 @@ async fn child_inherits_parent_cancellation() {
         spawned: Arc::clone(&spawned),
     };
     let mut registry = TaskRegistry::new();
-    registry.register(probe);
-    registry.register(parent);
+    registry.register(Arc::new(probe));
+    registry.register(Arc::new(parent));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
@@ -295,7 +300,7 @@ async fn child_inherits_parent_cancellation() {
 async fn panicking_task_settles_as_failed() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
-    registry.register(Boom);
+    registry.register(Arc::new(Boom));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
@@ -321,7 +326,7 @@ async fn panicking_task_settles_as_failed() {
 async fn failed_task_records_full_error_chain() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
-    registry.register(Fail);
+    registry.register(Arc::new(Fail));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     let handle = tasks
@@ -344,7 +349,7 @@ async fn failed_task_records_full_error_chain() {
 async fn cancel_distinguishes_unknown_from_settled() {
     let storage = Storage::open(":memory:").await.unwrap();
     let mut registry = TaskRegistry::new();
-    registry.register(Double);
+    registry.register(Arc::new(Double));
     let tasks = Tasks::new(storage.tasks().unwrap(), registry);
 
     // An unknown id is not found.

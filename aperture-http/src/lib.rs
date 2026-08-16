@@ -3,22 +3,21 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
-use aperture_events::EventDescriptor;
 use aperture_settings::Settings;
-use aperture_storage::{ApiKeyId, Storage, UserId};
-use aperture_tasks::{TaskDescriptor, Tasks};
+use aperture_storage::{ApiKeyId, ArtifactKey, Storage, UserId};
+use aperture_tasks::Tasks;
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 pub use utoipa::openapi::OpenApi as OpenApiSpec;
-use utoipa::openapi::RefOr;
-use utoipa::openapi::schema::{Discriminator, ObjectBuilder, OneOfBuilder, Ref, Schema, Type};
 use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
+use self::auth::SecurityAddon;
+pub use self::avatar::{AvatarAnimation, AvatarStyle};
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
@@ -30,6 +29,7 @@ pub use self::tls::{
 
 mod api;
 mod auth;
+mod avatar;
 mod conditional;
 mod dto;
 mod error;
@@ -111,25 +111,21 @@ impl AppState {
     // TODO(utoipa): These types are only referenced indirectly as field types
     // of IntoParams structs. utoipa does not discover their schemas
     // automatically. See: <https://github.com/stargrid-systems/aperture/issues/110>.
-    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam, ApiKeyId, UserId))
+    components(schemas(JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam, ApiKeyId, ArtifactKey, UserId)),
+    modifiers(&SecurityAddon),
+    security(
+        ("SessionCookie" = []),
+        ("BearerAuth" = [])
+    )
 )]
 struct ApiDoc;
-
 fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi()).nest("/api", api_routes())
 }
 
-/// Returns the generated `OpenAPI` specification for the gateway API, with the
-/// registered task and event kinds projected in.
-pub fn openapi(
-    task_descriptors: &[TaskDescriptor],
-    event_descriptors: &[EventDescriptor],
-) -> OpenApiSpec {
-    let mut spec = self::api_router().split_for_parts().1;
-    auth::add_security_schemes(&mut spec);
-    project_tasks(&mut spec, task_descriptors);
-    project_events(&mut spec, event_descriptors);
-    spec
+/// Returns the static `OpenAPI` specification of the gateway API.
+pub fn openapi() -> OpenApiSpec {
+    self::api_router().split_for_parts().1
 }
 
 /// Builds the full axum application.
@@ -138,10 +134,8 @@ pub fn openapi(
 /// frontend, which the state's [`Spectra`] serves and fetches on demand.
 /// A [`TraceLayer`] creates a span for each request so per-request tracing
 /// shows up in the log viewer.
-pub fn app(state: AppState, event_descriptors: &[EventDescriptor]) -> Router {
-    let (api, mut doc) = self::api_router().split_for_parts();
-    project_tasks(&mut doc, &state.tasks().registry().descriptors());
-    project_events(&mut doc, event_descriptors);
+pub fn app(state: AppState) -> Router {
+    let (api, doc) = self::api_router().split_for_parts();
     Router::<AppState>::new()
         .merge(api)
         .route(
@@ -157,94 +151,159 @@ pub fn app(state: AppState, event_descriptors: &[EventDescriptor]) -> Router {
         .with_state(state)
 }
 
-/// Projects registered task kinds into the `OpenAPI` spec.
-///
-/// Adds each kind's input/output component schemas, builds a discriminated
-/// `CreateTaskInput` one-of over the per-kind create bodies, and points
-/// `POST /tasks` at it.
-fn project_tasks(spec: &mut OpenApiSpec, descriptors: &[TaskDescriptor]) {
-    if descriptors.is_empty() {
-        return;
-    }
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
 
-    let components = spec.components.get_or_insert_with(Default::default);
-    let mut union = OneOfBuilder::new().discriminator(Some(Discriminator::new("kind")));
-    for descriptor in descriptors {
-        for (name, schema) in &descriptor.schemas {
-            match components.schemas.get(name) {
-                // Two kinds sharing a component name with the same shape (a
-                // common type) is fine. A different shape under the same name
-                // would silently corrupt the generated client, so fail loudly.
-                Some(existing) => assert!(
-                    schemas_equal(existing, schema),
-                    "task kinds define conflicting OpenAPI schemas for component {name:?}"
-                ),
-                None => {
-                    components.schemas.insert(name.clone(), schema.clone());
-                }
-            }
-        }
-        let kind = ObjectBuilder::new()
-            .schema_type(Type::String)
-            .enum_values(Some([descriptor.kind]))
-            .build();
-        let variant = ObjectBuilder::new()
-            .property("kind", kind)
-            .required("kind")
-            .property(
-                "input",
-                Ref::from_schema_name(descriptor.input_name.clone()),
-            )
-            .required("input")
-            .build();
-        union = union.item(variant);
-    }
+    use super::*;
 
-    components.schemas.insert(
-        "CreateTaskInput".to_owned(),
-        Schema::OneOf(union.build()).into(),
-    );
-    set_create_body(spec);
-}
+    /// Operations that need a session but no RBAC permission.
+    const SESSION_ONLY: &[&str] = &[
+        "getGatewayVersion",
+        "listApiKeys",
+        "getUserAvatar",
+        "logout",
+        "getCurrentActor",
+        "changePassword",
+    ];
 
-/// Compares two component schemas by their serialized form.
-fn schemas_equal(a: &RefOr<Schema>, b: &RefOr<Schema>) -> bool {
-    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
-}
+    /// Operations that need no authentication at all.
+    const PUBLIC: &[&str] = &[
+        "login",
+        "setup",
+        "getSetupStatus",
+        "listTaskDefinitions",
+        "getTaskDefinition",
+        "listSettingDefinitions",
+        "getSettingDefinition",
+    ];
 
-/// Projects registered event kinds into the `OpenAPI` spec.
-///
-/// Adds each kind's payload component schemas so clients know the shape of
-/// event data returned by the event API.
-fn project_events(spec: &mut OpenApiSpec, descriptors: &[EventDescriptor]) {
-    if descriptors.is_empty() {
-        return;
-    }
+    #[test]
+    fn spec_documents_permissions_per_operation() {
+        let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+        for (_, item) in spec["paths"].as_object().expect("paths") {
+            for method in ["get", "post", "put", "patch", "delete"] {
+                let Some(op) = item.get(method) else {
+                    continue;
+                };
+                let op_id = op["operationId"].as_str().expect("operation id").to_owned();
+                let is_public = op["security"] == Value::Array(vec![serde_json::json!({})]);
 
-    let components = spec.components.get_or_insert_with(Default::default);
-    for descriptor in descriptors {
-        for (name, schema) in &descriptor.schemas {
-            match components.schemas.get(name) {
-                Some(existing) => assert!(
-                    schemas_equal(existing, schema),
-                    "event kinds define conflicting OpenAPI schemas for component {name:?}"
-                ),
-                None => {
-                    components.schemas.insert(name.clone(), schema.clone());
-                }
+                assert_eq!(
+                    is_public,
+                    PUBLIC.contains(&op_id.as_str()),
+                    "{op_id} public flag mismatch"
+                );
+
+                // Looked up by the shared constant, so every annotation
+                // literal is pinned to it: a different name fails coverage.
+                let Some(permission) = op.get(aperture_auth::REQUIRED_PERMISSION_EXTENSION) else {
+                    assert!(
+                        is_public || SESSION_ONLY.contains(&op_id.as_str()),
+                        "{op_id} documents no required permission"
+                    );
+                    continue;
+                };
+                // The values come from Object and Action through
+                // required_permission, so the compiler already guarantees the
+                // vocabulary. Only the object:action shape needs checking.
+                assert!(
+                    permission
+                        .as_str()
+                        .and_then(|perm| perm.split_once(':'))
+                        .is_some_and(|(object, action)| !object.is_empty() && !action.is_empty()),
+                    "{op_id} permission is not object:action: {permission}"
+                );
             }
         }
     }
-}
 
-/// Points the `POST /tasks` request body at the `CreateTaskInput` union.
-fn set_create_body(spec: &mut OpenApiSpec) {
-    let schema = RefOr::Ref(Ref::from_schema_name("CreateTaskInput"));
-    if let Some(item) = spec.paths.paths.get_mut("/api/v1/tasks")
-        && let Some(operation) = item.post.as_mut()
-        && let Some(body) = operation.request_body.as_mut()
-        && let Some(content) = body.content.get_mut("application/json")
-    {
-        content.schema = Some(schema);
+    /// Collects every `$ref` in `value`, paired with its location as a JSON
+    /// path into the spec.
+    fn collect_refs(value: &Value, path: &str, refs: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(fields) => {
+                if let Some(Value::String(reference)) = fields.get("$ref") {
+                    refs.push((path.to_owned(), reference.clone()));
+                }
+                for (name, field) in fields {
+                    if name != "$ref" {
+                        collect_refs(field, &format!("{path}/{name}"), refs);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    collect_refs(item, &format!("{path}/{index}"), refs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Resolves a JSON pointer like `components/schemas/Foo` against `spec`.
+    fn resolve_pointer<'a>(spec: &'a Value, pointer: &str) -> Option<&'a Value> {
+        let mut current = spec;
+        for segment in pointer.split('/').filter(|segment| !segment.is_empty()) {
+            let segment = segment.replace("~1", "/").replace("~0", "~");
+            current = match current {
+                Value::Object(map) => map.get(&segment)?,
+                Value::Array(items) => items.get(segment.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(current)
+    }
+
+    #[test]
+    fn spec_references_resolve() {
+        let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+        let mut refs = Vec::new();
+        collect_refs(&spec, "", &mut refs);
+        assert!(!refs.is_empty(), "expected the spec to contain references");
+        for (path, reference) in &refs {
+            let Some(pointer) = reference.strip_prefix("#/") else {
+                panic!("external reference at {path}: {reference}");
+            };
+            assert!(
+                resolve_pointer(&spec, pointer).is_some(),
+                "dangling reference at {path}: {reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_security_requirements_name_registered_schemes() {
+        let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+        let schemes: Vec<String> = spec["components"]["securitySchemes"]
+            .as_object()
+            .expect("security schemes")
+            .keys()
+            .cloned()
+            .collect();
+        let empty = Vec::new();
+
+        let mut requirements: Vec<&Value> = spec["security"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .collect();
+        for (_, item) in spec["paths"].as_object().expect("paths") {
+            for method in ["get", "post", "put", "patch", "delete"] {
+                if let Some(operation) = item.get(method) {
+                    requirements.extend(operation["security"].as_array().unwrap_or(&empty).iter());
+                }
+            }
+        }
+
+        assert!(!requirements.is_empty());
+        for requirement in requirements {
+            for name in requirement.as_object().expect("requirement").keys() {
+                assert!(
+                    schemes.contains(name),
+                    "security requirement names unknown scheme {name:?}"
+                );
+            }
+        }
     }
 }

@@ -13,10 +13,10 @@ use aperture_storage::{ActorId, SettingRepository};
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::SettingRegistry;
 use crate::change::SettingChange;
 use crate::definition::SettingDefinition;
 use crate::error::SettingError;
-use crate::registry::SettingRegistry;
 
 struct SettingsInner {
     repo: SettingRepository,
@@ -44,7 +44,7 @@ impl Settings {
         }
     }
 
-    /// The registry of keys, for projecting schemas.
+    /// The registry of definitions, for listings and schema lookup.
     pub fn registry(&self) -> &SettingRegistry {
         &self.inner.registry
     }
@@ -54,8 +54,8 @@ impl Settings {
     ///
     /// # Errors
     ///
-    /// Returns [`SettingError::NotRegistered`] if `key` is unknown, or a storage
-    /// error if the read fails.
+    /// Returns [`SettingError::NotRegistered`] if `key` is unknown, or a
+    /// storage error if the read fails.
     pub async fn get_value(&self, key: &str) -> Result<Value, SettingError> {
         let definition = self
             .inner
@@ -133,10 +133,9 @@ impl Settings {
     ///
     /// Returns a storage error if any read fails.
     pub async fn list(&self) -> Result<Vec<(String, Value)>, SettingError> {
-        let mut keys: Vec<&'static str> = self.inner.registry.keys().collect();
-        keys.sort_unstable();
-        let mut result = Vec::with_capacity(keys.len());
-        for key in keys {
+        let registry = &self.inner.registry;
+        let mut result = Vec::with_capacity(registry.len());
+        for key in registry.keys() {
             let value = self.get_value(key).await?;
             result.push((key.to_owned(), value));
         }

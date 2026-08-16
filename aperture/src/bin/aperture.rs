@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
             println!("aperture {}", aperture::VERSION);
             Ok(())
         }
-        Command::Openapi => block_on(emit_openapi()),
+        Command::Openapi => emit_openapi(),
         Command::Run(args) => {
             #[cfg(feature = "os-integration")]
             let os_integration = args.os_integration;
@@ -107,8 +107,8 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn emit_openapi() -> anyhow::Result<()> {
-    let doc = aperture::openapi().await?;
+fn emit_openapi() -> anyhow::Result<()> {
+    let doc = aperture_http::openapi();
     let json = serde_json::to_string_pretty(&doc)?;
     println!("{json}");
     Ok(())

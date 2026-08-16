@@ -44,6 +44,9 @@ pub const CANCEL_TASK: &str = "cancelTask";
 /// `GET /api/v1/task-definitions`
 pub const LIST_TASK_DEFINITIONS: &str = "listTaskDefinitions";
 
+/// `GET /api/v1/task-definitions/{key}`
+pub const GET_TASK_DEFINITION: &str = "getTaskDefinition";
+
 /// `GET /api/v1/task-schedules`
 pub const LIST_TASK_SCHEDULES: &str = "listTaskSchedules";
 
@@ -81,7 +84,7 @@ pub const LOGIN: &str = "login";
 pub const LOGOUT: &str = "logout";
 
 /// `GET /api/v1/auth/me`
-pub const GET_CURRENT_USER: &str = "getCurrentUser";
+pub const GET_CURRENT_ACTOR: &str = "getCurrentActor";
 
 /// `POST /api/v1/auth/change-password`
 pub const CHANGE_PASSWORD: &str = "changePassword";
@@ -103,6 +106,9 @@ pub const GET_USER: &str = "getUser";
 
 /// `DELETE /api/v1/users/{id}`
 pub const DELETE_USER: &str = "deleteUser";
+
+/// `GET /api/v1/users/{id}/avatar`
+pub const GET_USER_AVATAR: &str = "getUserAvatar";
 
 /// `GET /api/v1/api-keys`
 pub const LIST_API_KEYS: &str = "listApiKeys";
@@ -127,3 +133,9 @@ pub const LIST_EVENTS: &str = "listEvents";
 
 /// `GET /api/v1/events/{id}`
 pub const GET_EVENT: &str = "getEvent";
+
+/// `GET /api/v1/setting-definitions`
+pub const LIST_SETTING_DEFINITIONS: &str = "listSettingDefinitions";
+
+/// `GET /api/v1/setting-definitions/{key}`
+pub const GET_SETTING_DEFINITION: &str = "getSettingDefinition";

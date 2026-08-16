@@ -1,7 +1,7 @@
 //! The event definition trait: a typed, registered event kind.
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use utoipa::ToSchema;
 
 /// A kind of domain event. The implementing type IS the payload.

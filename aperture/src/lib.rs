@@ -2,19 +2,22 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
 use aperture_events::{EventBus, EventRegistry};
 use aperture_http::{
-    AppState, HttpServer, OpenApiSpec, RegenerateCertificateDefinition, RotateCertificateDefinition,
-    Spectra, SpectraConfig, SpectraWorker, install_default_rotation_schedule,
+    AppState, AvatarAnimation, AvatarStyle, HttpServer, RegenerateCertificateDefinition,
+    RotateCertificateDefinition, Spectra, SpectraConfig, SpectraWorker,
+    install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
 use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
 use aperture_tasks::{Automation, TaskDefinition, TaskRegistry, Tasks};
 use serde_json::json;
+use tokio::sync::Mutex;
 use tokio::{fs, signal};
 use uuid::Uuid;
 
@@ -74,11 +77,7 @@ pub async fn serve(
     let boot_id = Uuid::new_v4();
     let storage = open_storage(&data_dir).await?;
     let event_bus = EventBus::new(storage.events()?);
-    let artifacts = Artifacts::new(
-        storage.clone(),
-        data_dir.join("store"),
-        event_bus.clone(),
-    );
+    let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"), event_bus.clone());
 
     let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
 
@@ -88,20 +87,19 @@ pub async fn serve(
     let auth = AuthHandle::new(storage.clone()).await?;
 
     let mut task_registry = TaskRegistry::new();
-    #[cfg_attr(not(feature = "os-integration"), expect(unused_mut))]
     let mut setting_registry = SettingRegistry::new();
     let mut event_registry = EventRegistry::new();
 
-    register_kinds(&mut task_registry, artifacts.clone(), tls_addr);
-
     #[cfg(feature = "os-integration")]
     let os_reg = if os_integration {
-        Some(aperture_os::register(
-            &mut task_registry,
-            &mut setting_registry,
-            &mut event_registry,
+        Some(
+            aperture_os::register(
+                &mut task_registry,
+                &mut setting_registry,
+                &mut event_registry,
+            )
+            .await?,
         )
-        .await?)
     } else {
         None
     };
@@ -109,21 +107,21 @@ pub async fn serve(
     #[cfg(not(feature = "os-integration"))]
     let _ = os_integration;
 
-    event_registry.register(SettingChange::default());
-    event_registry.register(ArtifactWritten::default());
-    event_registry.register(ArtifactRemoved::default());
+    register_tasks(&mut task_registry, artifacts.clone(), tls_addr);
+    register_settings(&mut setting_registry);
+
+    event_registry.register(Arc::new(SettingChange::default()));
+    event_registry.register(Arc::new(ArtifactWritten::default()));
+    event_registry.register(Arc::new(ArtifactRemoved::default()));
 
     let tasks = Tasks::new(storage.tasks()?, task_registry);
-    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());    let mut automation = Automation::new(
-        tasks.clone(),
-        storage.task_schedules()?,
-        &event_bus,
-    );
+    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
+    let mut automation = Automation::new(tasks.clone(), storage.task_schedules()?, &event_bus);
 
     if tls_addr.is_some() {
         automation.on_event(
             "os.hostname_applied",
-            RegenerateCertificateDefinition::KIND,
+            RegenerateCertificateDefinition::KEY,
             |data| json!({ "hostname": data["hostname"] }),
         );
     }
@@ -160,8 +158,6 @@ pub async fn serve(
     #[cfg(not(feature = "os-integration"))]
     let hostname: Option<String> = None;
 
-    let event_descriptors = event_registry.descriptors().collect::<Vec<_>>();
-
     let state = AppState::new(
         VERSION,
         boot_id,
@@ -171,7 +167,7 @@ pub async fn serve(
         settings,
         auth,
     );
-    let app = aperture_http::app(state, &event_descriptors);
+    let app = aperture_http::app(state);
 
     let server = HttpServer::start(
         artifacts,
@@ -222,54 +218,28 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
-/// Returns the `OpenAPI` specification, with the task kinds projected in.
-///
-/// # Errors
-///
-/// Returns an error if the in-memory storage cannot be opened.
-pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
-    let storage = Storage::open(":memory:").await?;
-    let event_bus = EventBus::new(storage.events()?);
-    let artifacts = Artifacts::new(storage, PathBuf::from("."), event_bus);
-    let mut task_registry = TaskRegistry::new();
-    register_kinds(&mut task_registry, artifacts, None);
-
-    let mut event_registry = EventRegistry::new();
-    event_registry.register(SettingChange::default());
-    event_registry.register(ArtifactWritten::default());
-    event_registry.register(ArtifactRemoved::default());
-
-    Ok(aperture_http::openapi(
-        &task_registry.descriptors(),
-        &event_registry.descriptors().collect::<Vec<_>>(),
-    ))
-}
-
-/// Registers every task kind the gateway supports.
-fn register_kinds(
-    registry: &mut TaskRegistry,
-    artifacts: Artifacts,
-    tls_addr: Option<SocketAddr>,
-) {
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    registry.register(DownloadDefinition::new(artifacts.clone()));
-
+/// Registers every task definition the gateway supports.
+fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts, tls_addr: Option<SocketAddr>) {
     let cert_lock = Arc::new(Mutex::new(()));
-    registry.register(RotateCertificateDefinition::new(
+
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
+    registry.register(Arc::new(RotateCertificateDefinition::new(
         artifacts.clone(),
         cert_lock.clone(),
-    ));
+    )));
+
     if let Some(addr) = tls_addr {
-        registry.register(RegenerateCertificateDefinition::new(
-            artifacts,
-            addr,
-            cert_lock,
-        ));
+        registry.register(Arc::new(RegenerateCertificateDefinition::new(
+            artifacts, addr, cert_lock,
+        )));
     }
 }
 
+/// Registers every setting the gateway supports.
+fn register_settings(registry: &mut SettingRegistry) {
+    registry.register(Arc::new(AvatarStyle::default()));
+    registry.register(Arc::new(AvatarAnimation::default()));
+}
 /// Resets the password for `username` and prints the new password to stdout.
 ///
 /// Revokes every active session for the user's actor so the old password

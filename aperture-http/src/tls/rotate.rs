@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
 use aperture_storage::{ListQuery, NewTaskSchedule, Storage};
-use aperture_tasks::{Capabilities, Interval, RunError, TaskContext, TaskDefinition};
+use aperture_tasks::{Capabilities, Interval, RunError, TaskContext, TaskDefinition, keys};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -33,12 +33,16 @@ pub struct RotateCertificateDefinition {
 
 impl RotateCertificateDefinition {
     pub const fn new(artifacts: Artifacts, cert_lock: Arc<Mutex<()>>) -> Self {
-        Self { artifacts, cert_lock }
+        Self {
+            artifacts,
+            cert_lock,
+        }
     }
 }
 
 impl TaskDefinition for RotateCertificateDefinition {
-    const KIND: &'static str = "rotate-certificate";
+    const KEY: &'static str = keys::ROTATE_CERTIFICATE;
+
     type Input = RotateCertificateInput;
     type Output = RotateCertificateOutput;
 
@@ -73,13 +77,13 @@ pub async fn install_default_rotation_schedule(storage: &Storage) -> anyhow::Res
     let already = existing
         .items
         .iter()
-        .any(|s| s.kind == RotateCertificateDefinition::KIND);
+        .any(|s| s.key == RotateCertificateDefinition::KEY);
     if already {
         return Ok(());
     }
     let now = Timestamp::now();
     repo.create(&NewTaskSchedule {
-        kind: RotateCertificateDefinition::KIND.to_owned(),
+        key: RotateCertificateDefinition::KEY.to_owned(),
         input: serde_json::json!({}),
         interval: Interval::new(ROTATION_INTERVAL)?,
         next_run_at: now,
@@ -118,7 +122,8 @@ impl RegenerateCertificateDefinition {
 }
 
 impl TaskDefinition for RegenerateCertificateDefinition {
-    const KIND: &'static str = "regenerate-certificate";
+    const KEY: &'static str = keys::REGENERATE_CERTIFICATE;
+
     type Input = RegenerateCertificateInput;
     type Output = RegenerateCertificateOutput;
 

@@ -5,8 +5,8 @@
 //! system (see [`crate::DownloadDefinition`]) drives it, tracks progress, and
 //! records each invocation. This layer just does the work.
 
-use std::error::Error as StdError;
 use std::collections::{HashMap, HashSet};
+use std::error::Error as StdError;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 

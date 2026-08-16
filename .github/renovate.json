@@ -13,6 +13,12 @@
   ],
   "packageRules": [
     {
+      "description": "Always open a PR for Spectra image bumps and never pin to a digest. The runtime only resolves tag references.",
+      "matchDepNames": ["ghcr.io/stargrid-systems/spectra"],
+      "automerge": false,
+      "pinDigests": false
+    },
+    {
       "description": "Do not auto-merge Rust toolchain bumps. The nightly channel moves almost daily, so auto-merge would churn the toolchain constantly.",
       "matchFileNames": ["rust-toolchain.toml"],
       "automerge": false

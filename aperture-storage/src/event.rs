@@ -24,13 +24,8 @@ mod col {
     pub const TIMESTAMP: &str = "timestamp";
 }
 
-const EVENT_COLUMNS: Columns = Columns::new(&[
-    col::ID,
-    col::KEY,
-    col::DATA,
-    col::ACTOR,
-    col::TIMESTAMP,
-]);
+const EVENT_COLUMNS: Columns =
+    Columns::new(&[col::ID, col::KEY, col::DATA, col::ACTOR, col::TIMESTAMP]);
 
 /// A persisted domain event.
 #[derive(Debug, Clone)]
@@ -125,11 +120,7 @@ impl EventRepository {
     /// Returns `StorageError` if the query or cursor is invalid, or a row
     /// cannot be decoded.
     #[tracing::instrument(level = "info", skip_all)]
-    pub async fn list(
-        &self,
-        filter: &EventFilter,
-        query: &ListQuery,
-    ) -> Result<Page<Event>> {
+    pub async fn list(&self, filter: &EventFilter, query: &ListQuery) -> Result<Page<Event>> {
         let paginator = Paginator::new(query, Order::Desc)?;
         let keyset = Keyset::with_id(col::TIMESTAMP, paginator.query_order());
 

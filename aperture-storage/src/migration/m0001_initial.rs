@@ -84,7 +84,7 @@ const TABLES: &str = sql!(
 
     CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
-        kind TEXT NOT NULL,
+        key TEXT NOT NULL,
         parent_id INTEGER REFERENCES tasks (id),
         initiator_id INTEGER NOT NULL REFERENCES actors (id),
         status TEXT NOT NULL,
@@ -95,14 +95,14 @@ const TABLES: &str = sql!(
         started_at timestamp_us,
         finished_at timestamp_us
     ) STRICT;
-    CREATE INDEX idx_tasks_kind ON tasks (kind);
+    CREATE INDEX idx_tasks_key ON tasks ("key");
     CREATE INDEX idx_tasks_status ON tasks (status);
     CREATE INDEX idx_tasks_parent ON tasks (parent_id);
     CREATE INDEX idx_tasks_initiator ON tasks (initiator_id);
 
     CREATE TABLE task_schedules (
         id INTEGER PRIMARY KEY,
-        kind TEXT NOT NULL,
+        key TEXT NOT NULL,
         input jsonb NOT NULL,
         interval_us duration_us NOT NULL,
         next_run_at timestamp_us NOT NULL,
@@ -111,7 +111,7 @@ const TABLES: &str = sql!(
         enabled boolean NOT NULL DEFAULT TRUE,
         created_at timestamp_us NOT NULL
     ) STRICT;
-    CREATE INDEX idx_task_schedules_kind ON task_schedules (kind);
+    CREATE INDEX idx_task_schedules_key ON task_schedules ("key");
     CREATE INDEX idx_task_schedules_next_run ON task_schedules (next_run_at) WHERE enabled = TRUE;
 
     CREATE TABLE settings (

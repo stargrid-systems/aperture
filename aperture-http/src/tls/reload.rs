@@ -103,11 +103,7 @@ impl TlsReload {
 }
 
 /// Schedules a debounced reload when a relevant artifact changes.
-fn check_artifact_key(
-    key: &str,
-    deadline: &mut Option<Instant>,
-    retries: &mut u32,
-) {
+fn check_artifact_key(key: &str, deadline: &mut Option<Instant>, retries: &mut u32) {
     if key == SERVER_CERT.as_str() || key == SERVER_KEY.as_str() {
         tracing::debug!(%key, "scheduling TLS reload");
         *retries = 0;
