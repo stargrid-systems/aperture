@@ -13,6 +13,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+aperture-runtime = { workspace = true }
 aperture-storage = { workspace = true }
 jiff = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }

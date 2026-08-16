@@ -3,6 +3,9 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
+use std::sync::Arc;
+
+use aperture_events::EventRegistry;
 use aperture_settings::Settings;
 use aperture_storage::{ApiKeyId, ArtifactKey, Storage, UserId};
 use aperture_tasks::Tasks;
@@ -43,11 +46,13 @@ pub struct AppState {
     spectra: Spectra,
     tasks: Tasks,
     settings: Settings,
+    event_registry: Arc<EventRegistry>,
     auth: aperture_auth::AuthHandle,
     login_limiter: aperture_auth::LoginLimiter,
 }
 
 impl AppState {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         version: &'static str,
         boot_id: Uuid,
@@ -55,6 +60,7 @@ impl AppState {
         spectra: Spectra,
         tasks: Tasks,
         settings: Settings,
+        event_registry: EventRegistry,
         auth: aperture_auth::AuthHandle,
     ) -> Self {
         Self {
@@ -64,6 +70,7 @@ impl AppState {
             spectra,
             tasks,
             settings,
+            event_registry: Arc::new(event_registry),
             auth,
             login_limiter: aperture_auth::LoginLimiter::default(),
         }
@@ -91,6 +98,10 @@ impl AppState {
 
     pub(crate) const fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    pub(crate) fn event_registry(&self) -> &EventRegistry {
+        &self.event_registry
     }
 
     pub(crate) const fn auth(&self) -> &aperture_auth::AuthHandle {
@@ -173,6 +184,8 @@ mod tests {
         "getTaskDefinition",
         "listSettingDefinitions",
         "getSettingDefinition",
+        "listEventDefinitions",
+        "getEventDefinition",
     ];
 
     #[test]

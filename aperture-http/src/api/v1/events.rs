@@ -7,13 +7,22 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::dto::{EventListParams, EventResponse, Page};
+use crate::dto::{
+    EventDefinitionResponse, EventDefinitionSummary, EventListParams, EventResponse, Page,
+    SimpleListParams,
+};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_events))
         .routes(routes!(get_event))
+}
+
+pub fn definitions_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list_definitions))
+        .routes(routes!(get_definition))
 }
 
 /// Lists domain events with optional filtering.
@@ -63,4 +72,58 @@ async fn get_event(
     let events = state.storage().events()?;
     let event = events.get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     Ok(Json(event.into()))
+}
+
+/// Lists the registered event definitions.
+#[utoipa::path(
+    get,
+    path = "",
+    operation_id = operation_ids::LIST_EVENT_DEFINITIONS,
+    params(SimpleListParams),
+    security(()),
+    responses((
+        status = 200,
+        description = "Event definitions",
+        body = Page<EventDefinitionSummary>,
+    )),
+)]
+async fn list_definitions(
+    State(state): State<AppState>,
+    Query(params): Query<SimpleListParams>,
+) -> Result<Json<Page<EventDefinitionSummary>>, ApiError> {
+    let page = state
+        .event_registry()
+        .list(&params.to_query())
+        .map_err(|_| ApiError::BAD_REQUEST)?;
+    Ok(Json(Page::from_registry(page, |definition| {
+        EventDefinitionSummary {
+            key: definition.key().to_owned(),
+        }
+    })))
+}
+
+/// Returns one registered event definition with its full JSON Schema.
+#[utoipa::path(
+    get,
+    path = "/{key}",
+    operation_id = operation_ids::GET_EVENT_DEFINITION,
+    params(("key" = String, Path, description = "Event definition key")),
+    security(()),
+    responses(
+        (status = 200, description = "Event definition", body = EventDefinitionResponse),
+        (status = 404, description = "Unknown event definition key"),
+    ),
+)]
+async fn get_definition(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> Result<Json<EventDefinitionResponse>, ApiError> {
+    let definition = state
+        .event_registry()
+        .get(&key)
+        .ok_or(ApiError::NOT_FOUND)?;
+    Ok(Json(EventDefinitionResponse {
+        key: definition.key().to_owned(),
+        payload_schema: definition.payload_schema(),
+    }))
 }

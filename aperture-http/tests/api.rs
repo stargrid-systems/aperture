@@ -46,6 +46,17 @@ fn test_settings(storage: &Storage) -> Settings {
     Settings::new(storage.settings().unwrap(), registry, event_bus)
 }
 
+fn test_event_registry() -> aperture_events::EventRegistry {
+    use aperture_artifacts::{ArtifactRemoved, ArtifactWritten};
+    use aperture_settings::SettingChange;
+
+    let mut registry = aperture_events::EventRegistry::new();
+    registry.register(Arc::new(SettingChange::default()));
+    registry.register(Arc::new(ArtifactWritten::default()));
+    registry.register(Arc::new(ArtifactRemoved::default()));
+    registry
+}
+
 async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     // Unique per call so parallel tests in the same binary do not stomp on
     // each other's blob store.
@@ -105,6 +116,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         spectra,
         tasks,
         settings,
+        test_event_registry(),
         auth,
     );
     (app(state), artifacts, storage, raw_key.as_str().to_owned())
@@ -378,6 +390,39 @@ async fn gets_setting_definition_schema() {
     );
 
     let (status, _) = get_json(&app, &token, "/api/v1/setting-definitions/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn lists_event_definitions() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/event-definitions").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    assert!(
+        items.iter().any(|def| def["key"] == "artifact.written"),
+        "artifact.written registered: {json}"
+    );
+    assert!(
+        items.iter().any(|def| def["key"] == "setting.changed"),
+        "setting.changed registered: {json}"
+    );
+}
+
+#[tokio::test]
+async fn gets_event_definition_schema() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/event-definitions/artifact.written").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "artifact.written");
+    assert_eq!(
+        json["payload_schema"]["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+
+    let (status, _) = get_json(&app, &token, "/api/v1/event-definitions/nope").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -904,6 +949,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
         spectra,
         tasks,
         settings,
+        test_event_registry(),
         auth,
     );
     (app(state), raw_key.as_str().to_owned())
@@ -988,6 +1034,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         spectra,
         tasks,
         settings,
+        test_event_registry(),
         auth.clone(),
     );
     (app(state), auth, storage)

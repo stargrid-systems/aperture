@@ -4,15 +4,15 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aperture_artifacts::{Artifacts, DownloadDefinition};
+use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
-use aperture_events::EventBus;
+use aperture_events::{EventBus, EventRegistry};
 use aperture_http::{
     AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
     SpectraConfig, SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
-use aperture_settings::{SettingRegistry, Settings};
+use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
 use tokio::{fs, signal};
@@ -92,6 +92,9 @@ pub async fn serve(
     register_settings(&mut setting_registry);
     let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
 
+    let mut event_registry = EventRegistry::new();
+    register_events(&mut event_registry);
+
     let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
     let spectra = Spectra::new(
@@ -113,6 +116,7 @@ pub async fn serve(
         spectra.clone(),
         tasks.clone(),
         settings,
+        event_registry,
         auth,
     );
     let app = aperture_http::app(state);
@@ -163,6 +167,13 @@ fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts) {
 fn register_settings(registry: &mut SettingRegistry) {
     registry.register(Arc::new(AvatarStyle::default()));
     registry.register(Arc::new(AvatarAnimation::default()));
+}
+
+/// Registers every event kind the gateway emits.
+fn register_events(registry: &mut EventRegistry) {
+    registry.register(Arc::new(SettingChange::default()));
+    registry.register(Arc::new(ArtifactWritten::default()));
+    registry.register(Arc::new(ArtifactRemoved::default()));
 }
 
 /// Resets the password for `username` and prints the new password to stdout.

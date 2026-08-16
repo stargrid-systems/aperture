@@ -80,3 +80,19 @@ impl EventListParams {
         }
     }
 }
+
+/// A registered event definition in a listing.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct EventDefinitionSummary {
+    /// The key string.
+    pub key: String,
+}
+
+/// One registered event definition, with its full JSON Schema.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct EventDefinitionResponse {
+    /// The key string.
+    pub key: String,
+    /// Standalone JSON Schema (draft 2020-12) of the event's payload type.
+    pub payload_schema: Value,
+}
