@@ -22,6 +22,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum number of items to return. Clamped to `1..=200`, defaults to\n50.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -34,6 +35,7 @@
           {
             "name": "cursor",
             "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -42,6 +44,7 @@
           {
             "name": "order",
             "in": "query",
+            "description": "Sort direction. Defaults to ascending.",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/OrderParam"
@@ -765,6 +768,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum number of items to return. Clamped to `1..=200`, defaults to\n50.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -777,6 +781,7 @@
           {
             "name": "cursor",
             "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -785,6 +790,7 @@
           {
             "name": "order",
             "in": "query",
+            "description": "Sort direction. Defaults to ascending.",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/OrderParam"
@@ -1029,21 +1035,86 @@
     },
     "/api/v1/setting-definitions": {
       "get": {
-        "summary": "Lists the registered setting keys with their JSON Schemas.",
+        "summary": "Lists the registered setting definitions.",
         "operationId": "listSettingDefinitions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return. Clamped to `1..=200`, defaults to\n50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to ascending.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Setting definitions",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SettingDefinitionResponse"
-                  }
+                  "$ref": "#/components/schemas/Page_SettingDefinitionSummary"
                 }
               }
             }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/setting-definitions/{key}": {
+      "get": {
+        "summary": "Returns one registered setting definition with its full JSON Schema.",
+        "operationId": "getSettingDefinition",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Setting definition key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Setting definition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingDefinitionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown setting definition key"
           }
         },
         "security": [
@@ -1152,21 +1223,86 @@
     },
     "/api/v1/task-definitions": {
       "get": {
-        "summary": "Lists the registered task definitions with their capabilities and JSON\nSchemas.",
+        "summary": "Lists the registered task definitions.",
         "operationId": "listTaskDefinitions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return. Clamped to `1..=200`, defaults to\n50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to ascending.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Task definitions",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TaskDefinitionResponse"
-                  }
+                  "$ref": "#/components/schemas/Page_TaskDefinitionSummary"
                 }
               }
             }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/task-definitions/{key}": {
+      "get": {
+        "summary": "Returns one registered task definition with its full JSON Schemas.",
+        "operationId": "getTaskDefinition",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Task definition key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task definition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDefinitionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown task definition key"
           }
         },
         "security": [
@@ -1482,7 +1618,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateTaskInput"
+                "$ref": "#/components/schemas/CreateTaskRequest"
               }
             }
           },
@@ -1579,6 +1715,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum number of items to return. Clamped to `1..=200`, defaults to\n50.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -1591,6 +1728,7 @@
           {
             "name": "cursor",
             "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1599,6 +1737,7 @@
           {
             "name": "order",
             "in": "query",
+            "description": "Sort direction. Defaults to ascending.",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/OrderParam"
@@ -2035,49 +2174,6 @@
           }
         }
       },
-      "CreateTaskInput": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "key",
-              "input"
-            ],
-            "properties": {
-              "input": {
-                "$ref": "#/components/schemas/DownloadInput"
-              },
-              "key": {
-                "type": "string",
-                "enum": [
-                  "download"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "key",
-              "input"
-            ],
-            "properties": {
-              "input": {
-                "$ref": "#/components/schemas/RotateCertificateInput"
-              },
-              "key": {
-                "type": "string",
-                "enum": [
-                  "rotate-certificate"
-                ]
-              }
-            }
-          }
-        ],
-        "discriminator": {
-          "propertyName": "key"
-        }
-      },
       "CreateTaskRequest": {
         "type": "object",
         "description": "Body for `POST /api/v1/tasks`.",
@@ -2183,81 +2279,6 @@
       "Digest": {
         "type": "string",
         "description": "Content digest, e.g. `sha256:hex`."
-      },
-      "DownloadInput": {
-        "type": "object",
-        "description": "Input for a download task: what to fetch and where from.",
-        "required": [
-          "key",
-          "source"
-        ],
-        "properties": {
-          "key": {
-            "$ref": "#/components/schemas/ArtifactKey",
-            "description": "Logical key to record the artifact under."
-          },
-          "source": {
-            "$ref": "#/components/schemas/DownloadSource",
-            "description": "Where and how to fetch it from."
-          }
-        }
-      },
-      "DownloadOutput": {
-        "type": "object",
-        "description": "Output of a download task: the stored version that resulted.",
-        "required": [
-          "digest",
-          "size_bytes"
-        ],
-        "properties": {
-          "digest": {
-            "$ref": "#/components/schemas/Digest",
-            "description": "Content digest of the stored blob."
-          },
-          "size_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Stored blob size in bytes.",
-            "minimum": 0
-          },
-          "version": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Human-readable version, if known."
-          }
-        }
-      },
-      "DownloadSource": {
-        "oneOf": [
-          {
-            "type": "object",
-            "description": "A layer of an OCI image.",
-            "required": [
-              "reference",
-              "media_type",
-              "type"
-            ],
-            "properties": {
-              "media_type": {
-                "$ref": "#/components/schemas/MediaType",
-                "description": "The media type of the layer to pull."
-              },
-              "reference": {
-                "type": "string",
-                "description": "The image reference, for example `ghcr.io/org/image:tag`."
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "oci"
-                ]
-              }
-            }
-          }
-        ],
-        "description": "Where a download fetches from."
       },
       "EventId": {
         "type": "string",
@@ -2996,6 +3017,46 @@
           }
         }
       },
+      "Page_SettingDefinitionSummary": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A registered setting definition in a listing.",
+              "required": [
+                "key"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "The key string."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
       "Page_String": {
         "type": "object",
         "description": "A page of results plus the cursors for the neighbouring pages.",
@@ -3007,6 +3068,56 @@
             "type": "array",
             "items": {
               "type": "string"
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
+      "Page_TaskDefinitionSummary": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A registered task definition in a listing.",
+              "required": [
+                "key",
+                "cancellable",
+                "resumable"
+              ],
+              "properties": {
+                "cancellable": {
+                  "type": "boolean",
+                  "description": "Whether the key can be cancelled."
+                },
+                "key": {
+                  "type": "string",
+                  "description": "The key string."
+                },
+                "resumable": {
+                  "type": "boolean",
+                  "description": "Whether the key is safe to interrupt across a restart."
+                }
+              }
             },
             "description": "The rows in this page."
           },
@@ -3339,25 +3450,9 @@
           "viewer"
         ]
       },
-      "RotateCertificateInput": {
-        "type": "object",
-        "description": "Rotation takes no parameters (identity-preserving)."
-      },
-      "RotateCertificateOutput": {
-        "type": "object",
-        "required": [
-          "rotated"
-        ],
-        "properties": {
-          "rotated": {
-            "type": "boolean",
-            "description": "Whether the leaf was actually re-issued."
-          }
-        }
-      },
       "SettingDefinitionResponse": {
         "type": "object",
-        "description": "A registered setting key with its JSON Schema.",
+        "description": "One registered setting definition, with its full JSON Schema.",
         "required": [
           "key",
           "value_schema"
@@ -3368,7 +3463,20 @@
             "description": "The key string."
           },
           "value_schema": {
-            "description": "JSON Schema of the key's value."
+            "description": "Standalone JSON Schema (draft 2020-12) of the key's value type."
+          }
+        }
+      },
+      "SettingDefinitionSummary": {
+        "type": "object",
+        "description": "A registered setting definition in a listing.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key string."
           }
         }
       },
@@ -3418,7 +3526,7 @@
       },
       "TaskDefinitionResponse": {
         "type": "object",
-        "description": "A registered task definition, with its capabilities and JSON Schemas.",
+        "description": "One registered task definition, with full JSON Schemas.",
         "required": [
           "key",
           "cancellable",
@@ -3429,21 +3537,44 @@
         "properties": {
           "cancellable": {
             "type": "boolean",
-            "description": "Whether the kind can be cancelled."
+            "description": "Whether the key can be cancelled."
           },
           "input_schema": {
-            "description": "JSON Schema of the kind's input."
+            "description": "Standalone JSON Schema (draft 2020-12) of the key's input type."
           },
           "key": {
             "type": "string",
             "description": "The key string."
           },
           "output_schema": {
-            "description": "JSON Schema of the kind's output."
+            "description": "Standalone JSON Schema (draft 2020-12) of the key's output type."
           },
           "resumable": {
             "type": "boolean",
-            "description": "Whether the kind is safe to interrupt across a restart."
+            "description": "Whether the key is safe to interrupt across a restart."
+          }
+        }
+      },
+      "TaskDefinitionSummary": {
+        "type": "object",
+        "description": "A registered task definition in a listing.",
+        "required": [
+          "key",
+          "cancellable",
+          "resumable"
+        ],
+        "properties": {
+          "cancellable": {
+            "type": "boolean",
+            "description": "Whether the key can be cancelled."
+          },
+          "key": {
+            "type": "string",
+            "description": "The key string."
+          },
+          "resumable": {
+            "type": "boolean",
+            "description": "Whether the key is safe to interrupt across a restart."
           }
         }
       },
