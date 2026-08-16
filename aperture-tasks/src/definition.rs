@@ -39,6 +39,7 @@ impl Capabilities {
 pub trait TaskDefinition: Send + Sync + 'static {
     /// The unique key string this definition is registered under.
     const KEY: &'static str;
+
     /// The typed input the task is created with.
     type Input: DeserializeOwned + Serialize + ToSchema + Send;
     /// The typed output the task produces on success.

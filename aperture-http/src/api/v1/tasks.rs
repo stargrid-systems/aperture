@@ -10,7 +10,10 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
-use crate::dto::{CreateTaskRequest, Page, TaskDefinitionResponse, TaskListParams, TaskResponse};
+use crate::dto::{
+    CreateTaskRequest, Page, SimpleListParams, TaskDefinitionResponse, TaskDefinitionSummary,
+    TaskListParams, TaskResponse,
+};
 use crate::error::ApiError;
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -21,7 +24,9 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 pub fn definitions_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(list_definitions))
+    OpenApiRouter::new()
+        .routes(routes!(list_definitions))
+        .routes(routes!(get_definition))
 }
 
 /// Lists task invocations, optionally filtered by status, key, and parent.
@@ -151,24 +156,56 @@ async fn cancel_task(
     }
 }
 
-/// Lists the registered task definitions with their capabilities and JSON
-/// Schemas.
+/// Lists the registered task definitions.
 #[utoipa::path(
     get,
     path = "",
     operation_id = operation_ids::LIST_TASK_DEFINITIONS,
+    params(SimpleListParams),
     security(()),
-    responses((status = 200, description = "Task definitions", body = Vec<TaskDefinitionResponse>)),
+    responses((status = 200, description = "Task definitions", body = Page<TaskDefinitionSummary>)),
 )]
 async fn list_definitions(
     State(state): State<AppState>,
-) -> Result<Json<Vec<TaskDefinitionResponse>>, ApiError> {
-    let definitions = state
+    Query(params): Query<SimpleListParams>,
+) -> Result<Json<Page<TaskDefinitionSummary>>, ApiError> {
+    let page = state
         .tasks()
         .registry()
-        .descriptors()
-        .into_iter()
-        .map(TaskDefinitionResponse::from)
-        .collect();
-    Ok(Json(definitions))
+        .list(&params.to_query())
+        .map_err(|_| ApiError::BAD_REQUEST)?;
+    Ok(Json(Page::from_registry(page, |definition| {
+        TaskDefinitionSummary::from(definition.descriptor())
+    })))
+}
+
+/// Returns one registered task definition with its full JSON Schemas.
+#[utoipa::path(
+    get,
+    path = "/{key}",
+    operation_id = operation_ids::GET_TASK_DEFINITION,
+    params(("key" = String, Path, description = "Task definition key")),
+    security(()),
+    responses(
+        (status = 200, description = "Task definition", body = TaskDefinitionResponse),
+        (status = 404, description = "Unknown task definition key"),
+    ),
+)]
+async fn get_definition(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> Result<Json<TaskDefinitionResponse>, ApiError> {
+    let definition = state
+        .tasks()
+        .registry()
+        .get(&key)
+        .ok_or(ApiError::NOT_FOUND)?;
+    let descriptor = definition.descriptor();
+    Ok(Json(TaskDefinitionResponse {
+        key: descriptor.key.to_owned(),
+        cancellable: descriptor.capabilities.cancellable,
+        resumable: descriptor.capabilities.resumable,
+        input_schema: definition.input_schema(),
+        output_schema: definition.output_schema(),
+    }))
 }

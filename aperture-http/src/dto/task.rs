@@ -135,31 +135,40 @@ impl TaskResponse {
     }
 }
 
-/// A registered task definition, with its capabilities and JSON Schemas.
+/// A registered task definition in a listing.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct TaskDefinitionResponse {
+pub struct TaskDefinitionSummary {
     /// The key string.
     pub key: String,
-    /// Whether the kind can be cancelled.
+    /// Whether the key can be cancelled.
     pub cancellable: bool,
-    /// Whether the kind is safe to interrupt across a restart.
+    /// Whether the key is safe to interrupt across a restart.
     pub resumable: bool,
-    /// JSON Schema of the kind's input.
-    pub input_schema: Value,
-    /// JSON Schema of the kind's output.
-    pub output_schema: Value,
 }
 
-impl From<TaskDescriptor> for TaskDefinitionResponse {
+impl From<TaskDescriptor> for TaskDefinitionSummary {
     fn from(descriptor: TaskDescriptor) -> Self {
         Self {
             key: descriptor.key.to_owned(),
             cancellable: descriptor.capabilities.cancellable,
             resumable: descriptor.capabilities.resumable,
-            input_schema: serde_json::to_value(&descriptor.input_schema).unwrap_or(Value::Null),
-            output_schema: serde_json::to_value(&descriptor.output_schema).unwrap_or(Value::Null),
         }
     }
+}
+
+/// One registered task definition, with full JSON Schemas.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TaskDefinitionResponse {
+    /// The key string.
+    pub key: String,
+    /// Whether the key can be cancelled.
+    pub cancellable: bool,
+    /// Whether the key is safe to interrupt across a restart.
+    pub resumable: bool,
+    /// Standalone JSON Schema (draft 2020-12) of the key's input type.
+    pub input_schema: Value,
+    /// Standalone JSON Schema (draft 2020-12) of the key's output type.
+    pub output_schema: Value,
 }
 
 /// Body for `POST /api/v1/tasks`.

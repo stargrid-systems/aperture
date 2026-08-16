@@ -1,7 +1,7 @@
 //! The download task: fetching an artifact, modelled as a [`TaskDefinition`].
 
 use aperture_storage::{ArtifactKey, Digest, MediaType};
-use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition};
+use aperture_tasks::{Capabilities, RunError, TaskContext, TaskDefinition, keys};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -68,7 +68,8 @@ impl DownloadDefinition {
 }
 
 impl TaskDefinition for DownloadDefinition {
-    const KEY: &'static str = "download";
+    const KEY: &'static str = keys::DOWNLOAD;
+
     type Input = DownloadInput;
     type Output = DownloadOutput;
 

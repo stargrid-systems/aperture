@@ -24,11 +24,11 @@ use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
+use crate::TaskRegistry;
 use crate::context::TaskContext;
 use crate::definition::{Capabilities, TaskDefinition};
 use crate::error::{RunError, TaskError};
 use crate::progress::{Progress, ProgressState};
-use crate::registry::TaskRegistry;
 
 /// Whether a tracked task is still running or has settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,7 +358,7 @@ impl TasksInner {
             cancel,
             Arc::clone(&shared.progress),
         );
-        let capabilities = definition.capabilities();
+        let capabilities = definition.descriptor().capabilities;
 
         // Hold the registry lock across spawn and insert so the body cannot
         // settle (and try to remove the entry) before it exists, and so the

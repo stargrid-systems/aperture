@@ -5,21 +5,17 @@
 //! value on the way in, and the typed value is encoded back out. A blanket
 //! impl bridges every [`SettingDefinition`].
 
+use aperture_runtime::{RegistryEntry, json_schema};
 use serde_json::Value;
-use utoipa::openapi::RefOr;
-use utoipa::openapi::schema::Schema;
-use utoipa::{PartialSchema, ToSchema};
 
 use crate::definition::SettingDefinition;
 use crate::error::SettingError;
 
 pub trait ErasedSettingDefinition: Send + Sync + 'static {
+    /// The key this definition is registered under.
     fn key(&self) -> &'static str;
-    fn value_name(&self) -> String;
-    fn value_schema(&self) -> RefOr<Schema>;
-    /// Pushes the named component schemas this key references (its value
-    /// type plus dependencies) into `out`.
-    fn collect_schemas(&self, out: &mut Vec<(String, RefOr<Schema>)>);
+    /// A standalone JSON Schema document of the key's value type.
+    fn value_schema(&self) -> Value;
     /// Returns the default value as JSON.
     fn default_value(&self) -> Value;
     /// Checks that `value` deserializes into this key's value type.
@@ -30,25 +26,19 @@ pub trait ErasedSettingDefinition: Send + Sync + 'static {
     fn check_value(&self, value: &Value) -> Result<(), SettingError>;
 }
 
+impl RegistryEntry for dyn ErasedSettingDefinition {
+    fn key(&self) -> &'static str {
+        ErasedSettingDefinition::key(self)
+    }
+}
+
 impl<T: SettingDefinition> ErasedSettingDefinition for T {
     fn key(&self) -> &'static str {
         T::KEY
     }
 
-    fn value_name(&self) -> String {
-        <T as ToSchema>::name().into_owned()
-    }
-
-    fn value_schema(&self) -> RefOr<Schema> {
-        <T as PartialSchema>::schema()
-    }
-
-    fn collect_schemas(&self, out: &mut Vec<(String, RefOr<Schema>)>) {
-        out.push((
-            <T as ToSchema>::name().into_owned(),
-            <T as PartialSchema>::schema(),
-        ));
-        <T as ToSchema>::schemas(out);
+    fn value_schema(&self) -> Value {
+        json_schema::<T>()
     }
 
     fn default_value(&self) -> Value {

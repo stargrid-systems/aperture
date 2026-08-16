@@ -2,12 +2,13 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use aperture_artifacts::{Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
 use aperture_http::{
-    AppState, AvatarAnimation, AvatarStyle, HttpServer, OpenApiSpec, RotateCertificateDefinition,
-    Spectra, SpectraConfig, SpectraWorker, install_default_rotation_schedule,
+    AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
+    SpectraConfig, SpectraWorker, install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
 use aperture_settings::{SettingRegistry, Settings};
@@ -81,7 +82,7 @@ pub async fn serve(
     let auth = AuthHandle::new(storage.clone()).await?;
 
     let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts.clone());
+    register_tasks(&mut registry, artifacts.clone());
     let tasks = Tasks::new(storage.tasks()?, registry);
 
     let mut setting_registry = SettingRegistry::new();
@@ -149,29 +150,16 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
-/// Returns the `OpenAPI` specification, with the task kinds projected in.
-///
-/// # Errors
-///
-/// Returns an error if the in-memory storage cannot be opened.
-pub async fn openapi() -> anyhow::Result<OpenApiSpec> {
-    let storage = Storage::open(":memory:").await?;
-    let artifacts = Artifacts::new(storage, PathBuf::from("."));
-    let mut registry = TaskRegistry::new();
-    register_kinds(&mut registry, artifacts);
-    Ok(aperture_http::openapi(&registry.descriptors()))
-}
-
-/// Registers every task kind the gateway supports.
-fn register_kinds(registry: &mut TaskRegistry, artifacts: Artifacts) {
-    registry.register(DownloadDefinition::new(artifacts.clone()));
-    registry.register(RotateCertificateDefinition::new(artifacts));
+/// Registers every task definition the gateway supports.
+fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts) {
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
+    registry.register(Arc::new(RotateCertificateDefinition::new(artifacts)));
 }
 
 /// Registers every setting the gateway supports.
 fn register_settings(registry: &mut SettingRegistry) {
-    registry.register(AvatarStyle::default());
-    registry.register(AvatarAnimation::default());
+    registry.register(Arc::new(AvatarStyle::default()));
+    registry.register(Arc::new(AvatarAnimation::default()));
 }
 
 /// Resets the password for `username` and prints the new password to stdout.
