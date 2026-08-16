@@ -28,7 +28,10 @@ use tokio::sync::RwLock;
 
 pub use self::error::{AuthError, Result};
 pub use self::password::Password;
-pub use self::policy::{Action, Object, Role, actor_subject, apikey_subject, required_permission};
+pub use self::policy::{
+    Action, Object, REQUIRED_PERMISSION_EXTENSION, Role, actor_subject, apikey_subject,
+    required_permission,
+};
 pub use self::ratelimit::LoginLimiter;
 pub use self::token::{RawApiKey, SessionToken};
 pub use self::username::Username;

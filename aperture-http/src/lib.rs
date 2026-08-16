@@ -192,7 +192,9 @@ mod tests {
                     "{op_id} public flag mismatch"
                 );
 
-                let Some(permission) = op.get("x-required-permission") else {
+                // Looked up by the shared constant, so every annotation
+                // literal is pinned to it: a different name fails coverage.
+                let Some(permission) = op.get(aperture_auth::REQUIRED_PERMISSION_EXTENSION) else {
                     assert!(
                         is_public || SESSION_ONLY.contains(&op_id.as_str()),
                         "{op_id} documents no required permission"
