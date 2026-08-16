@@ -107,6 +107,19 @@ impl fmt::Display for Action {
     }
 }
 
+/// The `OpenAPI` extension name carrying an operation's required permission.
+pub const REQUIRED_PERMISSION_EXTENSION: &str = "x-required-permission";
+
+/// The permission string for an authorization check on `object` and
+/// `action`, e.g. `"task:read"`.
+///
+/// The `OpenAPI` annotations reference the enum variants through this
+/// function, so a typo or vocabulary rename fails to compile instead of
+/// silently corrupting the spec.
+pub fn required_permission(object: Object, action: Action) -> String {
+    format!("{object}:{action}")
+}
+
 /// A built-in role. Stored as its lowercase name in casbin grouping rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]

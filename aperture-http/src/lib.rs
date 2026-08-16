@@ -216,3 +216,69 @@ fn set_create_body(spec: &mut OpenApiSpec) {
         content.schema = Some(schema);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    /// Operations that need a session but no RBAC permission.
+    const SESSION_ONLY: &[&str] = &[
+        "getGatewayVersion",
+        "listApiKeys",
+        "getUserAvatar",
+        "logout",
+        "getCurrentActor",
+        "changePassword",
+    ];
+
+    /// Operations that need no authentication at all.
+    const PUBLIC: &[&str] = &[
+        "login",
+        "setup",
+        "getSetupStatus",
+        "listTaskDefinitions",
+        "listSettingDefinitions",
+    ];
+
+    #[test]
+    fn spec_documents_permissions_per_operation() {
+        let spec = serde_json::to_value(openapi(&[])).expect("spec must serialize");
+        for (_, item) in spec["paths"].as_object().expect("paths") {
+            for method in ["get", "post", "put", "patch", "delete"] {
+                let Some(op) = item.get(method) else {
+                    continue;
+                };
+                let op_id = op["operationId"].as_str().expect("operation id").to_owned();
+                let is_public = op["security"] == Value::Array(vec![serde_json::json!({})]);
+
+                assert_eq!(
+                    is_public,
+                    PUBLIC.contains(&op_id.as_str()),
+                    "{op_id} public flag mismatch"
+                );
+
+                // Looked up by the shared constant, so every annotation
+                // literal is pinned to it: a different name fails coverage.
+                let Some(permission) = op.get(aperture_auth::REQUIRED_PERMISSION_EXTENSION) else {
+                    assert!(
+                        is_public || SESSION_ONLY.contains(&op_id.as_str()),
+                        "{op_id} documents no required permission"
+                    );
+                    continue;
+                };
+                // Values come from Object and Action through
+                // required_permission, so the compiler already guarantees the
+                // vocabulary. Only the object:action shape needs checking.
+                assert!(
+                    permission
+                        .as_str()
+                        .and_then(|perm| perm.split_once(':'))
+                        .is_some_and(|(object, action)| !object.is_empty() && !action.is_empty()),
+                    "{op_id} permission is not object:action: {permission}"
+                );
+            }
+        }
+    }
+}

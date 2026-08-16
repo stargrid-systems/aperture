@@ -1,4 +1,6 @@
-use aperture_auth::{Action, AuthenticatedActor, Object, Password, Role, Username};
+use aperture_auth::{
+    Action, AuthenticatedActor, Object, Password, Role, Username, required_permission,
+};
 use aperture_storage::{ActorId, UserId};
 use axum::Json;
 use axum::body::Body;
@@ -59,6 +61,7 @@ pub struct CreateUserRequest {
     get,
     path = "",
     operation_id = operation_ids::LIST_USERS,
+    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Read)))),
     params(SimpleListParams),
     responses((status = 200, description = "Users", body = Page<UserResponse>)),
 )]
@@ -80,6 +83,7 @@ async fn list_users(
     post,
     path = "",
     operation_id = operation_ids::CREATE_USER,
+    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Create)))),
     request_body = CreateUserRequest,
     responses(
         (status = 201, description = "User created", body = UserResponse),
@@ -121,6 +125,7 @@ async fn create_user(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_USER,
+    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Read)))),
     params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 200, description = "User", body = UserResponse),
@@ -150,6 +155,7 @@ async fn get_user(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_USER,
+    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Delete)))),
     params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 204, description = "User deleted"),
