@@ -122,7 +122,7 @@ const TABLES: &str = sql!(
     ) STRICT;
 
     CREATE TABLE events (
-        id INTEGER PRIMARY KEY,
+        id uuid PRIMARY KEY,
         key TEXT NOT NULL,
         data jsonb NOT NULL,
         actor INTEGER NOT NULL REFERENCES actors (id),

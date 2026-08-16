@@ -1,7 +1,7 @@
 [package]
 name = "aperture-events"
 version.workspace = true
-description = "Domain event system for Aperture: definitions, registry, and bus."
+description = "Domain event system for Aperture: definitions, registry, bus, and recorder."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,7 +18,11 @@ aperture-storage = { workspace = true }
 jiff = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
+smallbox = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 utoipa = { workspace = true, features = ["macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

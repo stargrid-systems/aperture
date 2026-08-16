@@ -23,7 +23,7 @@ fn registry() -> SettingRegistry {
 
 async fn make_settings() -> Settings {
     let storage = Storage::open(":memory:").await.unwrap();
-    let event_bus = EventBus::new(storage.events().unwrap());
+    let event_bus = EventBus::new();
     Settings::new(storage.settings().unwrap(), registry(), event_bus)
 }
 

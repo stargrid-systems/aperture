@@ -378,7 +378,7 @@ impl LogRepository {
         Ok(paginator.finish(items, |event| {
             (
                 CursorValue::Int(event.timestamp.as_microsecond()),
-                event.id.get(),
+                CursorValue::Int(event.id.get()),
             )
         }))
     }
@@ -426,7 +426,9 @@ impl LogRepository {
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             targets.push(get(&row, 0)?);
         }
-        Ok(paginator.finish(targets, |t| (CursorValue::Text(t.clone()), 0)))
+        Ok(paginator.finish(targets, |t| {
+            (CursorValue::Text(t.clone()), CursorValue::Int(0))
+        }))
     }
 
     /// Lists spans matching the given filters, ordered by `started_at`
@@ -491,7 +493,7 @@ impl LogRepository {
         Ok(paginator.finish(items, |span| {
             (
                 CursorValue::Int(span.started_at.as_microsecond()),
-                span.id.get(),
+                CursorValue::Int(span.id.get()),
             )
         }))
     }
@@ -621,7 +623,10 @@ impl LogRepository {
             });
         }
         Ok(paginator.finish(boots, |boot| {
-            (CursorValue::Int(boot.first_seen.as_microsecond()), 0)
+            (
+                CursorValue::Int(boot.first_seen.as_microsecond()),
+                CursorValue::Int(0),
+            )
         }))
     }
 }

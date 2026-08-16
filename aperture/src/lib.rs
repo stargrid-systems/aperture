@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
-use aperture_events::{EventBus, EventRegistry};
+use aperture_events::{EventBus, EventRecorder, EventRegistry};
 use aperture_http::{
     AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
     SpectraConfig, SpectraWorker, install_default_rotation_schedule,
@@ -74,7 +74,7 @@ pub async fn serve(
     init_crypto_provider();
     let boot_id = Uuid::new_v4();
     let storage = open_storage(&data_dir).await?;
-    let event_bus = EventBus::new(storage.events()?);
+    let event_bus = EventBus::new();
     let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"), event_bus.clone());
 
     let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
@@ -123,9 +123,13 @@ pub async fn serve(
 
     let server = HttpServer::start(artifacts, tls_addr, plain_addr, app, &event_bus).await?;
 
+    let event_recorder = EventRecorder::connect(&event_bus, storage.events()?)
+        .expect("event recorder connected twice");
+
     let mut supervisor = Supervisor::new();
     supervisor.spawn("http", server);
     supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
+    supervisor.spawn("events", event_recorder);
     supervisor.spawn("log", log_worker);
     supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
 

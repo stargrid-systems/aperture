@@ -1,19 +1,108 @@
 //! Domain events: persisted records of significant state changes.
 
+use std::fmt;
+use std::result::Result as StdResult;
+use std::str::FromStr;
+
 use jiff::Timestamp;
+use serde::de::{Error as DeError, Visitor};
 use serde_json::Value;
-use turso::{Connection, Row, params_from_iter};
+use turso::transaction::Transaction;
+use turso::{Connection, Row, Statement, params_from_iter};
+use uuid::Uuid;
 
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
-use crate::macros::{db_id, sql};
+use crate::macros::sql;
 use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
 use crate::query::Filters;
-use crate::sql::{Columns, ToSql};
+use crate::sql::{Columns, FromSql, ToSql};
 
-db_id! {
-    /// Primary key of a row in the `events` table.
-    pub struct EventId;
+/// Primary key of a row in the `events` table.
+///
+/// A `UUIDv7` assigned at emit time, so the id is known before the row is
+/// persisted by the recorder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, utoipa::ToSchema)]
+#[schema(value_type = String)]
+pub struct EventId(Uuid);
+
+impl EventId {
+    /// Generates a fresh time-ordered id.
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    /// Returns the underlying UUID.
+    pub const fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for EventId {
+    fn from(value: Uuid) -> Self {
+        Self(value)
+    }
+}
+
+impl fmt::Display for EventId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for EventId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> StdResult<Self, Self::Err> {
+        s.parse().map(Self)
+    }
+}
+
+impl serde::Serialize for EventId {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for EventId {
+    fn deserialize<D>(deserializer: D) -> StdResult<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct IdVisitor;
+
+        impl Visitor<'_> for IdVisitor {
+            type Value = EventId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a UUID string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> StdResult<Self::Value, E>
+            where
+                E: DeError,
+            {
+                v.parse().map_err(DeError::custom)
+            }
+        }
+
+        deserializer.deserialize_str(IdVisitor)
+    }
+}
+
+impl ToSql for EventId {
+    fn to_sql(&self) -> turso::Value {
+        self.0.to_sql()
+    }
+}
+
+impl FromSql for EventId {
+    fn from_sql(value: turso::Value, idx: usize) -> Result<Self> {
+        Uuid::from_sql(value, idx).map(Self)
+    }
 }
 
 mod col {
@@ -27,6 +116,13 @@ mod col {
 const EVENT_COLUMNS: Columns =
     Columns::new(&[col::ID, col::KEY, col::DATA, col::ACTOR, col::TIMESTAMP]);
 
+/// SQL shared between [`EventRepository`] and [`EventBatch`]. File-level
+/// because the parameter layout is a shared assumption.
+const SQL_INSERT_EVENT: &str = sql!(
+    INSERT INTO events (id, key, data, actor, timestamp)
+    VALUES (?1, ?2, ?3, ?4, ?5)
+);
+
 /// A persisted domain event.
 #[derive(Debug, Clone)]
 pub struct Event {
@@ -37,9 +133,10 @@ pub struct Event {
     pub timestamp: Timestamp,
 }
 
-/// Input for creating an event.
+/// Input for creating an event. The id is assigned at emit time.
 #[derive(Debug, Clone)]
 pub struct NewEvent {
+    pub id: EventId,
     pub key: String,
     pub data: Value,
     pub actor: ActorId,
@@ -64,37 +161,54 @@ impl EventRepository {
         Self { connection }
     }
 
-    /// Creates a new event and returns its assigned id.
+    /// Creates a new event. The id must be unique.
     ///
     /// # Errors
     ///
-    /// Returns `StorageError::Database` if the insert fails.
+    /// Returns [`StorageError::Database`] if the insert fails.
     #[tracing::instrument(level = "info", skip(self, new))]
-    pub async fn create(&self, new: &NewEvent) -> Result<EventId> {
+    pub async fn create(&self, new: &NewEvent) -> Result<()> {
         let params = params_from_iter([
+            new.id.to_sql(),
             new.key.to_sql(),
             new.data.to_sql(),
             new.actor.to_sql(),
             new.timestamp.to_sql(),
         ]);
         self.connection
-            .execute(
-                sql!(
-                    INSERT INTO events (key, data, actor, timestamp)
-                    VALUES (?1, ?2, ?3, ?4)
-                ),
-                params,
-            )
+            .execute(SQL_INSERT_EVENT, params)
             .await
             .map_err(StorageError::from_turso)?;
-        Ok(EventId::from(self.connection.last_insert_rowid()))
+        Ok(())
+    }
+
+    /// Opens a transaction that batch-inserts events.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if the transaction or statement preparation
+    /// fails.
+    #[tracing::instrument(level = "info", skip(self))]
+    pub async fn batch(&self) -> Result<EventBatch<'_>> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .await
+            .map_err(StorageError::from_turso)?;
+        let insert = self
+            .connection
+            .prepare(SQL_INSERT_EVENT)
+            .await
+            .map_err(StorageError::from_turso)?;
+        Ok(EventBatch { tx, insert })
     }
 
     /// Returns the event with `id`, if it exists.
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` if the query fails or the row cannot be decoded.
+    /// Returns [`StorageError`] if the query fails or the row cannot be
+    /// decoded.
     #[tracing::instrument(level = "info", skip(self))]
     pub async fn get(&self, id: EventId) -> Result<Option<Event>> {
         let sql = format!(
@@ -117,7 +231,7 @@ impl EventRepository {
     ///
     /// # Errors
     ///
-    /// Returns `StorageError` if the query or cursor is invalid, or a row
+    /// Returns [`StorageError`] if the query or cursor is invalid, or a row
     /// cannot be decoded.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn list(&self, filter: &EventFilter, query: &ListQuery) -> Result<Page<Event>> {
@@ -159,9 +273,48 @@ impl EventRepository {
         Ok(paginator.finish(items, |event| {
             (
                 CursorValue::Int(event.timestamp.as_microsecond()),
-                event.id.get(),
+                CursorValue::Text(event.id.to_string()),
             )
         }))
+    }
+}
+
+/// A transaction that inserts events in batches. Produced by
+/// [`EventRepository::batch`].
+pub struct EventBatch<'conn> {
+    tx: Transaction<'conn>,
+    insert: Statement,
+}
+
+impl EventBatch<'_> {
+    /// Queues one event insert.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::Database`] if the insert fails. Any error
+    /// poisons the transaction; drop it without committing to roll back.
+    pub async fn insert(&mut self, new: &NewEvent) -> Result<()> {
+        let params = params_from_iter([
+            new.id.to_sql(),
+            new.key.to_sql(),
+            new.data.to_sql(),
+            new.actor.to_sql(),
+            new.timestamp.to_sql(),
+        ]);
+        self.insert
+            .execute(params)
+            .await
+            .map_err(StorageError::from_turso)?;
+        Ok(())
+    }
+
+    /// Commits the batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] if the commit fails.
+    pub async fn commit(self) -> Result<()> {
+        self.tx.commit().await.map_err(StorageError::from_turso)
     }
 }
 

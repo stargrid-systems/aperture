@@ -16,7 +16,7 @@ fn temp_root(tag: &str) -> PathBuf {
 async fn sync_removes_versions_without_blobs() {
     let root = temp_root("orphan-version");
     let storage = Storage::open(":memory:").await.unwrap();
-    let event_bus = EventBus::new(storage.events().unwrap());
+    let event_bus = EventBus::new();
     let artifacts = Artifacts::new(storage.clone(), root.clone(), event_bus);
     let repo = storage.artifacts().unwrap();
 

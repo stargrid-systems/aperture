@@ -494,7 +494,10 @@ impl TaskRepository {
             items.push(TaskInvocation::try_from(&row)?);
         }
         Ok(paginator.finish(items, |task| {
-            (CursorValue::Int(task.id.get()), task.id.get())
+            (
+                CursorValue::Int(task.id.get()),
+                CursorValue::Int(task.id.get()),
+            )
         }))
     }
 

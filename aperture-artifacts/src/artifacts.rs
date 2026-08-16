@@ -655,7 +655,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let storage = Storage::open(":memory:").await.unwrap();
-        let event_bus = EventBus::new(storage.events().unwrap());
+        let event_bus = EventBus::new();
         let artifacts = Artifacts::new(storage, dir.clone(), event_bus.clone());
         (artifacts, event_bus, dir)
     }

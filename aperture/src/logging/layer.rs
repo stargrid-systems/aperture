@@ -10,11 +10,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use aperture_runtime::{Stop, Worker};
+use aperture_runtime::{BatchSink, Stop, Worker};
 use aperture_storage::{Level, LogEventRecord, LogRepository, SpanRecord};
 use jiff::Timestamp;
 use tokio::sync::mpsc;
-use tokio::time::{MissedTickBehavior, interval};
 use tracing::span::{Attributes as SpanAttributes, Id as SpanId, Record as TracingRecord};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::Layer;
@@ -122,39 +121,37 @@ pub struct LogWorker {
 }
 
 impl Worker for LogWorker {
-    async fn run(mut self, stop: Stop) {
-        let mut batch: Vec<Record> = Vec::with_capacity(FLUSH_BATCH);
-        let mut interval = interval(FLUSH_INTERVAL);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    async fn run(self, stop: Stop) {
+        aperture_runtime::run_batched(
+            self.rx,
+            stop,
+            FLUSH_INTERVAL,
+            FLUSH_BATCH,
+            LogSink {
+                repo: self.repo,
+                dropped: self.dropped,
+                boot_id: self.boot_id,
+            },
+        )
+        .await;
+    }
+}
 
-        loop {
-            tokio::select! {
-                biased;
-                () = stop.cancelled() => {
-                    while let Ok(record) = self.rx.try_recv() {
-                        batch.push(record);
-                    }
-                    flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
-                    close_remaining_spans(&self.repo).await;
-                    break;
-                }
-                maybe_record = self.rx.recv() => {
-                    if let Some(record) = maybe_record { batch.push(record) } else {
-                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
-                        close_remaining_spans(&self.repo).await;
-                        break;
-                    }
-                    if batch.len() >= FLUSH_BATCH {
-                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
-                    }
-                }
-                _ = interval.tick() => {
-                    if !batch.is_empty() {
-                        flush(&self.repo, &mut batch, &self.dropped, self.boot_id).await;
-                    }
-                }
-            }
-        }
+/// Feeds batches of log records into the database. Used by
+/// [`aperture_runtime::run_batched`].
+struct LogSink {
+    repo: LogRepository,
+    dropped: Arc<AtomicU64>,
+    boot_id: Uuid,
+}
+
+impl BatchSink<Record> for LogSink {
+    async fn flush(&mut self, batch: &mut Vec<Record>) {
+        flush(&self.repo, batch, &self.dropped, self.boot_id).await;
+    }
+
+    async fn shutdown(&mut self) {
+        close_remaining_spans(&self.repo).await;
     }
 }
 

@@ -38,11 +38,10 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
 
 /// Builds a `Settings` whose registry knows about every setting the gateway
 /// registers, so per-request reads fall back to definition defaults.
-fn test_settings(storage: &Storage) -> Settings {
+fn test_settings(storage: &Storage, event_bus: EventBus) -> Settings {
     let mut registry = SettingRegistry::new();
     registry.register(Arc::new(AvatarStyle::default()));
     registry.register(Arc::new(AvatarAnimation::default()));
-    let event_bus = EventBus::new(storage.events().unwrap());
     Settings::new(storage.settings().unwrap(), registry, event_bus)
 }
 
@@ -67,11 +66,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(
-        storage.clone(),
-        root,
-        EventBus::new(storage.events().unwrap()),
-    );
+    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new());
 
     let repo = storage.artifacts().unwrap();
     repo.record_version(&version("firmware", "sha256:ffff", 1_000))
@@ -108,7 +103,7 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, Role::Admin).await.unwrap();
 
-    let settings = test_settings(&storage);
+    let settings = test_settings(&storage, EventBus::new());
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -423,6 +418,91 @@ async fn gets_event_definition_schema() {
     );
 
     let (status, _) = get_json(&app, &token, "/api/v1/event-definitions/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn records_and_serves_events() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let event_bus = EventBus::new();
+    let settings = test_settings(&storage, event_bus.clone());
+
+    settings
+        .set_value(
+            "avatar_style",
+            serde_json::json!("constellation"),
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+    event_bus
+        .emit(
+            aperture_artifacts::ArtifactWritten {
+                key: "tls_server-cert".to_owned(),
+                digest: None,
+            },
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+
+    // Run the recorder to completion: cancel + await drains and flushes.
+    let recorder = aperture_events::EventRecorder::connect(&event_bus, storage.events().unwrap())
+        .expect("recorder");
+    let stop = aperture_runtime::Stop::new();
+    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
+    stop.cancel();
+    worker.await.unwrap();
+
+    let auth = aperture_auth::AuthHandle::new(storage.clone())
+        .await
+        .unwrap();
+    let password = Password::generate();
+    let actor = auth
+        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
+        .await
+        .unwrap();
+    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
+    let subject = aperture_auth::apikey_subject(api_key.id);
+    auth.assign_role(&subject, Role::Admin).await.unwrap();
+
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        Spectra::new(
+            Artifacts::new(storage.clone(), env::temp_dir(), event_bus.clone()),
+            Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
+            SpectraConfig::default(),
+            ActorId::SYSTEM,
+        ),
+        Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
+        settings,
+        test_event_registry(),
+        auth,
+    );
+    let app = app(state);
+    let token = raw_key.as_str().to_owned();
+
+    let (status, json) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["key"], "artifact.written");
+    let id = items[0]["id"].as_str().expect("string id").to_owned();
+    assert!(id.parse::<uuid::Uuid>().is_ok(), "ids are UUIDs: {id}");
+
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "artifact.written");
+    assert_eq!(json["id"], id.as_str());
+
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/events/0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c",
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -911,11 +991,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(
-        storage.clone(),
-        root,
-        EventBus::new(storage.events().unwrap()),
-    );
+    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new());
 
     let mut registry = TaskRegistry::new();
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
@@ -941,7 +1017,7 @@ async fn app_with_role(role: Role) -> (Router, String) {
     let subject = aperture_auth::apikey_subject(api_key.id);
     auth.assign_role(&subject, role).await.unwrap();
 
-    let settings = test_settings(&storage);
+    let settings = test_settings(&storage, EventBus::new());
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -1005,11 +1081,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(
-        storage.clone(),
-        root,
-        EventBus::new(storage.events().unwrap()),
-    );
+    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new());
 
     let mut registry = TaskRegistry::new();
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
@@ -1026,7 +1098,7 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         ActorId::SYSTEM,
     );
 
-    let settings = test_settings(&storage);
+    let settings = test_settings(&storage, EventBus::new());
     let state = AppState::new(
         "test",
         Uuid::nil(),

@@ -2,8 +2,8 @@
 
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
-    #[error(transparent)]
-    Storage(#[from] aperture_storage::StorageError),
-    #[error("failed to serialize event payload")]
-    Serialize(#[source] serde_json::Error),
+    /// The recorder channel is closed: no [`crate::EventRecorder`] is
+    /// draining the bus, or it has already shut down.
+    #[error("event recorder is not running")]
+    RecorderClosed,
 }
