@@ -214,4 +214,93 @@ mod tests {
             }
         }
     }
+
+    /// Collects every `$ref` in `value`, paired with its location as a JSON
+    /// path into the spec.
+    fn collect_refs(value: &Value, path: &str, refs: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(fields) => {
+                if let Some(Value::String(reference)) = fields.get("$ref") {
+                    refs.push((path.to_owned(), reference.clone()));
+                }
+                for (name, field) in fields {
+                    if name != "$ref" {
+                        collect_refs(field, &format!("{path}/{name}"), refs);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    collect_refs(item, &format!("{path}/{index}"), refs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Resolves a JSON pointer like `components/schemas/Foo` against `spec`.
+    fn resolve_pointer<'a>(spec: &'a Value, pointer: &str) -> Option<&'a Value> {
+        let mut current = spec;
+        for segment in pointer.split('/').filter(|segment| !segment.is_empty()) {
+            let segment = segment.replace("~1", "/").replace("~0", "~");
+            current = match current {
+                Value::Object(map) => map.get(&segment)?,
+                Value::Array(items) => items.get(segment.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(current)
+    }
+
+    #[test]
+    fn spec_references_resolve() {
+        let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+        let mut refs = Vec::new();
+        collect_refs(&spec, "", &mut refs);
+        assert!(!refs.is_empty(), "expected the spec to contain references");
+        for (path, reference) in &refs {
+            let Some(pointer) = reference.strip_prefix("#/") else {
+                panic!("external reference at {path}: {reference}");
+            };
+            assert!(
+                resolve_pointer(&spec, pointer).is_some(),
+                "dangling reference at {path}: {reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_security_requirements_name_registered_schemes() {
+        let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+        let schemes: Vec<String> = spec["components"]["securitySchemes"]
+            .as_object()
+            .expect("security schemes")
+            .keys()
+            .cloned()
+            .collect();
+        let empty = Vec::new();
+
+        let mut requirements: Vec<&Value> = spec["security"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .collect();
+        for (_, item) in spec["paths"].as_object().expect("paths") {
+            for method in ["get", "post", "put", "patch", "delete"] {
+                if let Some(operation) = item.get(method) {
+                    requirements.extend(operation["security"].as_array().unwrap_or(&empty).iter());
+                }
+            }
+        }
+
+        assert!(!requirements.is_empty());
+        for requirement in requirements {
+            for name in requirement.as_object().expect("requirement").keys() {
+                assert!(
+                    schemes.contains(name),
+                    "security requirement names unknown scheme {name:?}"
+                );
+            }
+        }
+    }
 }
