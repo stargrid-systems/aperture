@@ -529,6 +529,183 @@ async fn records_and_serves_events() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// Builds an app with one `setting.changed` and two `artifact.*` events
+/// already recorded, and returns it with an admin token.
+async fn app_with_recorded_events() -> (Router, String) {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let event_bus = EventBus::new();
+    let settings = test_settings(&storage, event_bus.clone());
+
+    settings
+        .set_value(
+            "avatar_style",
+            serde_json::json!("constellation"),
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+    event_bus
+        .emit(
+            aperture_artifacts::ArtifactWritten {
+                key: "tls_server-cert".to_owned(),
+                digest: None,
+            },
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+    event_bus
+        .emit(
+            aperture_artifacts::ArtifactRemoved {
+                key: "tls_server-cert".to_owned(),
+            },
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+
+    // Run the recorder to completion: cancel + await drains and flushes.
+    let recorder = aperture_events::EventRecorder::connect(&event_bus, storage.events().unwrap())
+        .expect("recorder");
+    let stop = aperture_runtime::Stop::new();
+    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
+    stop.cancel();
+    worker.await.unwrap();
+
+    let auth = aperture_auth::AuthHandle::new(storage.clone())
+        .await
+        .unwrap();
+    let password = Password::generate();
+    let actor = auth
+        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
+        .await
+        .unwrap();
+    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
+    let subject = aperture_auth::apikey_subject(api_key.id);
+    auth.assign_role(&subject, Role::Admin).await.unwrap();
+
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        Spectra::new(
+            Artifacts::new(storage.clone(), env::temp_dir(), event_bus.clone()),
+            Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
+            SpectraConfig::default(),
+            ActorId::SYSTEM,
+        ),
+        Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
+        settings,
+        test_event_registry(),
+        auth,
+    );
+    (app(state), raw_key.as_str().to_owned())
+}
+
+#[tokio::test]
+async fn filters_events_by_key_and_timestamp() {
+    let (app, token) = app_with_recorded_events().await;
+
+    // Baseline: three events of two kinds, newest first.
+    let (status, all) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = all["items"].as_array().expect("paged items");
+    let keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    assert_eq!(
+        keys,
+        ["artifact.removed", "artifact.written", "setting.changed"]
+    );
+    let newest = items[0]["timestamp"].as_str().unwrap().to_owned();
+    let oldest = items[2]["timestamp"].as_str().unwrap().to_owned();
+    // Timestamps are not guaranteed unique, so the boundary checks below
+    // expect as many events as share the boundary timestamp.
+    let at_boundary = |ts: &str| {
+        items
+            .iter()
+            .filter(|event| event["timestamp"] == ts)
+            .count()
+    };
+
+    // Exact key match returns only that kind.
+    let (status, json) = get_json(&app, &token, "/api/v1/events?key=artifact.written").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["key"], "artifact.written");
+    assert!(json["next_cursor"].is_null());
+
+    // Key prefix returns artifact kinds only.
+    let (status, json) = get_json(&app, &token, "/api/v1/events?key_prefix=artifact").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    let keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    assert_eq!(keys, ["artifact.removed", "artifact.written"]);
+
+    // Unknown key: an empty page, not a 404.
+    let (status, json) = get_json(&app, &token, "/api/v1/events?key=nonexistent.kind").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(0));
+    assert!(json["next_cursor"].is_null());
+
+    // A since in the future matches nothing.
+    let future = at(Timestamp::now().as_microsecond() + 86_400_000_000).to_string();
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events?since={future}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(0));
+
+    // since and until are inclusive: the boundary event itself is returned.
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events?since={newest}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json["items"].as_array().map(Vec::len),
+        Some(at_boundary(&newest))
+    );
+
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events?until={oldest}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json["items"].as_array().map(Vec::len),
+        Some(at_boundary(&oldest))
+    );
+}
+
+#[tokio::test]
+async fn rejects_bad_event_cursor() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+    let (status, _) = get_json(&app, &token, "/api/v1/events?cursor=nothex").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn rejects_malformed_event_id() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    // The path rejection answers with a plain-text body, so read the status
+    // off the raw response.
+    let status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/not-a-uuid")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Well-formed but unknown: a 404 rather than a bad request.
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/events/0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 /// Artifact events from HTTP uploads and evictions must be recorded with the
 /// acting user as the actor, not the system actor.
 #[tokio::test]
@@ -1417,6 +1594,26 @@ async fn no_role_token_is_denied_on_all_mutations() {
             "{method} {uri}: expected 403 for no-role token"
         );
     }
+}
+
+/// Pins `Object::Event` + `Action::Read` enforcement at runtime: the event
+/// handlers must require the grant, so an authenticated but unprivileged
+/// subject gets 403 on both event read endpoints.
+#[tokio::test]
+async fn no_role_token_is_denied_on_event_reads() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_id, token) = no_role_key(&auth, "nobody").await;
+
+    let (status, _) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/events/0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
