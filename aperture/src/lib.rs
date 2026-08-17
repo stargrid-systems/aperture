@@ -11,7 +11,7 @@ use aperture_http::{
     AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
     SpectraConfig, SpectraWorker, install_default_rotation_schedule,
 };
-use aperture_runtime::Supervisor;
+use aperture_runtime::{ShutdownOutcome, Supervisor};
 use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
 use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
@@ -47,8 +47,9 @@ fn init_crypto_provider() {
 /// # Errors
 ///
 /// Returns an error if neither listener is set, if both bind the same
-/// address, if storage or artifact initialization fails, or if the server
-/// encounters a runtime error.
+/// address, if storage or artifact initialization fails, if a worker exits
+/// early or hangs during shutdown, or if the server encounters a runtime
+/// error.
 ///
 /// # Panics
 ///
@@ -133,8 +134,16 @@ pub async fn serve(
     supervisor.spawn_last("events", event_recorder);
     supervisor.spawn_last("log", log_worker);
 
-    supervisor.run_until_signal(shutdown_signal()).await;
-    Ok(())
+    let outcome = supervisor.run_until_signal(shutdown_signal()).await;
+    match outcome {
+        ShutdownOutcome::Signaled => Ok(()),
+        ShutdownOutcome::Forced => {
+            anyhow::bail!("forced exit: a worker hung during the shutdown drain")
+        }
+        ShutdownOutcome::EarlyExit { worker } => {
+            anyhow::bail!("worker {worker} exited early")
+        }
+    }
 }
 
 /// Resolves when the process is asked to stop via Ctrl+C or SIGTERM.

@@ -19,6 +19,22 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// shutdown.
 pub type Stop = CancellationToken;
 
+/// Why [`Supervisor::run_until_signal`] returned.
+#[derive(Debug)]
+pub enum ShutdownOutcome {
+    /// The shutdown signal fired and both tiers drained.
+    Signaled,
+    /// A worker exited before the shutdown signal. The remaining workers
+    /// were still drained.
+    EarlyExit {
+        /// Name of the worker that exited before the signal.
+        worker: &'static str,
+    },
+    /// The operator forced the exit with a second signal while a worker
+    /// was still draining. The remaining tasks were detached.
+    Forced,
+}
+
 /// Owns two tiers of [`Worker`]s and orchestrates their shutdown.
 ///
 /// Regular workers stop on the supervisor signal and drain concurrently with
@@ -79,17 +95,19 @@ impl Supervisor {
         self.stop_token.cancel();
     }
 
-    /// Runs until either `signal` resolves or every worker exits on its own.
+    /// Runs until either `signal` resolves or a worker exits on its own.
     ///
     /// Shutdown happens in two phases. The regular workers are stopped and
     /// drain concurrently with a hard timeout. Last-tier workers stop only
     /// after the regular tier has finished, so they can collect what the
     /// regular workers still produce.
     ///
-    /// On `signal`, both tiers drain. On early worker exit, the operator can
-    /// interrupt a slow drain with a second signal, which forces exit and
-    /// detaches any remaining tasks.
-    pub async fn run_until_signal<F>(mut self, signal: F)
+    /// On `signal`, both tiers drain and the outcome is
+    /// [`ShutdownOutcome::Signaled`]. On early worker exit, the outcome
+    /// carries the worker's name and the operator can interrupt a slow
+    /// drain with a second signal, which forces the exit, detaches any
+    /// remaining tasks, and yields [`ShutdownOutcome::Forced`].
+    pub async fn run_until_signal<F>(mut self, signal: F) -> ShutdownOutcome
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -97,7 +115,7 @@ impl Supervisor {
         // select! blocks without panicking after completion. Once it fires,
         // further polls return Pending forever.
         let mut signal = Box::pin(signal).fuse();
-        let mut first_signal = false;
+        let mut early_worker: Option<&'static str> = None;
         let mut forced = false;
 
         // Wait for either the signal to fire or any worker in either tier to
@@ -105,10 +123,9 @@ impl Supervisor {
         // biased select immediately, which would abort the wait.
         tokio::select! {
             biased;
-            () = &mut signal => {
-                first_signal = true;
-            }
+            () = &mut signal => {}
             name = self.workers.wait_for_any_exit() => {
+                early_worker = name;
                 if let Some(name) = name {
                     tracing::info!(
                         worker = name,
@@ -117,6 +134,7 @@ impl Supervisor {
                 }
             }
             name = self.late_workers.wait_for_any_exit(), if !self.late_workers.is_empty() => {
+                early_worker = name;
                 if let Some(name) = name {
                     tracing::info!(
                         worker = name,
@@ -129,7 +147,7 @@ impl Supervisor {
         // Phase 1: stop the regular tier and drain it.
         self.trigger();
         let timeout = DRAIN_TIMEOUT;
-        if first_signal {
+        if early_worker.is_none() {
             self.workers.drain(timeout).await;
         } else {
             // Early exit: drain with a second-signal escape hatch.
@@ -148,6 +166,14 @@ impl Supervisor {
         if !forced {
             self.late_workers.drain(timeout).await;
         }
+
+        if forced {
+            ShutdownOutcome::Forced
+        } else if let Some(worker) = early_worker {
+            ShutdownOutcome::EarlyExit { worker }
+        } else {
+            ShutdownOutcome::Signaled
+        }
     }
 }
 
@@ -159,6 +185,7 @@ impl Default for Supervisor {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -178,6 +205,22 @@ mod tests {
             stop.cancelled().await;
             sleep(self.delay).await;
             self.order.lock().unwrap().push(self.tag);
+        }
+    }
+
+    /// A worker that returns immediately without waiting for the stop signal.
+    struct Quitter;
+
+    impl Worker for Quitter {
+        async fn run(self, _stop: Stop) {}
+    }
+
+    /// A worker that ignores the stop signal and keeps running.
+    struct Hung;
+
+    impl Worker for Hung {
+        async fn run(self, _stop: Stop) {
+            sleep(Duration::from_secs(60)).await;
         }
     }
 
@@ -208,11 +251,76 @@ mod tests {
             sleep(Duration::from_millis(20)).await;
             let _ = fire.send(());
         });
-        supervisor
+        let outcome = supervisor
             .run_until_signal(async {
                 let _ = signal.await;
             })
             .await;
+        assert!(matches!(outcome, ShutdownOutcome::Signaled));
         assert_eq!(*order.lock().unwrap(), vec!["regular", "late"]);
+    }
+
+    #[tokio::test]
+    async fn reports_signaled_outcome_on_clean_shutdown() {
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn(
+            "regular",
+            Recorder {
+                tag: "regular",
+                delay: Duration::ZERO,
+                order: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+
+        let (fire, signal) = oneshot::channel();
+        tokio::spawn(async {
+            sleep(Duration::from_millis(20)).await;
+            let _ = fire.send(());
+        });
+        let outcome = supervisor
+            .run_until_signal(async {
+                let _ = signal.await;
+            })
+            .await;
+        assert!(matches!(outcome, ShutdownOutcome::Signaled));
+    }
+
+    #[tokio::test]
+    async fn reports_early_exit_with_worker_name() {
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("quitter", Quitter);
+        supervisor.spawn(
+            "regular",
+            Recorder {
+                tag: "regular",
+                delay: Duration::ZERO,
+                order: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+
+        let outcome = supervisor.run_until_signal(pending::<()>()).await;
+        match outcome {
+            ShutdownOutcome::EarlyExit { worker } => assert_eq!(worker, "quitter"),
+            other => panic!("expected an early exit, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_forced_outcome_on_second_signal() {
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("quitter", Quitter);
+        supervisor.spawn("hung", Hung);
+
+        let (fire, signal) = oneshot::channel();
+        tokio::spawn(async {
+            sleep(Duration::from_millis(20)).await;
+            let _ = fire.send(());
+        });
+        let outcome = supervisor
+            .run_until_signal(async {
+                let _ = signal.await;
+            })
+            .await;
+        assert!(matches!(outcome, ShutdownOutcome::Forced));
     }
 }
