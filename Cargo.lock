@@ -198,6 +198,7 @@ version = "0.1.0"
 dependencies = [
  "aperture-artifacts",
  "aperture-runtime",
+ "aperture-settings",
  "aperture-storage",
  "jiff",
  "serde",

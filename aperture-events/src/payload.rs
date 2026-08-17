@@ -147,7 +147,9 @@ mod tests {
     }
 
     /// Mirrors the layout of the largest current payload
-    /// (`SettingChange`: a `String` plus a `serde_json::Value`).
+    /// (`SettingChange`: a `String` plus a `serde_json::Value`). The mirror
+    /// is pinned to the real type's size so growth that would spill past
+    /// the 64 byte inline budget is noticed here first.
     #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
     struct Large {
         key: String,
@@ -170,6 +172,17 @@ mod tests {
 
         assert!(size_of::<ArtifactWritten>() <= size_of::<S8>());
         assert!(size_of::<ArtifactRemoved>() <= size_of::<S8>());
+    }
+
+    #[test]
+    fn setting_change_mirror_matches_the_real_size() {
+        use aperture_settings::SettingChange;
+
+        assert_eq!(
+            size_of::<SettingChange>(),
+            size_of::<Large>(),
+            "the Large mirror must track the real SettingChange layout",
+        );
     }
 
     #[test]
