@@ -111,8 +111,9 @@ impl DeferredLogWorker {
 }
 
 /// Drains the layer's channel and batch-inserts records into the database.
-/// Produced by [`DeferredLogWorker::connect`]. Drive it via a [`Supervisor`]
-/// so it shuts down alongside the rest of the gateway.
+/// Produced by [`DeferredLogWorker::connect`]. Drive it via a
+/// [`Supervisor`] so it shuts down alongside the rest of the gateway, or
+/// call [`LogWorker::drain`] to run it to completion inline.
 ///
 /// [`Supervisor`]: aperture_runtime::Supervisor
 pub struct LogWorker {
@@ -120,6 +121,21 @@ pub struct LogWorker {
     repo: LogRepository,
     dropped: Arc<AtomicU64>,
     boot_id: Uuid,
+}
+
+impl LogWorker {
+    /// Drains and flushes the buffered records inline, without a
+    /// supervisor.
+    ///
+    /// The stop token is cancelled before the run starts, so the batched
+    /// driver takes its shutdown branch immediately: it closes the channel,
+    /// drains the buffer, flushes it, and closes the boot's open spans.
+    /// Used on the failed startup path, where no supervisor exists yet.
+    pub async fn drain(self) {
+        let stop = Stop::new();
+        stop.cancel();
+        self.run(stop).await;
+    }
 }
 
 impl Worker for LogWorker {
@@ -446,7 +462,7 @@ async fn close_remaining_spans(repo: &LogRepository, boot_id: Uuid) {
 #[cfg(test)]
 mod tests {
     use aperture_storage::{ListQuery, LogEventFilter, Storage};
-    use tracing::Dispatch;
+    use tracing::subscriber::set_default;
     use tracing_subscriber::prelude::*;
 
     use super::*;
@@ -459,9 +475,7 @@ mod tests {
         let (layer, deferred) = DbLogLayer::new();
         let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
-        let dispatcher = Dispatch::new(subscriber);
-
-        let _guard = dispatcher.set_default();
+        let _guard = set_default(subscriber);
 
         // Event outside the flush span -> captured.
         tracing::info!("outside");
@@ -515,9 +529,7 @@ mod tests {
         let (layer, deferred) = DbLogLayer::new();
         let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
-        let dispatcher = Dispatch::new(subscriber);
-
-        let _guard = dispatcher.set_default();
+        let _guard = set_default(subscriber);
 
         tracing::info!("first");
         tracing::warn!("second");
@@ -535,7 +547,7 @@ mod tests {
         let (layer, deferred) = DbLogLayer::new();
         let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
-        let _guard = Dispatch::new(subscriber).set_default();
+        let _guard = set_default(subscriber);
 
         let parent = tracing::info_span!("parent");
         let parent_guard = parent.enter();
@@ -572,7 +584,7 @@ mod tests {
         let (layer, deferred) = DbLogLayer::new();
         let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
-        let _guard = Dispatch::new(subscriber).set_default();
+        let _guard = set_default(subscriber);
 
         let span = tracing::info_span!("root");
         let guard = span.enter();
@@ -597,7 +609,7 @@ mod tests {
         let (layer, deferred) = DbLogLayer::new();
         let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
-        let _guard = Dispatch::new(subscriber).set_default();
+        let _guard = set_default(subscriber);
 
         // `late_field` is declared as Empty so it can be recorded later.
         let span = tracing::info_span!("my_span", initial = 42, late_field = field::Empty);
@@ -655,7 +667,7 @@ mod tests {
         let (layer, deferred) = DbLogLayer::new();
         let mut rx = deferred.rx;
         let subscriber = tracing_subscriber::registry().with(layer);
-        let _guard = Dispatch::new(subscriber).set_default();
+        let _guard = set_default(subscriber);
 
         let span = tracing::info_span!("req", user_id = field::Empty, status = field::Empty);
         let guard = span.enter();

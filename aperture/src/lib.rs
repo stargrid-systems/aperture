@@ -80,58 +80,74 @@ pub async fn serve(
 
     let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
 
-    artifacts.sync().await?;
+    // Every fallible step from here on runs with a repository connected to
+    // the log worker. If one fails, the worker is drained inline so the
+    // buffered startup records reach the database before the error escapes.
+    // On success the worker is spawned on the supervisor below instead.
+    let mut supervisor = match async {
+        artifacts.sync().await?;
 
-    // Auth: build enforcer and seed default policies.
-    let auth = AuthHandle::new(storage.clone()).await?;
+        // Auth: build enforcer and seed default policies.
+        let auth = AuthHandle::new(storage.clone()).await?;
 
-    let mut registry = TaskRegistry::new();
-    register_tasks(&mut registry, artifacts.clone());
-    let tasks = Tasks::new(storage.tasks()?, registry);
+        let mut registry = TaskRegistry::new();
+        register_tasks(&mut registry, artifacts.clone());
+        let tasks = Tasks::new(storage.tasks()?, registry);
 
-    let mut setting_registry = SettingRegistry::new();
-    register_settings(&mut setting_registry);
-    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
+        let mut setting_registry = SettingRegistry::new();
+        register_settings(&mut setting_registry);
+        let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
 
-    let mut event_registry = EventRegistry::new();
-    register_events(&mut event_registry);
+        let mut event_registry = EventRegistry::new();
+        register_events(&mut event_registry);
 
-    let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
+        let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
 
-    let spectra = Spectra::new(
-        artifacts.clone(),
-        tasks.clone(),
-        SpectraConfig::default(),
-        ActorId::SYSTEM,
-    );
-    spectra.activate_if_present().await?;
+        let spectra = Spectra::new(
+            artifacts.clone(),
+            tasks.clone(),
+            SpectraConfig::default(),
+            ActorId::SYSTEM,
+        );
+        spectra.activate_if_present().await?;
 
-    if tls_addr.is_some() {
-        install_default_rotation_schedule(&storage).await?;
+        if tls_addr.is_some() {
+            install_default_rotation_schedule(&storage).await?;
+        }
+
+        let state = AppState::new(
+            VERSION,
+            boot_id,
+            storage.clone(),
+            spectra.clone(),
+            tasks.clone(),
+            settings,
+            event_registry,
+            auth,
+        );
+        let app = aperture_http::app(state);
+
+        let Some(event_recorder) = EventRecorder::connect(&event_bus, storage.events()?) else {
+            anyhow::bail!("event recorder connected twice");
+        };
+
+        let server = HttpServer::start(artifacts, tls_addr, plain_addr, app, &event_bus).await?;
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("http", server);
+        supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
+        supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
+        supervisor.spawn_last("events", event_recorder);
+        anyhow::Ok(supervisor)
     }
-
-    let state = AppState::new(
-        VERSION,
-        boot_id,
-        storage.clone(),
-        spectra.clone(),
-        tasks.clone(),
-        settings,
-        event_registry,
-        auth,
-    );
-    let app = aperture_http::app(state);
-
-    let event_recorder = EventRecorder::connect(&event_bus, storage.events()?)
-        .expect("event recorder connected twice");
-
-    let server = HttpServer::start(artifacts, tls_addr, plain_addr, app, &event_bus).await?;
-
-    let mut supervisor = Supervisor::new();
-    supervisor.spawn("http", server);
-    supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
-    supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
-    supervisor.spawn_last("events", event_recorder);
+    .await
+    {
+        Ok(supervisor) => supervisor,
+        Err(err) => {
+            log_worker.drain().await;
+            return Err(err);
+        }
+    };
     supervisor.spawn_last("log", log_worker);
 
     let outcome = supervisor.run_until_signal(shutdown_signal()).await;
@@ -234,6 +250,7 @@ mod tests {
     use std::path::PathBuf;
 
     use aperture_events::EventDefinition;
+    use aperture_storage::{ListQuery, LogEventFilter, Storage};
 
     use super::*;
 
@@ -264,5 +281,42 @@ mod tests {
             err.to_string().contains("at least one"),
             "expected a no-listeners error, got: {err}"
         );
+    }
+
+    /// A failed post-connect startup step must still persist the buffered
+    /// log records. The port is occupied so `HttpServer::start`, the last
+    /// startup step, fails after the log worker's repository is connected.
+    #[tokio::test]
+    async fn failed_startup_persists_buffered_logs() {
+        use std::env::temp_dir;
+        use std::net::TcpListener;
+        use std::process::id;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let dir = temp_dir().join(format!("aperture-failed-startup-{}", id()));
+        let _ = fs::remove_dir_all(&dir).await;
+        let result = serve(None, Some(addr), dir.clone()).await;
+        assert!(
+            result.is_err(),
+            "startup must fail while the port is occupied"
+        );
+
+        let db_path = dir.join("aperture.db");
+        let storage = Storage::open(db_path.to_str().unwrap()).await.unwrap();
+        let page = storage
+            .logs()
+            .unwrap()
+            .list_events(&LogEventFilter::default(), &ListQuery::default())
+            .await
+            .unwrap();
+        assert!(
+            !page.items.is_empty(),
+            "buffered startup logs must be persisted when startup fails"
+        );
+
+        drop(listener);
+        let _ = fs::remove_dir_all(&dir).await;
     }
 }
