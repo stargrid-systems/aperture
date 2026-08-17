@@ -103,7 +103,7 @@ impl TlsReload {
 }
 
 /// Payloads of artifact events that name the artifact key they changed.
-trait ArtifactChange: aperture_events::EventDefinition {
+trait ArtifactChange {
     fn artifact_key(&self) -> &str;
 }
 
