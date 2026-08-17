@@ -725,3 +725,43 @@ async fn list_boots_groups_by_boot_id() {
     assert_eq!(page.items[0].boot_id, a);
     assert_eq!(page.items[1].boot_id, a);
 }
+
+#[tokio::test]
+async fn close_open_spans_only_stamps_the_given_boot() {
+    let a = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+    let b = uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+    let storage = Storage::open(":memory:").await.unwrap();
+    let logs = storage.logs().unwrap();
+
+    let mut batch = logs.batch().await.unwrap();
+    for (tracing_id, boot_id, name) in [(1, a, "crashed"), (2, b, "current")] {
+        batch
+            .insert_span(SpanRecord {
+                tracing_id,
+                parent_tracing_id: None,
+                boot_id,
+                name,
+                level: Level::Info,
+                target: "aperture::test",
+                file: None,
+                line: None,
+                started_at: at(1_000),
+                fields: &serde_json::Map::new(),
+            })
+            .await
+            .unwrap();
+    }
+    batch.commit().await.unwrap();
+
+    let updated = logs.close_open_spans(b, at(9_000)).await.unwrap();
+    assert_eq!(updated, 1);
+
+    let spans = logs
+        .list_spans(&SpanFilter::default(), &ListQuery::default())
+        .await
+        .unwrap();
+    let crashed = spans.items.iter().find(|s| s.name == "crashed").unwrap();
+    let current = spans.items.iter().find(|s| s.name == "current").unwrap();
+    assert_eq!(crashed.ended_at, None, "other boots must stay untouched");
+    assert_eq!(current.ended_at, Some(at(9_000)));
+}

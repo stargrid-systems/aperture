@@ -1,9 +1,11 @@
 //! A `tracing_subscriber` layer that persists spans and events to the database.
 //!
 //! The layer captures tracing records and sends them through a bounded channel
-//! to a background writer that batch-inserts them via [`LogRepository`] in a
-//! single transaction per flush. If the channel is full, records are dropped
-//! and a synthetic warning event is inserted to record how many were lost.
+//! to a background writer that batch-inserts them via [`LogRepository`], one
+//! transaction per chunk of records. If the channel is full, records are
+//! dropped and a synthetic warning event is inserted to record how many were
+//! lost. Records traced after the worker's final drain are not persisted
+//! because the worker is the last shutdown tier.
 
 use std::error::Error as StdError;
 use std::sync::Arc;
@@ -151,7 +153,7 @@ impl BatchSink<Record> for LogSink {
     }
 
     async fn shutdown(&mut self) {
-        close_remaining_spans(&self.repo).await;
+        close_remaining_spans(&self.repo, self.boot_id).await;
     }
 }
 
@@ -317,12 +319,32 @@ where
     })
 }
 
-/// Flushes a batch of records to the database in a single transaction.
+/// Flushes a batch of records to the database in chunks of [`FLUSH_BATCH`]
+/// records, one transaction per chunk. A failing chunk loses only itself:
+/// earlier chunks stay committed and later chunks are still attempted. The
+/// shutdown path hands the writer up to `CHANNEL_CAPACITY + FLUSH_BATCH`
+/// records at once, so chunking bounds the damage of a failed transaction.
 ///
 /// Instrumented with [`FLUSH_SPAN_NAME`] so events emitted by the DB engine
 /// during the flush are filtered by [`DbLogLayer::on_event`].
 #[tracing::instrument(name = FLUSH_SPAN_NAME, level = "trace", skip_all)]
 async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU64, boot_id: Uuid) {
+    while !batch.is_empty() {
+        let take = FLUSH_BATCH.min(batch.len());
+        let mut chunk: Vec<Record> = batch.drain(..take).collect();
+        flush_chunk(repo, &mut chunk, dropped, boot_id).await;
+    }
+}
+
+/// Flushes one chunk in a single transaction. On failure the chunk is
+/// dropped: its records were drained out of the batch and cannot be put
+/// back. The only recovery is to drop the transaction.
+async fn flush_chunk(
+    repo: &LogRepository,
+    chunk: &mut Vec<Record>,
+    dropped: &AtomicU64,
+    boot_id: Uuid,
+) {
     let mut tx = match repo.batch().await {
         Ok(tx) => tx,
         Err(err) => {
@@ -336,7 +358,7 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
     // recorded. Reloading after the await would race with `try_send` failures
     // and subtract drops that were never persisted.
     let insert_outcome: Result<u64, aperture_storage::StorageError> = async {
-        for record in batch.drain(..) {
+        for record in chunk.drain(..) {
             match record {
                 Record::SpanStart(s) => {
                     tx.insert_span(SpanRecord {
@@ -389,10 +411,8 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
         Err(err) => {
             tracing::warn!(
                 error = &err as &dyn StdError,
-                "log batch insert failed, rolling back"
+                "log chunk insert failed, rolling back"
             );
-            // The records we tried to flush are lost. The caller already drained
-            // them out of `batch`, so the only recovery is to drop the tx.
             return;
         }
     };
@@ -404,16 +424,18 @@ async fn flush(repo: &LogRepository, batch: &mut Vec<Record>, dropped: &AtomicU6
             }
         }
         Err(err) => {
-            tracing::error!(error = &err as &dyn StdError, "failed to commit log batch");
+            tracing::error!(error = &err as &dyn StdError, "failed to commit log chunk");
         }
     }
 }
 
-/// Closes every span left open after the writer task exits. Spans may remain
-/// open if the process was interrupted or if a span was never explicitly
-/// closed.
-async fn close_remaining_spans(repo: &LogRepository) {
-    if let Err(err) = repo.close_open_spans(Timestamp::now()).await {
+/// Closes spans of the current boot left open after the writer task exits.
+/// Spans may remain open if the process was interrupted or if a span was
+/// never explicitly closed. Spans of earlier boots are left alone so a
+/// crashed boot does not get its durations stamped with this boot's
+/// shutdown time.
+async fn close_remaining_spans(repo: &LogRepository, boot_id: Uuid) {
+    if let Err(err) = repo.close_open_spans(boot_id, Timestamp::now()).await {
         tracing::warn!(
             error = &err as &dyn StdError,
             "failed to close open spans on shutdown"
@@ -423,6 +445,7 @@ async fn close_remaining_spans(repo: &LogRepository) {
 
 #[cfg(test)]
 mod tests {
+    use aperture_storage::{ListQuery, LogEventFilter, Storage};
     use tracing::Dispatch;
     use tracing_subscriber::prelude::*;
 
@@ -673,5 +696,99 @@ mod tests {
             found_fields,
             "SpanFields record must be present for late-recorded values"
         );
+    }
+
+    /// Builds a plain event record for the flush tests.
+    fn event(i: usize) -> Record {
+        Record::Event(EventMsg {
+            span_tracing_id: None,
+            level: Level::Info,
+            target: "aperture::test".to_owned(),
+            message: Some(format!("event {i}")),
+            timestamp: Timestamp::now(),
+            file: None,
+            line: None,
+            fields: serde_json::Map::new(),
+        })
+    }
+
+    /// A batch smaller than [`FLUSH_BATCH`] must flush in a single short
+    /// chunk instead of panicking on the drain bounds.
+    #[tokio::test]
+    async fn short_batch_flushes_in_one_chunk() {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let repo = storage.logs().unwrap();
+        let dropped = AtomicU64::new(0);
+
+        let mut batch: Vec<Record> = (0..3).map(event).collect();
+        flush(&repo, &mut batch, &dropped, Uuid::new_v4()).await;
+
+        assert!(batch.is_empty(), "every record must be drained");
+        let page = repo
+            .list_events(&LogEventFilter::default(), &ListQuery::default())
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), 3);
+    }
+
+    /// A failing chunk must roll back only itself: earlier chunks stay
+    /// committed and later chunks are still flushed. The poison record is a
+    /// span start with `line = 0`, which violates the schema CHECK.
+    #[tokio::test]
+    async fn failing_chunk_rolls_back_only_itself() {
+        let poison = Record::SpanStart(SpanStart {
+            tracing_id: u64::MAX,
+            parent_tracing_id: None,
+            name: "poison".to_owned(),
+            level: Level::Info,
+            target: "aperture::test".to_owned(),
+            file: None,
+            line: Some(0),
+            started_at: Timestamp::now(),
+            fields: serde_json::Map::new(),
+        });
+
+        let storage = Storage::open(":memory:").await.unwrap();
+        let repo = storage.logs().unwrap();
+        let dropped = AtomicU64::new(3);
+        let boot_id = Uuid::new_v4();
+
+        // Chunk 1: healthy. Chunk 2: poison plus 127 healthy events, all
+        // lost with the poison. Chunk 3: healthy.
+        let mut batch: Vec<Record> = (0..FLUSH_BATCH).map(event).collect();
+        batch.push(poison);
+        batch.extend((FLUSH_BATCH..3 * FLUSH_BATCH - 1).map(event));
+        assert_eq!(batch.len(), 3 * FLUSH_BATCH);
+
+        flush(&repo, &mut batch, &dropped, boot_id).await;
+
+        // Page through everything persisted.
+        let mut query = ListQuery {
+            limit: Some(200),
+            ..ListQuery::default()
+        };
+        let mut total = 0;
+        let mut dropped_events = 0;
+        loop {
+            let page = repo
+                .list_events(&LogEventFilter::default(), &query)
+                .await
+                .unwrap();
+            total += page.items.len();
+            dropped_events += page
+                .items
+                .iter()
+                .filter(|event| event.target == "aperture::log")
+                .count();
+            let Some(cursor) = page.next_cursor else {
+                break;
+            };
+            query.cursor = Some(cursor);
+        }
+        // Chunks 1 and 3 persisted 2 * FLUSH_BATCH events. Chunk 1 also
+        // wrote one synthetic dropped event for the pre-set counter.
+        assert_eq!(total, 2 * FLUSH_BATCH + 1);
+        assert_eq!(dropped_events, 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
     }
 }

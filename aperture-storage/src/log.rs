@@ -543,17 +543,19 @@ impl LogRepository {
         Ok(items)
     }
 
-    /// Closes every span that is still open by setting its `ended_at` to the
-    /// given timestamp. Returns the number of rows updated.
+    /// Closes every span of `boot_id` that is still open by setting its
+    /// `ended_at` to the given timestamp. Spans of other boots are left
+    /// untouched: a span left open by a crashed boot must not be stamped
+    /// with an unrelated shutdown time. Returns the number of rows updated.
     ///
     /// # Errors
     ///
     /// Returns `StorageError::Database` if the update fails.
-    pub async fn close_open_spans(&self, ended_at: Timestamp) -> Result<u64> {
+    pub async fn close_open_spans(&self, boot_id: Uuid, ended_at: Timestamp) -> Result<u64> {
         self.connection
             .execute(
-                sql!(UPDATE log_spans SET ended_at = ?1 WHERE ended_at IS NULL),
-                params_from_iter([Value::Integer(ended_at.as_microsecond())]),
+                sql!(UPDATE log_spans SET ended_at = ?1 WHERE ended_at IS NULL AND boot_id = ?2),
+                params_from_iter([Value::Integer(ended_at.as_microsecond()), boot_id.to_sql()]),
             )
             .await
             .map_err(StorageError::from_turso)
