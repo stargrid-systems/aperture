@@ -6,7 +6,7 @@ use turso::{Connection, Row, params_from_iter};
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
-use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Listing, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::secret::PasswordHash;
 use crate::sql::{Columns, ToSql, get};
@@ -177,7 +177,7 @@ impl UserRepository {
     /// cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list(&self, query: &ListQuery) -> Result<Page<User>> {
-        let paginator = Paginator::new(query, Order::Asc)?;
+        let paginator = Paginator::new(query, Order::Asc, Listing::Users)?;
         let keyset = Keyset::unique(col::USERNAME, paginator.query_order());
 
         let mut filters = Filters::new();

@@ -1,4 +1,6 @@
-use aperture_storage::{ActorId, EventFilter, EventId, ListQuery, NewEvent, Storage};
+use aperture_storage::{
+    ActorId, EventFilter, EventId, ListQuery, LogEventFilter, NewEvent, Storage, StorageError,
+};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -132,4 +134,39 @@ async fn list_paginates_by_timestamp_and_id() {
         .await
         .unwrap();
     assert!(filtered.items.is_empty());
+}
+
+#[tokio::test]
+async fn rejects_cursor_from_another_listing() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let events = storage.events().unwrap();
+
+    for n in 1..=2u8 {
+        let event = new_event("artifact.written", n, at(i64::from(n) * 1_000));
+        events.create(&event).await.unwrap();
+    }
+    let page = events
+        .list(
+            &EventFilter::default(),
+            &ListQuery {
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let cursor = page.next_cursor.expect("another page ahead");
+
+    let logs = storage.logs().unwrap();
+    let err = logs
+        .list_events(
+            &LogEventFilter::default(),
+            &ListQuery {
+                cursor: Some(cursor),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StorageError::InvalidCursor(_)));
 }

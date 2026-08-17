@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::macros::sql;
-use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Listing, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, FromSql, ToSql};
 
@@ -235,7 +235,7 @@ impl EventRepository {
     /// cannot be decoded.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn list(&self, filter: &EventFilter, query: &ListQuery) -> Result<Page<Event>> {
-        let paginator = Paginator::new(query, Order::Desc)?;
+        let paginator = Paginator::new(query, Order::Desc, Listing::Events)?;
         let keyset = Keyset::with_id(col::TIMESTAMP, paginator.query_order());
 
         let mut filters = Filters::new();

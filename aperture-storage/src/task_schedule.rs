@@ -7,7 +7,7 @@ use turso::{Connection, Row, params_from_iter};
 use crate::error::{Result, StorageError};
 use crate::interval::Interval;
 use crate::macros::{db_id, sql};
-use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Listing, Order, Page, Paginator};
 use crate::query::{Assignments, Filters};
 use crate::sql::{Columns, ToSql};
 use crate::task::TaskId;
@@ -140,7 +140,7 @@ impl TaskScheduleRepository {
     /// cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list(&self, query: &ListQuery) -> Result<Page<TaskSchedule>> {
-        let paginator = Paginator::new(query, Order::Asc)?;
+        let paginator = Paginator::new(query, Order::Asc, Listing::TaskSchedules)?;
         let keyset = Keyset::unique(col::ID, paginator.query_order());
 
         let mut filters = Filters::new();

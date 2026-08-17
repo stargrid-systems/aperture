@@ -8,7 +8,7 @@ use turso::{Connection, Row, params_from_iter};
 use crate::actor::ActorId;
 use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
-use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Listing, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::secret::ApiKeyHash;
 use crate::sql::{Columns, ToSql};
@@ -172,7 +172,7 @@ impl ApiKeyRepository {
         actor_id: ActorId,
         query: &ListQuery,
     ) -> Result<Page<ApiKey>> {
-        let paginator = Paginator::new(query, Order::Desc)?;
+        let paginator = Paginator::new(query, Order::Desc, Listing::ApiKeys)?;
         let keyset = Keyset::unique(col::ID, paginator.query_order());
 
         let mut filters = Filters::new();

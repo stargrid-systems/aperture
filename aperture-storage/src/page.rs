@@ -6,6 +6,10 @@
 //! backward, and the caller never needs a separate direction flag. This stays
 //! correct even when rows are inserted between page fetches, as long as the
 //! sort field and direction do not change.
+//!
+//! Each cursor also stamps the tag of the listing that issued it, so a cursor
+//! replayed against a different listing is rejected instead of silently
+//! mis-paging.
 
 use aperture_runtime::RegistryQuery;
 pub use aperture_runtime::{Order, RegistryQuery as ListQuery};
@@ -74,14 +78,51 @@ pub struct Cursor {
     step: Step,
 }
 
+/// The listing a cursor belongs to. Every paginated listing stamps its tag
+/// into the cursors it issues, so cursors cannot be replayed across listings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listing {
+    Events,
+    LogEvents,
+    LogTargets,
+    LogSpans,
+    LogBoots,
+    Tasks,
+    TaskSchedules,
+    Users,
+    ArtifactKeys,
+    ArtifactVersions,
+    ApiKeys,
+}
+
+impl Listing {
+    /// The flag tag for this listing. Always nonzero, so untagged cursors
+    /// never match any listing.
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Events => 1,
+            Self::LogEvents => 2,
+            Self::LogTargets => 3,
+            Self::LogSpans => 4,
+            Self::LogBoots => 5,
+            Self::Tasks => 6,
+            Self::TaskSchedules => 7,
+            Self::Users => 8,
+            Self::ArtifactKeys => 9,
+            Self::ArtifactVersions => 10,
+            Self::ApiKeys => 11,
+        }
+    }
+}
+
 impl Cursor {
     /// The sort value carried by this cursor.
     pub const fn value(&self) -> &CursorValue {
         &self.value
     }
 
-    fn encode(value: CursorValue, id: CursorValue, step: Step) -> String {
-        let mut flags = 0u8;
+    fn encode(value: CursorValue, id: CursorValue, step: Step, listing: Listing) -> String {
+        let mut flags = listing.tag() << 3;
         if matches!(value, CursorValue::Text(_)) {
             flags |= 0b001;
         }
@@ -97,12 +138,15 @@ impl Cursor {
         to_hex(&buf)
     }
 
-    fn decode(encoded: &str) -> Result<Self> {
+    fn decode(encoded: &str, listing: Listing) -> Result<Self> {
         let invalid = || StorageError::InvalidCursor(encoded.to_owned());
         let buf = from_hex(encoded).ok_or_else(invalid)?;
         let Some((&flags, rest)) = buf.split_first() else {
             return Err(invalid());
         };
+        if flags >> 3 != listing.tag() {
+            return Err(invalid());
+        }
         let (value, rest) = if flags & 0b001 != 0 {
             let (text, rest) = read_text(rest).ok_or_else(invalid)?;
             (CursorValue::Text(text), rest)
@@ -243,23 +287,25 @@ impl Keyset {
 /// Drives one paginated query: resolves the limit, base order, and travel
 /// direction, exposes the order to query in, and turns a fetched batch into a
 /// [`Page`].
+#[derive(Debug)]
 pub struct Paginator {
     limit: u32,
     cursor: Option<Cursor>,
     step: Step,
     base_order: Order,
+    listing: Listing,
 }
 
 impl Paginator {
-    /// Creates a paginator from query parameters.
+    /// Creates a paginator for `listing` from query parameters.
     ///
     /// # Errors
     ///
     /// Returns `StorageError::InvalidCursor` if `query.cursor` is not a valid
-    /// cursor string.
-    pub fn new(query: &ListQuery, default_order: Order) -> Result<Self> {
+    /// cursor string issued by `listing`.
+    pub fn new(query: &ListQuery, default_order: Order, listing: Listing) -> Result<Self> {
         let cursor = match &query.cursor {
-            Some(encoded) => Some(Cursor::decode(encoded)?),
+            Some(encoded) => Some(Cursor::decode(encoded, listing)?),
             None => None,
         };
         let step = cursor.as_ref().map_or(Step::After, |cursor| cursor.step);
@@ -271,6 +317,7 @@ impl Paginator {
             cursor,
             step,
             base_order: query.order.unwrap_or(default_order),
+            listing,
         })
     }
 
@@ -311,7 +358,7 @@ impl Paginator {
         let cursor_at = |row: Option<&T>, step: Step| {
             row.map(|row| {
                 let (value, id) = key_of(row);
-                Cursor::encode(value, id, step)
+                Cursor::encode(value, id, step, self.listing)
             })
         };
         let first = rows.first();
@@ -367,8 +414,13 @@ mod tests {
     #[test]
     fn cursor_roundtrips_int_and_text() {
         for step in [Step::After, Step::Before] {
-            let encoded = Cursor::encode(CursorValue::Int(-42), CursorValue::Int(7), step);
-            let decoded = Cursor::decode(&encoded).unwrap();
+            let encoded = Cursor::encode(
+                CursorValue::Int(-42),
+                CursorValue::Int(7),
+                step,
+                Listing::Events,
+            );
+            let decoded = Cursor::decode(&encoded, Listing::Events).unwrap();
             assert_eq!(decoded.value, CursorValue::Int(-42));
             assert_eq!(decoded.id, CursorValue::Int(7));
             assert_eq!(decoded.step, step);
@@ -377,8 +429,9 @@ mod tests {
                 CursorValue::Text("tool/avrdude".to_owned()),
                 CursorValue::Text("0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c".to_owned()),
                 step,
+                Listing::Events,
             );
-            let decoded = Cursor::decode(&encoded).unwrap();
+            let decoded = Cursor::decode(&encoded, Listing::Events).unwrap();
             assert_eq!(decoded.value, CursorValue::Text("tool/avrdude".to_owned()));
             assert_eq!(
                 decoded.id,
@@ -390,8 +443,9 @@ mod tests {
                 CursorValue::Int(99),
                 CursorValue::Text("0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c".to_owned()),
                 step,
+                Listing::Events,
             );
-            let decoded = Cursor::decode(&encoded).unwrap();
+            let decoded = Cursor::decode(&encoded, Listing::Events).unwrap();
             assert_eq!(decoded.value, CursorValue::Int(99));
             assert_eq!(
                 decoded.id,
@@ -402,8 +456,44 @@ mod tests {
 
     #[test]
     fn decode_rejects_garbage() {
-        assert!(Cursor::decode("zz").is_err());
-        assert!(Cursor::decode("00").is_err());
+        assert!(Cursor::decode("zz", Listing::Events).is_err());
+        assert!(Cursor::decode("00", Listing::Events).is_err());
+    }
+
+    #[test]
+    fn rejects_cursor_from_another_listing() {
+        let encoded = Cursor::encode(
+            CursorValue::Int(1),
+            CursorValue::Int(1),
+            Step::After,
+            Listing::Events,
+        );
+        let query = ListQuery {
+            cursor: Some(encoded),
+            ..Default::default()
+        };
+        let err = Paginator::new(&query, Order::Desc, Listing::LogEvents).unwrap_err();
+        assert!(matches!(err, StorageError::InvalidCursor(_)));
+    }
+
+    #[test]
+    fn rejects_untagged_cursor() {
+        // Pre-tag cursors left the upper five flag bits at zero.
+        let encoded = Cursor::encode(
+            CursorValue::Int(1),
+            CursorValue::Int(1),
+            Step::After,
+            Listing::Events,
+        );
+        let mut buf = from_hex(&encoded).unwrap();
+        buf[0] &= 0b0000_0111;
+        let untagged = to_hex(&buf);
+        let query = ListQuery {
+            cursor: Some(untagged),
+            ..Default::default()
+        };
+        let err = Paginator::new(&query, Order::Desc, Listing::Events).unwrap_err();
+        assert!(matches!(err, StorageError::InvalidCursor(_)));
     }
 
     #[test]
@@ -412,7 +502,7 @@ mod tests {
             limit: Some(2),
             ..Default::default()
         };
-        let paginator = Paginator::new(&query, Order::Asc).unwrap();
+        let paginator = Paginator::new(&query, Order::Asc, Listing::Events).unwrap();
         let page = paginator.finish(vec![1i64, 2, 3], |n| {
             (CursorValue::Int(*n), CursorValue::Int(*n))
         });
@@ -424,13 +514,18 @@ mod tests {
     #[test]
     fn last_page_has_prev_but_no_next() {
         // Arrived via a forward cursor, fewer rows than the limit.
-        let forward = Cursor::encode(CursorValue::Int(2), CursorValue::Int(2), Step::After);
+        let forward = Cursor::encode(
+            CursorValue::Int(2),
+            CursorValue::Int(2),
+            Step::After,
+            Listing::Events,
+        );
         let query = ListQuery {
             limit: Some(2),
             cursor: Some(forward),
             ..Default::default()
         };
-        let paginator = Paginator::new(&query, Order::Asc).unwrap();
+        let paginator = Paginator::new(&query, Order::Asc, Listing::Events).unwrap();
         let page = paginator.finish(vec![3i64], |n| (CursorValue::Int(*n), CursorValue::Int(*n)));
         assert_eq!(page.items, vec![3]);
         assert!(page.next_cursor.is_none());
@@ -439,13 +534,18 @@ mod tests {
 
     #[test]
     fn backward_page_reverses_and_offers_next() {
-        let backward = Cursor::encode(CursorValue::Int(4), CursorValue::Int(4), Step::Before);
+        let backward = Cursor::encode(
+            CursorValue::Int(4),
+            CursorValue::Int(4),
+            Step::Before,
+            Listing::Events,
+        );
         let query = ListQuery {
             limit: Some(2),
             cursor: Some(backward),
             ..Default::default()
         };
-        let paginator = Paginator::new(&query, Order::Asc).unwrap();
+        let paginator = Paginator::new(&query, Order::Asc, Listing::Events).unwrap();
         // Rows fetched in flipped (desc) order. Finish reverses to base order.
         let page = paginator.finish(vec![3i64, 2, 1], |n| {
             (CursorValue::Int(*n), CursorValue::Int(*n))

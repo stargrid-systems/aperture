@@ -14,7 +14,7 @@ use crate::error::{Result, StorageError};
 use crate::key::ArtifactKey;
 use crate::macros::{db_id, sql};
 use crate::media_type::MediaType;
-use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Listing, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, ToSql, get};
 
@@ -233,7 +233,7 @@ impl ArtifactRepository {
         q: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<ArtifactKeyEntry>> {
-        let paginator = Paginator::new(query, Order::Asc)?;
+        let paginator = Paginator::new(query, Order::Asc, Listing::ArtifactKeys)?;
         let keyset = Keyset::unique("a.key", paginator.query_order());
 
         let mut filters = Filters::new();
@@ -290,7 +290,7 @@ impl ArtifactRepository {
         version: Option<&str>,
         query: &ListQuery,
     ) -> Result<Page<Artifact>> {
-        let paginator = Paginator::new(query, Order::Desc)?;
+        let paginator = Paginator::new(query, Order::Desc, Listing::ArtifactVersions)?;
         let column = match sort {
             VersionSort::DownloadedAt => col::DOWNLOADED_AT,
             VersionSort::SizeBytes => col::SIZE_BYTES,
