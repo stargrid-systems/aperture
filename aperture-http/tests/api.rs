@@ -422,6 +422,29 @@ async fn gets_event_definition_schema() {
 }
 
 #[tokio::test]
+async fn serves_definition_routes_without_credentials() {
+    let (app, _artifacts, _storage, _token) = seeded_app().await;
+
+    for uri in [
+        "/api/v1/task-definitions",
+        "/api/v1/setting-definitions",
+        "/api/v1/event-definitions",
+        "/api/v1/task-definitions/download",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "GET {uri} without credentials"
+        );
+    }
+}
+
+#[tokio::test]
 async fn records_and_serves_events() {
     let storage = Storage::open(":memory:").await.unwrap();
     let event_bus = EventBus::new();
