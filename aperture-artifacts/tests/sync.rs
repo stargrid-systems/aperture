@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 use std::{env, fs, process};
 
-use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, ListQuery, Storage, VersionSort};
-use aperture_events::EventBus;
-use aperture_storage::ArtifactId;
+use aperture_artifacts::{
+    Artifact, ArtifactKey, ArtifactRemoved, Artifacts, ListQuery, Storage, VersionSort,
+};
+use aperture_events::{Delivery, EventBus};
+use aperture_storage::{ActorId, ArtifactId};
 use jiff::Timestamp;
 
 fn temp_root(tag: &str) -> PathBuf {
@@ -17,8 +19,9 @@ async fn sync_removes_versions_without_blobs() {
     let root = temp_root("orphan-version");
     let storage = Storage::open(":memory:").await.unwrap();
     let event_bus = EventBus::new();
-    let artifacts = Artifacts::new(storage.clone(), root.clone(), event_bus);
+    let artifacts = Artifacts::new(storage.clone(), root.clone(), event_bus.clone());
     let repo = storage.artifacts().unwrap();
+    let mut rx = event_bus.subscribe_typed::<ArtifactRemoved>();
 
     // A catalog version whose blob never made it to disk.
     repo.record_version(&Artifact {
@@ -49,6 +52,45 @@ async fn sync_removes_versions_without_blobs() {
         .await
         .unwrap();
     assert!(versions.items.is_empty());
+
+    let event = match rx.recv().await.expect("sync emits a removal event") {
+        Delivery::Event(event) => event,
+        Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
+    };
+    assert_eq!(event.payload.key, "spectra");
+    assert_eq!(
+        event.actor,
+        ActorId::SYSTEM,
+        "sync removals are system-initiated",
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn sync_removes_blobs_without_entries() {
+    let root = temp_root("orphan-blob");
+    let storage = Storage::open(":memory:").await.unwrap();
+    let event_bus = EventBus::new();
+    let artifacts = Artifacts::new(storage, root.clone(), event_bus.clone());
+    let mut rx = event_bus.subscribe_typed::<ArtifactRemoved>();
+
+    // A blob no catalog entry references.
+    let blob = root.join("blobs").join("sha256").join("cafe");
+    fs::create_dir_all(blob.parent().unwrap()).unwrap();
+    fs::write(&blob, b"orphan").unwrap();
+
+    let report = artifacts.sync().await.unwrap();
+    assert_eq!(report.removed_blobs, 1);
+    assert!(!blob.exists());
+
+    let event = match rx.recv().await.expect("sync emits a removal event") {
+        Delivery::Event(event) => event,
+        Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
+    };
+    // An orphan blob has no key, so the digest identifies it.
+    assert_eq!(event.payload.key, "sha256:cafe");
+    assert_eq!(event.actor, ActorId::SYSTEM);
 
     let _ = fs::remove_dir_all(&root);
 }

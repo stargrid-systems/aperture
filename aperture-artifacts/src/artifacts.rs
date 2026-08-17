@@ -336,7 +336,9 @@ impl Artifacts {
     /// Reconciles the catalog with the blob store.
     ///
     /// Removes catalog entries whose blob is missing, removes blobs that no
-    /// entry references, and clears leftover temporary files.
+    /// entry references, and clears leftover temporary files. Each removal
+    /// emits an [`ArtifactRemoved`] event attributed to
+    /// [`ActorId::SYSTEM`].
     ///
     /// # Errors
     ///
@@ -581,6 +583,7 @@ impl Inner {
         let repository = self.storage.artifacts()?;
         let mut report = SyncReport::default();
         let mut tracked: HashSet<Digest> = HashSet::new();
+        let mut removed_keys: Vec<String> = Vec::new();
 
         for artifact in repository.all_versions().await? {
             if self.blobs.contains(&artifact.digest).await {
@@ -590,6 +593,7 @@ impl Inner {
                     .delete_version(&artifact.key, &artifact.digest)
                     .await?;
                 report.removed_entries += 1;
+                removed_keys.push(artifact.key.as_str().to_owned());
             }
         }
 
@@ -597,7 +601,18 @@ impl Inner {
             if !tracked.contains(&digest) {
                 self.blobs.remove(&digest).await?;
                 report.removed_blobs += 1;
+                // An orphan blob carries no artifact key, so the digest is
+                // the only identifier to report.
+                removed_keys.push(digest.to_string());
             }
+        }
+
+        // Emitted after the reconciliation work, outside any repository
+        // call. Sync runs as a system reconciliation, before the recorder
+        // connects in serve, so these buffer and persist once it spawns.
+        for key in removed_keys {
+            self.emit_event(ArtifactRemoved { key }, ActorId::SYSTEM)
+                .await;
         }
 
         Ok(report)
