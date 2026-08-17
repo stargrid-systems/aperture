@@ -25,7 +25,7 @@ impl Adapter for TursoAdapter {
         let rules = self.repo.load_all().await.map_err(map_storage_err)?;
         for rule in rules {
             let ptype = rule.ptype.as_db();
-            m.add_policy(ptype, ptype, rule.values);
+            m.add_policy(ptype, ptype, trim_trailing_empty(rule.values));
         }
         Ok(())
     }
@@ -141,4 +141,38 @@ impl Adapter for TursoAdapter {
 /// Converts a storage error into a casbin error.
 pub(super) fn map_storage_err(err: aperture_storage::StorageError) -> casbin::Error {
     casbin::Error::AdapterError(AdapterError(Box::new(err)))
+}
+
+/// Drops trailing empty values so a rule reaches the model with its real
+/// arity. Rows are padded to six columns in storage, but the model rejects
+/// rules wider than its token count. Interior empty values are kept.
+fn trim_trailing_empty(mut values: Vec<String>) -> Vec<String> {
+    while values.last().is_some_and(String::is_empty) {
+        values.pop();
+    }
+    values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_trailing_empty;
+
+    #[test]
+    fn trims_only_trailing_empty_values() {
+        assert_eq!(trim_trailing_empty(vec![]), Vec::<String>::new());
+        assert_eq!(
+            trim_trailing_empty(vec!["a".to_owned(), "b".to_owned(), String::new()]),
+            vec!["a".to_owned(), "b".to_owned()]
+        );
+        assert_eq!(
+            trim_trailing_empty(vec![
+                "a".to_owned(),
+                String::new(),
+                "b".to_owned(),
+                String::new(),
+                String::new()
+            ]),
+            vec!["a".to_owned(), String::new(), "b".to_owned()]
+        );
+    }
 }
