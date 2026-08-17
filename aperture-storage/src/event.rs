@@ -23,7 +23,7 @@ use crate::sql::{Columns, FromSql, ToSql};
 /// A `UUIDv7` assigned at emit time, so the id is known before the row is
 /// persisted by the recorder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, utoipa::ToSchema)]
-#[schema(value_type = String)]
+#[schema(value_type = String, format = Uuid)]
 pub struct EventId(Uuid);
 
 impl EventId {

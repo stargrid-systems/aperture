@@ -24,7 +24,7 @@ subtle = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 turso = { workspace = true, features = ["fts"] }
-utoipa = { workspace = true, features = ["macros", "jiff_0_2"] }
+utoipa = { workspace = true, features = ["macros", "jiff_0_2", "uuid"] }
 uuid = { workspace = true, features = ["std", "v7"] }
 
 [dev-dependencies]

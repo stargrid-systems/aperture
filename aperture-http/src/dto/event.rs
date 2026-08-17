@@ -49,6 +49,7 @@ pub struct EventListParams {
     #[param(minimum = 1, maximum = 200, default = 50)]
     pub limit: Option<u32>,
     pub cursor: Option<String>,
+    /// Sort direction. Defaults to descending (newest first).
     pub order: Option<OrderParam>,
     /// Filter by exact key, e.g. `artifact.written`.
     pub key: Option<String>,
