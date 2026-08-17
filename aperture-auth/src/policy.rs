@@ -230,3 +230,41 @@ pub fn actor_subject(actor_id: aperture_storage::ActorId) -> String {
 pub fn apikey_subject(key_id: aperture_storage::ApiKeyId) -> String {
     format!("apikey:{}", key_id.get())
 }
+
+#[cfg(test)]
+mod tests {
+    use casbin::RbacApi;
+
+    use super::*;
+
+    /// Simulates a restart: seed one enforcer, drop it, then load a second
+    /// enforcer over the same storage. The persisted rules must keep their
+    /// real arity so enforcement and role assignments still work.
+    #[tokio::test]
+    async fn seeded_policies_survive_reload() {
+        let storage = Storage::open(":memory:").await.unwrap();
+        {
+            let mut e = create_enforcer(&storage).await.unwrap();
+            seed_builtin_policies(&mut e, &storage).await.unwrap();
+            e.add_role_for_user("actor:7", Role::Viewer.as_str(), None)
+                .await
+                .unwrap();
+        }
+
+        let e = create_enforcer(&storage).await.unwrap();
+
+        assert!(
+            e.enforce(("actor:7", Object::Artifact.as_str(), Action::Read.as_str()))
+                .unwrap()
+        );
+        assert!(
+            !e.enforce((
+                "actor:7",
+                Object::Artifact.as_str(),
+                Action::Download.as_str()
+            ))
+            .unwrap()
+        );
+        assert!(e.has_role_for_user("actor:7", Role::Viewer.as_str(), None));
+    }
+}
