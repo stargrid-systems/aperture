@@ -506,6 +506,113 @@ async fn records_and_serves_events() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// Artifact events from HTTP uploads and evictions must be recorded with the
+/// acting user as the actor, not the system actor.
+#[tokio::test]
+async fn artifact_events_record_the_acting_user() {
+    let root = env::temp_dir().join(format!(
+        "aperture-api-{}-{}",
+        process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let storage = Storage::open(":memory:").await.unwrap();
+    let event_bus = EventBus::new();
+    let artifacts = Artifacts::new(storage.clone(), root, event_bus.clone());
+
+    let mut registry = TaskRegistry::new();
+    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
+    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+
+    let auth = aperture_auth::AuthHandle::new(storage.clone())
+        .await
+        .unwrap();
+    let password = Password::generate();
+    let actor = auth
+        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
+        .await
+        .unwrap();
+    let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
+    let subject = aperture_auth::apikey_subject(api_key.id);
+    auth.assign_role(&subject, Role::Admin).await.unwrap();
+
+    let spectra = Spectra::new(
+        artifacts.clone(),
+        tasks.clone(),
+        SpectraConfig::default(),
+        ActorId::SYSTEM,
+    );
+    let state = AppState::new(
+        "test",
+        Uuid::nil(),
+        storage.clone(),
+        spectra,
+        tasks,
+        test_settings(&storage, event_bus.clone()),
+        test_event_registry(),
+        auth,
+    );
+    let app = app(state);
+    let token = raw_key.as_str().to_owned();
+
+    // Upload a version as the user's API key, then evict it.
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/artifacts/firmware")
+                .header("authorization", format!("Bearer {token}"))
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(&b"user-attributed"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::CREATED);
+    let body = to_bytes(put.into_body(), usize::MAX).await.unwrap();
+    let digest = serde_json::from_slice::<Value>(&body).unwrap()["digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let removed = delete(
+        &app,
+        &token,
+        &format!("/api/v1/artifacts/firmware/versions/{digest}"),
+    )
+    .await;
+    assert_eq!(removed, StatusCode::NO_CONTENT);
+
+    // Run the recorder to completion: cancel + await drains and flushes.
+    let recorder = aperture_events::EventRecorder::connect(&event_bus, storage.events().unwrap())
+        .expect("recorder");
+    let stop = aperture_runtime::Stop::new();
+    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
+    stop.cancel();
+    worker.await.unwrap();
+
+    let (status, json) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    let actor_id = actor.id.to_string();
+    for expected in ["artifact.written", "artifact.removed"] {
+        let event = items
+            .iter()
+            .find(|event| event["key"] == expected)
+            .unwrap_or_else(|| panic!("{expected} event recorded: {json}"));
+        assert_eq!(
+            event["actor"], actor_id,
+            "{expected} must be attributed to the acting user"
+        );
+        assert_ne!(
+            event["actor"],
+            ActorId::SYSTEM.to_string(),
+            "{expected} must not be attributed to the system actor"
+        );
+    }
+}
+
 #[tokio::test]
 async fn reads_recorded_tasks() {
     let (app, _artifacts, storage, token) = seeded_app().await;

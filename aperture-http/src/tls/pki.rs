@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 
 use anyhow::Context as _;
 use aperture_artifacts::Artifacts;
-use aperture_storage::{ArtifactKey, MediaType};
+use aperture_storage::{ActorId, ArtifactKey, MediaType};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, SanType,
@@ -320,7 +320,11 @@ async fn store_cert_artifact(
     key: &ArtifactKey,
     der: &CertificateDer<'_>,
 ) -> Result<(), TlsError> {
-    artifacts.put(key, Some(&PKIX_CERT), der.as_ref()).await?;
+    // PKI generation and rotation is system-initiated, so its events are
+    // attributed to the system actor.
+    artifacts
+        .put(key, Some(&PKIX_CERT), der.as_ref(), ActorId::SYSTEM)
+        .await?;
     Ok(())
 }
 
@@ -330,7 +334,7 @@ async fn store_key_artifact(
     der: &PrivatePkcs8KeyDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
-        .put(key, Some(&PKCS8), der.secret_pkcs8_der())
+        .put(key, Some(&PKCS8), der.secret_pkcs8_der(), ActorId::SYSTEM)
         .await?;
     Ok(())
 }
@@ -450,7 +454,7 @@ mod tests {
         let old_server_key = digest_of(&artifacts, &SERVER_KEY).await;
 
         artifacts
-            .evict_version(&SERVER_CERT, &old_server_cert)
+            .evict_version(&SERVER_CERT, &old_server_cert, ActorId::SYSTEM)
             .await
             .unwrap();
 
@@ -482,7 +486,7 @@ mod tests {
         let old_server_key = digest_of(&artifacts, &SERVER_KEY).await;
 
         artifacts
-            .evict_version(&CA_CERT, &old_ca_cert)
+            .evict_version(&CA_CERT, &old_ca_cert, ActorId::SYSTEM)
             .await
             .unwrap();
 
@@ -528,7 +532,7 @@ mod tests {
         ensure_certificates(&artifacts, addr).await.unwrap();
 
         artifacts
-            .put(&SERVER_KEY, Some(&PKCS8), &b"corrupt"[..])
+            .put(&SERVER_KEY, Some(&PKCS8), &b"corrupt"[..], ActorId::SYSTEM)
             .await
             .unwrap();
 

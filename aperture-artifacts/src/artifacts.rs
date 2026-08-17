@@ -219,24 +219,34 @@ impl Artifacts {
     }
 
     /// Removes the `(key, digest)` version, and its blob if no other version
-    /// references it. Returns whether the version existed.
+    /// references it. Returns whether the version existed. The removal event
+    /// is attributed to `actor`.
     ///
     /// # Errors
     ///
     /// Returns `ArtifactError::Storage` if the catalog or blob removal fails.
-    pub async fn evict_version(&self, key: &ArtifactKey, digest: &Digest) -> Result<bool> {
+    pub async fn evict_version(
+        &self,
+        key: &ArtifactKey,
+        digest: &Digest,
+        actor: ActorId,
+    ) -> Result<bool> {
         let removed = self.inner.evict_version(key, digest).await?;
         if removed {
             self.inner
-                .emit_event(ArtifactRemoved {
-                    key: key.as_str().to_owned(),
-                })
+                .emit_event(
+                    ArtifactRemoved {
+                        key: key.as_str().to_owned(),
+                    },
+                    actor,
+                )
                 .await;
         }
         Ok(removed)
     }
 
-    /// Stores `reader` as a content-addressed blob and records it under `key`.
+    /// Stores `reader` as a content-addressed blob and records it under
+    /// `key`, attributing the written event to `actor`.
     ///
     /// Returns the stored version. The `digest` field of the returned artifact
     /// is always a valid `Digest` (i.e. `artifact.digest.parse::<Digest>()`
@@ -255,6 +265,7 @@ impl Artifacts {
         key: &ArtifactKey,
         media_type: Option<&MediaType>,
         reader: R,
+        actor: ActorId,
     ) -> Result<Artifact>
     where
         R: AsyncRead + Unpin,
@@ -278,16 +289,20 @@ impl Artifacts {
             .record_version(&artifact)
             .await?;
         self.inner
-            .emit_event(ArtifactWritten {
-                key: key.as_str().to_owned(),
-                digest: Some(digest.to_string()),
-            })
+            .emit_event(
+                ArtifactWritten {
+                    key: key.as_str().to_owned(),
+                    digest: Some(digest.to_string()),
+                },
+                actor,
+            )
             .await;
         Ok(artifact)
     }
 
     /// Ensures the artifact in `request` is present, downloading it if needed,
-    /// and returns the stored version.
+    /// and returns the stored version. The written event is attributed to
+    /// `actor`.
     ///
     /// If the newest version is already on disk it is returned without
     /// fetching. Transferred bytes are reported into `progress`.
@@ -301,14 +316,18 @@ impl Artifacts {
         &self,
         request: FetchRequest,
         progress: ProgressHandle,
+        actor: ActorId,
     ) -> Result<Artifact> {
         let (artifact, written) = self.inner.download(&request, &progress).await?;
         if written {
             self.inner
-                .emit_event(ArtifactWritten {
-                    key: artifact.key.as_str().to_owned(),
-                    digest: Some(artifact.digest.to_string()),
-                })
+                .emit_event(
+                    ArtifactWritten {
+                        key: artifact.key.as_str().to_owned(),
+                        digest: Some(artifact.digest.to_string()),
+                    },
+                    actor,
+                )
                 .await;
         }
         Ok(artifact)
@@ -330,8 +349,8 @@ impl Artifacts {
 
 impl Inner {
     /// Emits an event through the bus, logging and ignoring failures.
-    async fn emit_event<D: aperture_events::EventDefinition>(&self, payload: D) {
-        if let Err(err) = self.event_bus.emit(payload, ActorId::SYSTEM).await {
+    async fn emit_event<D: aperture_events::EventDefinition>(&self, payload: D, actor: ActorId) {
+        if let Err(err) = self.event_bus.emit(payload, actor).await {
             tracing::warn!(
                 error = &err as &dyn StdError,
                 "failed to emit artifact event"
@@ -671,11 +690,13 @@ mod tests {
         let (artifacts, bus, dir) = fresh_store().await;
         let mut rx = bus.subscribe_typed::<ArtifactWritten>();
         let key = ArtifactKey::new("firmware").unwrap();
+        let actor = ActorId::from(42);
         let artifact = artifacts
             .put(
                 &key,
                 Some(&"application/octet-stream".parse().unwrap()),
                 &b"bytes"[..],
+                actor,
             )
             .await
             .unwrap();
@@ -688,6 +709,10 @@ mod tests {
             event.payload.digest,
             Some(artifact.digest.to_string()),
             "Written events must carry the new digest",
+        );
+        assert_eq!(
+            event.actor, actor,
+            "Written events must be attributed to the acting actor, not the system actor",
         );
         cleanup(&dir);
     }
@@ -704,6 +729,7 @@ mod tests {
                 &key,
                 Some(&"application/octet-stream".parse().unwrap()),
                 &b"bytes2"[..],
+                ActorId::SYSTEM,
             )
             .await
             .unwrap();
@@ -722,11 +748,15 @@ mod tests {
     async fn evict_version_publishes_removed_event() {
         let (artifacts, bus, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
-        let artifact = artifacts.put(&key, None, &b"bytes"[..]).await.unwrap();
+        let actor = ActorId::from(42);
+        let artifact = artifacts
+            .put(&key, None, &b"bytes"[..], ActorId::SYSTEM)
+            .await
+            .unwrap();
 
         let mut rx = bus.subscribe_typed::<ArtifactRemoved>();
         artifacts
-            .evict_version(&key, &artifact.digest)
+            .evict_version(&key, &artifact.digest, actor)
             .await
             .unwrap();
         let event = match rx.recv().await.expect("bus emitted an event") {
@@ -734,6 +764,10 @@ mod tests {
             Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
         };
         assert_eq!(event.payload.key, key.as_str());
+        assert_eq!(
+            event.actor, actor,
+            "Removed events must be attributed to the acting actor",
+        );
         cleanup(&dir);
     }
 
@@ -741,7 +775,10 @@ mod tests {
     async fn late_subscriber_misses_earlier_events() {
         let (artifacts, bus, dir) = fresh_store().await;
         let key = ArtifactKey::new("firmware").unwrap();
-        artifacts.put(&key, None, &b"first"[..]).await.unwrap();
+        artifacts
+            .put(&key, None, &b"first"[..], ActorId::SYSTEM)
+            .await
+            .unwrap();
 
         // Subscribe after the write completed. No event should arrive.
         let mut rx = bus.subscribe_typed::<ArtifactWritten>();

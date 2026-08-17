@@ -196,7 +196,7 @@ async fn delete_version(
     let evicted = state
         .spectra()
         .artifacts()
-        .evict_version(&key, &digest)
+        .evict_version(&key, &digest, auth.actor.id)
         .await?;
     if evicted {
         Ok(StatusCode::NO_CONTENT)
@@ -264,7 +264,7 @@ async fn upload_artifact(
     let artifact = state
         .spectra()
         .artifacts()
-        .put(&key, media_type.as_ref(), reader)
+        .put(&key, media_type.as_ref(), reader, auth.actor.id)
         .await?;
     // Artifact keys are URL-safe ([a-zA-Z0-9._-]) so they round-trip through
     // a single path segment without percent-encoding.
