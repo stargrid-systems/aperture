@@ -21,13 +21,16 @@
 //! # Delivery and durability guarantees
 //!
 //! - `emit` dispatches to subscribers, queues for the recorder, then returns.
-//!   An `Ok` means queued, not persisted: the recorder flushes batches, at the
-//!   latest 200 ms after the first pending event.
+//!   An `Ok` means queued, not persisted. While the recorder keeps up, a
+//!   pending event waits at most 200 ms for its flush. A failing flush stalls
+//!   draining for as long as it is retried.
 //! - The recorder queue never drops events. When it is full, `emit` applies
-//!   backpressure. When no recorder drains the bus, `emit` fails with
-//!   `EventError::RecorderClosed`.
-//! - A failing recorder flush is retried with backoff for up to 30 s, then the
-//!   batch is dropped and the loss is logged with the id range.
+//!   backpressure. Before any recorder connects, emits fill the queue (1024
+//!   events) and then backpressure indefinitely. Once a recorder connected and
+//!   its channel was dropped, `emit` fails with `EventError::RecorderClosed`.
+//! - A failing recorder flush is retried with backoff for up to 30 s while the
+//!   recorder runs, and for up to 5 s more once shutdown begins. Then the batch
+//!   is dropped and the loss is logged with the id range.
 //! - Subscriber delivery is at-most-once. A slow subscriber's events are
 //!   dropped, and the next `recv` reports `Delivery::Lagged(n)` before the next
 //!   event.
