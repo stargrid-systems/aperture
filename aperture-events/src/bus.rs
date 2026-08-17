@@ -102,7 +102,6 @@ impl EventBus {
     ///
     /// Returns [`EventError::RecorderClosed`] if no recorder is draining the
     /// bus anymore. Subscribers may have been dispatched to regardless.
-    #[tracing::instrument(level = "info", skip_all)]
     pub async fn emit<D: EventDefinition>(
         &self,
         payload: D,
