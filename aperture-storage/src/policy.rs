@@ -107,7 +107,9 @@ impl PolicyRuleRepository {
         Ok(rules)
     }
 
-    /// Inserts a single rule.
+    /// Inserts a single rule, skipping it if it already exists. The unique
+    /// index over the full rule tuple makes a duplicate a no-op, which the
+    /// casbin adapter relies on for its single-rule add path.
     ///
     /// # Errors
     ///
@@ -118,7 +120,7 @@ impl PolicyRuleRepository {
         self.connection
             .execute(
                 sql!(
-                    INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5)
+                    INSERT OR IGNORE INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                 ),
                 params_from_iter(params),

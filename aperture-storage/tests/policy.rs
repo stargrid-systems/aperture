@@ -18,6 +18,19 @@ async fn insert_batch_skips_duplicate_rules() {
 }
 
 #[tokio::test]
+async fn insert_skips_duplicate_rules() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.policy().unwrap();
+    let rule = ["admin".to_owned(), "*".to_owned(), "*".to_owned()];
+
+    repo.insert(PolicyType::Policy, &rule).await.unwrap();
+    // A duplicate single-row add is a no-op rather than a constraint error.
+    repo.insert(PolicyType::Policy, &rule).await.unwrap();
+
+    assert_eq!(repo.count().await.unwrap(), 1);
+}
+
+#[tokio::test]
 async fn replace_all_swaps_the_full_rule_set() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.policy().unwrap();
