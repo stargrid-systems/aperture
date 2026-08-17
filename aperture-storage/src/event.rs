@@ -331,3 +331,62 @@ impl TryFrom<&Row> for Event {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql::get;
+
+    /// Runs `EXPLAIN QUERY PLAN` on `sql` and returns the detail rows.
+    async fn explain(repo: &EventRepository, sql: &str, params: Vec<turso::Value>) -> Vec<String> {
+        let mut rows = repo
+            .connection
+            .query(
+                &format!("EXPLAIN QUERY PLAN {sql}"),
+                params_from_iter(params),
+            )
+            .await
+            .unwrap();
+        let mut plans = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            plans.push(get::<String>(&row, 3).unwrap());
+        }
+        plans
+    }
+
+    /// turso cannot satisfy `ORDER BY timestamp` from an index because the
+    /// `timestamp_us` custom type sorts as an encoded blob, so the listing
+    /// still sorts and no plan test can demand otherwise. What the composite
+    /// indexes do serve today is the key-equality seek, pinned here.
+    #[tokio::test]
+    async fn key_filtered_listing_uses_composite_index() {
+        let storage = crate::Storage::open(":memory:").await.unwrap();
+        let repo = storage.events().unwrap();
+
+        let keyset = Keyset::with_id(col::TIMESTAMP, Order::Desc);
+        // The keyset predicate a second page carries, hand-written to match
+        // Keyset::condition output for a Desc listing.
+        let cond = format!(
+            "({col} < ?2 OR ({col} = ?2 AND id < ?3))",
+            col = col::TIMESTAMP,
+        );
+        let sql = format!(
+            sql!(SELECT {cols} FROM events WHERE key = ?1 AND {cond} ORDER BY {order} LIMIT {limit}),
+            cols = EVENT_COLUMNS,
+            cond = cond,
+            order = keyset.order_by(),
+            limit = ListQuery::DEFAULT_LIMIT + 1,
+        );
+        let params = vec![
+            turso::Value::Text("artifact.written".to_owned()),
+            turso::Value::Integer(1_000),
+            turso::Value::Text(EventId::generate().to_string()),
+        ];
+        let plans = explain(&repo, &sql, params).await;
+        let joined = plans.join("\n");
+        assert!(
+            joined.contains("idx_events_key_timestamp_id"),
+            "key filter must seek through the composite index: {plans:?}"
+        );
+    }
+}
