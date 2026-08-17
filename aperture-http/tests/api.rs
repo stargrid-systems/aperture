@@ -56,7 +56,90 @@ fn test_event_registry() -> aperture_events::EventRegistry {
     registry
 }
 
-async fn seeded_app() -> (Router, Artifacts, Storage, String) {
+/// Which events are emitted and recorded before the app is assembled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordedEvents {
+    /// Nothing is emitted.
+    None,
+    /// One `setting.changed` plus one `artifact.written`.
+    ChangedAndWritten,
+    /// One `setting.changed` plus an `artifact.written` and an
+    /// `artifact.removed`.
+    ChangedWrittenAndRemoved,
+}
+
+/// A fully wired app plus the handles tests need to poke at it.
+struct TestApp {
+    app: Router,
+    artifacts: Artifacts,
+    storage: Storage,
+    auth: aperture_auth::AuthHandle,
+    event_bus: EventBus,
+    /// Raw token of the minted API key, when one was requested.
+    token: Option<String>,
+    /// Actor owning the minted key, when one was requested.
+    actor: Option<ActorId>,
+}
+
+/// Emits the requested events on `event_bus` and runs the recorder to
+/// completion so they are persisted.
+async fn emit_and_record(
+    events: RecordedEvents,
+    settings: &aperture_settings::Settings,
+    event_bus: &EventBus,
+    storage: &Storage,
+) {
+    if events == RecordedEvents::None {
+        return;
+    }
+    settings
+        .set_value(
+            "avatar_style",
+            serde_json::json!("constellation"),
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+    event_bus
+        .emit(
+            aperture_artifacts::ArtifactWritten {
+                key: "tls_server-cert".to_owned(),
+                digest: None,
+            },
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+    if events == RecordedEvents::ChangedWrittenAndRemoved {
+        event_bus
+            .emit(
+                aperture_artifacts::ArtifactRemoved {
+                    key: "tls_server-cert".to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await
+            .unwrap();
+    }
+
+    // Run the recorder to completion: cancel + await drains and flushes.
+    let recorder = aperture_events::EventRecorder::connect(event_bus, storage.events().unwrap())
+        .expect("recorder");
+    let stop = aperture_runtime::Stop::new();
+    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
+    stop.cancel();
+    worker.await.unwrap();
+}
+
+/// Assembles an app the way the gateway does at boot: one in-memory storage,
+/// one event bus shared by artifacts and settings, and the standard settings
+/// and event registries. The knobs pick the variations the tests need.
+async fn assemble_app(
+    download_task: bool,
+    seed_versions: bool,
+    events: RecordedEvents,
+    key_role: Option<Role>,
+) -> TestApp {
     // Unique per call so parallel tests in the same binary do not stomp on
     // each other's blob store.
     let root = env::temp_dir().join(format!(
@@ -66,26 +149,42 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new());
+    let event_bus = EventBus::new();
+    let artifacts = Artifacts::new(storage.clone(), root, event_bus.clone());
 
-    let repo = storage.artifacts().unwrap();
-    repo.record_version(&version("firmware", "sha256:ffff", 1_000))
-        .await
-        .unwrap();
-    repo.record_version(&version("spectra", "sha256:aaaa", 2_000))
-        .await
-        .unwrap();
-    repo.record_version(&version("spectra", "sha256:bbbb", 3_000))
-        .await
-        .unwrap();
+    if seed_versions {
+        let repo = storage.artifacts().unwrap();
+        repo.record_version(&version("firmware", "sha256:ffff", 1_000))
+            .await
+            .unwrap();
+        repo.record_version(&version("spectra", "sha256:aaaa", 2_000))
+            .await
+            .unwrap();
+        repo.record_version(&version("spectra", "sha256:bbbb", 3_000))
+            .await
+            .unwrap();
+    }
 
-    let mut registry = TaskRegistry::new();
-    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+    let mut task_registry = TaskRegistry::new();
+    if download_task {
+        task_registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
+    }
+    let tasks = Tasks::new(storage.tasks().unwrap(), task_registry);
+
+    let settings = test_settings(&storage, event_bus.clone());
+    emit_and_record(events, &settings, &event_bus, &storage).await;
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
         .await
         .unwrap();
+
+    let (token, actor) = match key_role {
+        Some(role) => {
+            let (actor, token) = key_for_role(&auth, "test", role).await;
+            (Some(token), Some(actor))
+        }
+        None => (None, None),
+    };
 
     let spectra = Spectra::new(
         artifacts.clone(),
@@ -93,17 +192,6 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         SpectraConfig::default(),
         ActorId::SYSTEM,
     );
-
-    let password = Password::generate();
-    let actor = auth
-        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
-        .await
-        .unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, Role::Admin).await.unwrap();
-
-    let settings = test_settings(&storage, EventBus::new());
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -112,9 +200,29 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         tasks,
         settings,
         test_event_registry(),
-        auth,
+        auth.clone(),
     );
-    (app(state), artifacts, storage, raw_key.as_str().to_owned())
+    TestApp {
+        app: app(state),
+        artifacts,
+        storage,
+        auth,
+        event_bus,
+        token,
+        actor,
+    }
+}
+
+/// Builds an app with the artifact catalog seeded (one firmware and two
+/// spectra versions) and an admin token.
+async fn seeded_app() -> (Router, Artifacts, Storage, String) {
+    let fixture = assemble_app(true, true, RecordedEvents::None, Some(Role::Admin)).await;
+    (
+        fixture.app,
+        fixture.artifacts,
+        fixture.storage,
+        fixture.token.expect("admin key"),
+    )
 }
 
 async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
@@ -446,66 +554,15 @@ async fn serves_definition_routes_without_credentials() {
 
 #[tokio::test]
 async fn records_and_serves_events() {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let event_bus = EventBus::new();
-    let settings = test_settings(&storage, event_bus.clone());
-
-    settings
-        .set_value(
-            "avatar_style",
-            serde_json::json!("constellation"),
-            ActorId::SYSTEM,
-        )
-        .await
-        .unwrap();
-    event_bus
-        .emit(
-            aperture_artifacts::ArtifactWritten {
-                key: "tls_server-cert".to_owned(),
-                digest: None,
-            },
-            ActorId::SYSTEM,
-        )
-        .await
-        .unwrap();
-
-    // Run the recorder to completion: cancel + await drains and flushes.
-    let recorder = aperture_events::EventRecorder::connect(&event_bus, storage.events().unwrap())
-        .expect("recorder");
-    let stop = aperture_runtime::Stop::new();
-    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
-    stop.cancel();
-    worker.await.unwrap();
-
-    let auth = aperture_auth::AuthHandle::new(storage.clone())
-        .await
-        .unwrap();
-    let password = Password::generate();
-    let actor = auth
-        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
-        .await
-        .unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, Role::Admin).await.unwrap();
-
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        storage.clone(),
-        Spectra::new(
-            Artifacts::new(storage.clone(), env::temp_dir(), event_bus.clone()),
-            Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
-            SpectraConfig::default(),
-            ActorId::SYSTEM,
-        ),
-        Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
-        settings,
-        test_event_registry(),
-        auth,
-    );
-    let app = app(state);
-    let token = raw_key.as_str().to_owned();
+    let fixture = assemble_app(
+        false,
+        false,
+        RecordedEvents::ChangedAndWritten,
+        Some(Role::Admin),
+    )
+    .await;
+    let app = fixture.app;
+    let token = fixture.token.expect("admin key");
 
     let (status, json) = get_json(&app, &token, "/api/v1/events").await;
     assert_eq!(status, StatusCode::OK);
@@ -532,74 +589,14 @@ async fn records_and_serves_events() {
 /// Builds an app with one `setting.changed` and two `artifact.*` events
 /// already recorded, and returns it with an admin token.
 async fn app_with_recorded_events() -> (Router, String) {
-    let storage = Storage::open(":memory:").await.unwrap();
-    let event_bus = EventBus::new();
-    let settings = test_settings(&storage, event_bus.clone());
-
-    settings
-        .set_value(
-            "avatar_style",
-            serde_json::json!("constellation"),
-            ActorId::SYSTEM,
-        )
-        .await
-        .unwrap();
-    event_bus
-        .emit(
-            aperture_artifacts::ArtifactWritten {
-                key: "tls_server-cert".to_owned(),
-                digest: None,
-            },
-            ActorId::SYSTEM,
-        )
-        .await
-        .unwrap();
-    event_bus
-        .emit(
-            aperture_artifacts::ArtifactRemoved {
-                key: "tls_server-cert".to_owned(),
-            },
-            ActorId::SYSTEM,
-        )
-        .await
-        .unwrap();
-
-    // Run the recorder to completion: cancel + await drains and flushes.
-    let recorder = aperture_events::EventRecorder::connect(&event_bus, storage.events().unwrap())
-        .expect("recorder");
-    let stop = aperture_runtime::Stop::new();
-    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
-    stop.cancel();
-    worker.await.unwrap();
-
-    let auth = aperture_auth::AuthHandle::new(storage.clone())
-        .await
-        .unwrap();
-    let password = Password::generate();
-    let actor = auth
-        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
-        .await
-        .unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, Role::Admin).await.unwrap();
-
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        storage.clone(),
-        Spectra::new(
-            Artifacts::new(storage.clone(), env::temp_dir(), event_bus.clone()),
-            Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
-            SpectraConfig::default(),
-            ActorId::SYSTEM,
-        ),
-        Tasks::new(storage.tasks().unwrap(), TaskRegistry::new()),
-        settings,
-        test_event_registry(),
-        auth,
-    );
-    (app(state), raw_key.as_str().to_owned())
+    let fixture = assemble_app(
+        false,
+        false,
+        RecordedEvents::ChangedWrittenAndRemoved,
+        Some(Role::Admin),
+    )
+    .await;
+    (fixture.app, fixture.token.expect("admin key"))
 }
 
 #[tokio::test]
@@ -710,50 +707,10 @@ async fn rejects_malformed_event_id() {
 /// acting user as the actor, not the system actor.
 #[tokio::test]
 async fn artifact_events_record_the_acting_user() {
-    let root = env::temp_dir().join(format!(
-        "aperture-api-{}-{}",
-        process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    let storage = Storage::open(":memory:").await.unwrap();
-    let event_bus = EventBus::new();
-    let artifacts = Artifacts::new(storage.clone(), root, event_bus.clone());
-
-    let mut registry = TaskRegistry::new();
-    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
-
-    let auth = aperture_auth::AuthHandle::new(storage.clone())
-        .await
-        .unwrap();
-    let password = Password::generate();
-    let actor = auth
-        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
-        .await
-        .unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, Role::Admin).await.unwrap();
-
-    let spectra = Spectra::new(
-        artifacts.clone(),
-        tasks.clone(),
-        SpectraConfig::default(),
-        ActorId::SYSTEM,
-    );
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        storage.clone(),
-        spectra,
-        tasks,
-        test_settings(&storage, event_bus.clone()),
-        test_event_registry(),
-        auth,
-    );
-    let app = app(state);
-    let token = raw_key.as_str().to_owned();
+    let fixture = assemble_app(true, false, RecordedEvents::None, Some(Role::Admin)).await;
+    let app = fixture.app;
+    let token = fixture.token.expect("admin key");
+    let actor_id = fixture.actor.expect("admin actor");
 
     // Upload a version as the user's API key, then evict it.
     let put = app
@@ -785,8 +742,11 @@ async fn artifact_events_record_the_acting_user() {
     assert_eq!(removed, StatusCode::NO_CONTENT);
 
     // Run the recorder to completion: cancel + await drains and flushes.
-    let recorder = aperture_events::EventRecorder::connect(&event_bus, storage.events().unwrap())
-        .expect("recorder");
+    let recorder = aperture_events::EventRecorder::connect(
+        &fixture.event_bus,
+        fixture.storage.events().unwrap(),
+    )
+    .expect("recorder");
     let stop = aperture_runtime::Stop::new();
     let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
     stop.cancel();
@@ -795,7 +755,7 @@ async fn artifact_events_record_the_acting_user() {
     let (status, json) = get_json(&app, &token, "/api/v1/events").await;
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().expect("paged items");
-    let actor_id = actor.id.to_string();
+    let actor_id = actor_id.to_string();
     for expected in ["artifact.written", "artifact.removed"] {
         let event = items
             .iter()
@@ -1291,51 +1251,8 @@ async fn blob_404_when_digest_unknown() {
 /// Builds an app whose single API key carries `role`, with no pre-seeded
 /// artifacts. Used by the authorization tests.
 async fn app_with_role(role: Role) -> (Router, String) {
-    let root = env::temp_dir().join(format!(
-        "aperture-api-{}-{}",
-        process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new());
-
-    let mut registry = TaskRegistry::new();
-    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
-
-    let auth = aperture_auth::AuthHandle::new(storage.clone())
-        .await
-        .unwrap();
-
-    let spectra = Spectra::new(
-        artifacts.clone(),
-        tasks.clone(),
-        SpectraConfig::default(),
-        ActorId::SYSTEM,
-    );
-
-    let password = Password::generate();
-    let actor = auth
-        .create_user(&role.as_str().parse::<Username>().unwrap(), &password, None)
-        .await
-        .unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, role).await.unwrap();
-
-    let settings = test_settings(&storage, EventBus::new());
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        storage.clone(),
-        spectra,
-        tasks,
-        settings,
-        test_event_registry(),
-        auth,
-    );
-    (app(state), raw_key.as_str().to_owned())
+    let fixture = assemble_app(true, false, RecordedEvents::None, Some(role)).await;
+    (fixture.app, fixture.token.expect("role key"))
 }
 
 #[tokio::test]
@@ -1381,42 +1298,8 @@ fn test_password() -> String {
 /// Builds a fresh app with no pre-seeded data and returns it alongside the
 /// auth handle and storage so tests can create users and keys directly.
 async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
-    let root = env::temp_dir().join(format!(
-        "aperture-api-{}-{}",
-        process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root, EventBus::new());
-
-    let mut registry = TaskRegistry::new();
-    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
-
-    let auth = aperture_auth::AuthHandle::new(storage.clone())
-        .await
-        .unwrap();
-
-    let spectra = Spectra::new(
-        artifacts.clone(),
-        tasks.clone(),
-        SpectraConfig::default(),
-        ActorId::SYSTEM,
-    );
-
-    let settings = test_settings(&storage, EventBus::new());
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        storage.clone(),
-        spectra,
-        tasks,
-        settings,
-        test_event_registry(),
-        auth.clone(),
-    );
-    (app(state), auth, storage)
+    let fixture = assemble_app(true, false, RecordedEvents::None, None).await;
+    (fixture.app, fixture.auth, fixture.storage)
 }
 
 /// Creates a user and returns an API key carrying `role`.
