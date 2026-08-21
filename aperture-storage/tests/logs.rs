@@ -1,5 +1,6 @@
 use aperture_storage::{
     EventFilter, EventRecord, Level, ListQuery, SpanFilter, SpanParentFilter, SpanRecord, Storage,
+    StorageError,
 };
 use jiff::Timestamp;
 
@@ -365,6 +366,36 @@ async fn list_targets() {
         .unwrap();
     assert_eq!(filtered.items.len(), 1);
     assert_eq!(filtered.items[0], "aperture_http::error");
+}
+
+#[tokio::test]
+async fn rejects_cursor_from_another_listing() {
+    let storage = seeded_storage().await;
+    let logs = storage.logs().unwrap();
+
+    let page = logs
+        .list_events(
+            &EventFilter::default(),
+            &ListQuery {
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let cursor = page.next_cursor.expect("another page ahead");
+
+    let err = logs
+        .list_targets(
+            None,
+            &ListQuery {
+                cursor: Some(cursor),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StorageError::InvalidCursor(_)));
 }
 
 #[tokio::test]
