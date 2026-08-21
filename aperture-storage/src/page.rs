@@ -8,8 +8,8 @@
 //! sort field and direction do not change.
 //!
 //! Each cursor also stamps the tag of the listing that issued it, so a cursor
-//! replayed against a different listing is rejected instead of silently
-//! mis-paging.
+//! replayed against a different listing is rejected with an error instead of
+//! silently skipping or dropping rows.
 
 use aperture_runtime::RegistryQuery;
 pub use aperture_runtime::{Order, RegistryQuery as ListQuery};
