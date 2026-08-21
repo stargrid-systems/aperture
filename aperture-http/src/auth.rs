@@ -18,12 +18,19 @@ use crate::{AppState, OpenApiSpec};
 /// Name of the session cookie.
 pub const SESSION_COOKIE: &str = "aperture_session";
 
+/// API path prefixes that do not require authentication. Prefixes so the
+/// nested `/{key}` routes are covered too.
+const PUBLIC_API_PREFIXES: &[&str] = &["/api/v1/task-definitions", "/api/v1/setting-definitions"];
+
 /// Paths that do not require authentication.
 fn is_public_path(path: &str) -> bool {
     path == "/api/v1/auth/login"
         || path == "/api/v1/auth/setup"
         || path == "/api/v1/auth/setup-status"
         || path == "/api/openapi.json"
+        || PUBLIC_API_PREFIXES
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
         || !path.starts_with("/api/")
 }
 

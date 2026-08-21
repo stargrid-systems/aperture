@@ -376,6 +376,28 @@ async fn gets_setting_definition_schema() {
 }
 
 #[tokio::test]
+async fn serves_definition_routes_without_credentials() {
+    let (app, _artifacts, _storage, _token) = seeded_app().await;
+
+    for uri in [
+        "/api/v1/task-definitions",
+        "/api/v1/setting-definitions",
+        "/api/v1/task-definitions/download",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "GET {uri} without credentials"
+        );
+    }
+}
+
+#[tokio::test]
 async fn reads_recorded_tasks() {
     let (app, _artifacts, storage, token) = seeded_app().await;
     let repo = storage.tasks().unwrap();
