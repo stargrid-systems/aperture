@@ -80,7 +80,8 @@ const TABLES: &str = sql!(
         v4 TEXT NOT NULL,
         v5 TEXT NOT NULL
     ) STRICT;
-    CREATE INDEX idx_casbin_rule_ptype ON casbin_rule (ptype);
+    CREATE UNIQUE INDEX idx_casbin_rule_rule
+        ON casbin_rule (ptype, v0, v1, v2, v3, v4, v5);
 
     CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,

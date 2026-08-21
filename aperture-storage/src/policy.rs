@@ -246,7 +246,9 @@ impl PolicyRuleRepository {
         Ok(())
     }
 
-    /// Inserts multiple rules in a single transaction.
+    /// Inserts multiple rules in a single transaction, skipping rules that
+    /// already exist. The unique index over the full rule tuple makes repeats
+    /// no-ops, so the builtin policy sync can run on every boot.
     ///
     /// # Errors
     ///
@@ -259,7 +261,17 @@ impl PolicyRuleRepository {
             .await
             .map_err(StorageError::from_turso)?;
         for (ptype, values) in rules {
-            self.insert(*ptype, values).await?;
+            let params = padded_params(*ptype, values);
+            self.connection
+                .execute(
+                    sql!(
+                        INSERT OR IGNORE INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5)
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    ),
+                    params_from_iter(params),
+                )
+                .await
+                .map_err(StorageError::from_turso)?;
         }
         tx.commit().await.map_err(StorageError::from_turso)?;
         Ok(())
