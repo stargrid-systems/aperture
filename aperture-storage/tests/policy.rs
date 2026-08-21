@@ -31,6 +31,25 @@ async fn insert_skips_duplicate_rules() {
 }
 
 #[tokio::test]
+async fn insert_skips_duplicates_with_null_tails() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.policy().unwrap();
+    // A grouping rule has two values, so v2 through v5 are NULL.
+    let rule = ["actor:1".to_owned(), "viewer".to_owned()];
+
+    repo.insert(PolicyType::Grouping, &rule).await.unwrap();
+    repo.insert(PolicyType::Grouping, &rule).await.unwrap();
+    repo.insert_batch(&[(
+        PolicyType::Grouping,
+        vec!["actor:1".to_owned(), "viewer".to_owned()],
+    )])
+    .await
+    .unwrap();
+
+    assert_eq!(repo.count().await.unwrap(), 1);
+}
+
+#[tokio::test]
 async fn replace_all_swaps_the_full_rule_set() {
     let storage = Storage::open(":memory:").await.unwrap();
     let repo = storage.policy().unwrap();
@@ -61,12 +80,12 @@ async fn replace_all_swaps_the_full_rule_set() {
         aperture_storage::PolicyRule {
             ptype: PolicyType::Policy,
             values: vec![
-                "viewer".to_owned(),
-                "event".to_owned(),
-                "read".to_owned(),
-                String::new(),
-                String::new(),
-                String::new()
+                Some("viewer".to_owned()),
+                Some("event".to_owned()),
+                Some("read".to_owned()),
+                None,
+                None,
+                None
             ]
         }
     );
@@ -75,12 +94,12 @@ async fn replace_all_swaps_the_full_rule_set() {
         aperture_storage::PolicyRule {
             ptype: PolicyType::Grouping,
             values: vec![
-                "actor:1".to_owned(),
-                "viewer".to_owned(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new()
+                Some("actor:1".to_owned()),
+                Some("viewer".to_owned()),
+                None,
+                None,
+                None,
+                None
             ]
         }
     );

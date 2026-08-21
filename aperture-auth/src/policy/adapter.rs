@@ -25,7 +25,7 @@ impl Adapter for TursoAdapter {
         let rules = self.repo.load_all().await.map_err(map_storage_err)?;
         for rule in rules {
             let ptype = rule.ptype.as_db();
-            m.add_policy(ptype, ptype, trim_trailing_empty(rule.values));
+            m.add_policy(ptype, ptype, leading_values(rule.values));
         }
         Ok(())
     }
@@ -143,36 +143,46 @@ pub(super) fn map_storage_err(err: aperture_storage::StorageError) -> casbin::Er
     casbin::Error::AdapterError(AdapterError(Box::new(err)))
 }
 
-/// Drops trailing empty values so a rule reaches the model with its real
-/// arity. Rows are padded to six columns in storage, but the model rejects
-/// rules wider than its token count. Interior empty values are kept.
-fn trim_trailing_empty(mut values: Vec<String>) -> Vec<String> {
-    while values.last().is_some_and(String::is_empty) {
-        values.pop();
-    }
+/// Takes the leading present values as the rule.
+///
+/// Rows are always written with only trailing NULLs, so the leading `Some`
+/// prefix is the rule. A legitimate empty-string token survives as
+/// `Some("")` and is never dropped.
+fn leading_values(values: Vec<Option<String>>) -> Vec<String> {
     values
+        .into_iter()
+        .take_while(Option::is_some)
+        .map(Option::unwrap)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::trim_trailing_empty;
+    use super::leading_values;
 
     #[test]
-    fn trims_only_trailing_empty_values() {
-        assert_eq!(trim_trailing_empty(vec![]), Vec::<String>::new());
+    fn takes_only_leading_present_values() {
+        let values = |parts: &[Option<&str>]| {
+            parts
+                .iter()
+                .map(|part| part.map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(leading_values(vec![]), Vec::<String>::new());
         assert_eq!(
-            trim_trailing_empty(vec!["a".to_owned(), "b".to_owned(), String::new()]),
+            leading_values(values(&[Some("a"), Some("b"), None, None])),
             vec!["a".to_owned(), "b".to_owned()]
         );
+        // An empty-string token is a real value, not absence.
         assert_eq!(
-            trim_trailing_empty(vec![
-                "a".to_owned(),
-                String::new(),
-                "b".to_owned(),
-                String::new(),
-                String::new()
-            ]),
-            vec!["a".to_owned(), String::new(), "b".to_owned()]
+            leading_values(values(&[Some("a"), Some(""), None])),
+            vec!["a".to_owned(), String::new()]
+        );
+        // A Some after a None cannot occur through the insert paths, but the
+        // leading prefix still wins.
+        assert_eq!(
+            leading_values(values(&[Some("a"), None, Some("b")])),
+            vec!["a".to_owned()]
         );
     }
 }

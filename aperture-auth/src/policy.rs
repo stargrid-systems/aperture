@@ -341,6 +341,48 @@ mod tests {
         );
     }
 
+    /// A rule whose last real token is an empty string must survive a reload
+    /// with the empty string and its arity intact.
+    ///
+    /// Empty used to be indistinguishable from the storage layer's "" padding
+    /// and was trimmed on load, silently changing the rule.
+    #[tokio::test]
+    async fn empty_string_token_survives_reload() {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let rule = vec![
+            "special".to_owned(),
+            Object::Task.as_str().to_owned(),
+            String::new(),
+        ];
+        {
+            let mut e = create_enforcer(&storage).await.unwrap();
+            sync_builtin_policies(&mut e).await.unwrap();
+            casbin::MgmtApi::add_policy(&mut e, rule.clone())
+                .await
+                .unwrap();
+        }
+
+        // The stored row keeps the empty string as a real value.
+        let stored = storage.policy().unwrap().load_all().await.unwrap();
+        let expected = [
+            Some("special".to_owned()),
+            Some(Object::Task.as_str().to_owned()),
+            Some(String::new()),
+            None,
+            None,
+            None,
+        ];
+        assert!(
+            stored
+                .iter()
+                .any(|rule| rule.values == expected && rule.ptype == PolicyType::Policy)
+        );
+
+        let e = create_enforcer(&storage).await.unwrap();
+        let policies = e.get_model().get_policy("p", "p");
+        assert!(policies.contains(&rule), "rule must reload with arity 3");
+    }
+
     /// The sync only adds p rules. Custom g rules (role assignments) must
     /// survive it unchanged.
     #[tokio::test]
@@ -355,7 +397,7 @@ mod tests {
         e.add_role_for_user("actor:4", Role::Operator.as_str(), None)
             .await
             .unwrap();
-        let before: HashSet<Vec<String>> = repo
+        let before: HashSet<Vec<Option<String>>> = repo
             .load_all()
             .await
             .unwrap()
@@ -366,7 +408,7 @@ mod tests {
 
         sync_builtin_policies(&mut e).await.unwrap();
 
-        let after: HashSet<Vec<String>> = repo
+        let after: HashSet<Vec<Option<String>>> = repo
             .load_all()
             .await
             .unwrap()

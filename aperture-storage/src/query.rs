@@ -42,6 +42,15 @@ impl Filters {
         let _ = write!(self.sql, "{column} = ?{}", self.params.len());
     }
 
+    /// Adds `column IS ?` bound to `value`. The null-safe form of
+    /// [`eq_text`](Self::eq_text), for nullable columns where NULL must
+    /// compare equal to NULL.
+    pub(crate) fn is_text(&mut self, column: &str, value: &str) {
+        self.params.push(Value::Text(value.to_owned()));
+        self.separator();
+        let _ = write!(self.sql, "{column} IS ?{}", self.params.len());
+    }
+
     /// Like [`eq_text`](Self::eq_text), but skips the condition when `None`.
     pub(crate) fn eq_text_opt(&mut self, column: &str, value: Option<&str>) {
         if let Some(value) = value {
