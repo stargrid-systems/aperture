@@ -372,12 +372,9 @@ mod tests {
         // The stored row keeps the empty string as a real value.
         let stored = storage.policy().unwrap().load_all().await.unwrap();
         let expected = [
-            Some("special".to_owned()),
-            Some(Object::Task.as_str().to_owned()),
-            Some(String::new()),
-            None,
-            None,
-            None,
+            "special".to_owned(),
+            Object::Task.as_str().to_owned(),
+            String::new(),
         ];
         assert!(
             stored
@@ -405,7 +402,7 @@ mod tests {
         e.add_role_for_user("actor:4", Role::Operator.as_str(), None)
             .await
             .unwrap();
-        let before: HashSet<Vec<Option<String>>> = repo
+        let before: HashSet<Vec<String>> = repo
             .load_all()
             .await
             .unwrap()
@@ -416,7 +413,7 @@ mod tests {
 
         sync_builtin_policies(&mut e).await.unwrap();
 
-        let after: HashSet<Vec<Option<String>>> = repo
+        let after: HashSet<Vec<String>> = repo
             .load_all()
             .await
             .unwrap()

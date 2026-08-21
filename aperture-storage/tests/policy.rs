@@ -79,28 +79,14 @@ async fn replace_all_swaps_the_full_rule_set() {
         rules[0],
         aperture_storage::PolicyRule {
             ptype: PolicyType::Policy,
-            values: vec![
-                Some("viewer".to_owned()),
-                Some("event".to_owned()),
-                Some("read".to_owned()),
-                None,
-                None,
-                None
-            ]
+            values: vec!["viewer".to_owned(), "event".to_owned(), "read".to_owned()],
         }
     );
     assert_eq!(
         rules[1],
         aperture_storage::PolicyRule {
             ptype: PolicyType::Grouping,
-            values: vec![
-                Some("actor:1".to_owned()),
-                Some("viewer".to_owned()),
-                None,
-                None,
-                None,
-                None
-            ]
+            values: vec!["actor:1".to_owned(), "viewer".to_owned()],
         }
     );
 }

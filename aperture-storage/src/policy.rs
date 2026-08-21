@@ -3,6 +3,10 @@
 //! The `casbin_rule` table holds casbin's standard `(ptype, v0..v5)` row
 //! format. This repository provides the CRUD operations the casbin adapter
 //! needs, without coupling the storage layer to casbin itself.
+//!
+//! Rules rarely use all six value columns, so a row encodes the rule's arity
+//! as trailing NULLs. This module owns that encoding: it pads on write and
+//! resolves it on read, so callers only ever see the real values.
 
 use std::fmt;
 use std::str::FromStr;
@@ -73,15 +77,18 @@ impl ToSql for PolicyType {
 }
 
 /// One policy or grouping rule, in casbin's flat string format.
+///
+/// The length of [`values`](Self::values) is the rule's arity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyRule {
     /// Whether this is a policy or grouping rule.
     pub ptype: PolicyType,
-    /// The rule values (v0 through v5).
+    /// The rule values, whose length is the rule's arity.
     ///
-    /// Absent trailing values are `None`, so callers see the rule's arity
-    /// faithfully.
-    pub values: Vec<Option<String>>,
+    /// Storage encodes arity on disk as trailing NULLs across the fixed
+    /// v0..v5 columns and resolves it at this boundary, so callers never
+    /// see the padding.
+    pub values: Vec<String>,
 }
 
 /// Repository over the `casbin_rule` table.
@@ -113,9 +120,16 @@ impl PolicyRuleRepository {
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             let ptype: String = get(&row, 0)?;
             let ptype = PolicyType::from_db(&ptype)?;
+            // A row encodes arity as trailing NULLs, so the values end at
+            // the first NULL. Stopping there rather than stripping empty
+            // strings keeps a real empty token and guards against a stray
+            // intermediary NULL, which the write paths never produce.
             let mut values = Vec::with_capacity(6);
             for i in 1..=6 {
-                values.push(get::<Option<String>>(&row, i)?);
+                match get::<Option<String>>(&row, i)? {
+                    Some(value) => values.push(value),
+                    None => break,
+                }
             }
             rules.push(PolicyRule { ptype, values });
         }
@@ -124,8 +138,9 @@ impl PolicyRuleRepository {
 
     /// Inserts a single rule unless an identical one exists.
     ///
-    /// Absent trailing values are stored as NULL. The casbin adapter relies
-    /// on duplicates being skipped for its single-rule add path.
+    /// The values are padded with NULLs across v0..v5 to encode the rule's
+    /// arity. The casbin adapter relies on duplicates being skipped for its
+    /// single-rule add path.
     ///
     /// # Errors
     ///
@@ -307,11 +322,63 @@ impl PolicyRuleRepository {
     }
 }
 
-/// Binds one rule's columns. Absent trailing values become NULL.
+/// Binds one rule's columns, padding absent trailing values with NULLs.
 fn rule_params(ptype: PolicyType, values: &[String]) -> Vec<Value> {
     let mut params: Vec<Value> = vec![ptype.to_sql()];
     for i in 0..6 {
         params.push(values.get(i).map_or(Value::Null, ToSql::to_sql));
     }
     params
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Storage;
+
+    /// Pins the on-disk contract: a rule's arity lives in trailing NULLs.
+    #[tokio::test]
+    async fn pads_absent_trailing_values_with_nulls() {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let repo = storage.policy().unwrap();
+        repo.insert(
+            PolicyType::Grouping,
+            &["actor:7".to_owned(), "viewer".to_owned()],
+        )
+        .await
+        .unwrap();
+
+        let conn = storage.connect().unwrap();
+        let mut rows = conn
+            .query(sql!(SELECT v0, v1, v2, v3, v4, v5 FROM casbin_rule), ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("one row");
+        assert_eq!(row.get_value(0).unwrap(), Value::Text("actor:7".to_owned()));
+        assert_eq!(row.get_value(1).unwrap(), Value::Text("viewer".to_owned()));
+        for i in 2..=5 {
+            assert_eq!(row.get_value(i).unwrap(), Value::Null);
+        }
+    }
+
+    /// An empty-string token is a real value and must never become NULL.
+    #[tokio::test]
+    async fn keeps_empty_string_tokens_as_text() {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let repo = storage.policy().unwrap();
+        repo.insert(
+            PolicyType::Policy,
+            &["special".to_owned(), "task".to_owned(), String::new()],
+        )
+        .await
+        .unwrap();
+
+        let conn = storage.connect().unwrap();
+        let mut rows = conn
+            .query(sql!(SELECT v2 FROM casbin_rule), ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("one row");
+        assert_eq!(row.get_value(0).unwrap(), Value::Text(String::new()));
+    }
 }

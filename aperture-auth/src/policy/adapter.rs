@@ -25,7 +25,7 @@ impl Adapter for TursoAdapter {
         let rules = self.repo.load_all().await.map_err(map_storage_err)?;
         for rule in rules {
             let ptype = rule.ptype.as_db();
-            m.add_policy(ptype, ptype, leading_values(rule.values));
+            m.add_policy(ptype, ptype, rule.values);
         }
         Ok(())
     }
@@ -141,48 +141,4 @@ impl Adapter for TursoAdapter {
 /// Converts a storage error into a casbin error.
 pub(super) fn map_storage_err(err: aperture_storage::StorageError) -> casbin::Error {
     casbin::Error::AdapterError(AdapterError(Box::new(err)))
-}
-
-/// Takes the leading present values as the rule.
-///
-/// Rows are always written with only trailing NULLs, so the leading `Some`
-/// prefix is the rule. A legitimate empty-string token survives as
-/// `Some("")` and is never dropped.
-fn leading_values(values: Vec<Option<String>>) -> Vec<String> {
-    values
-        .into_iter()
-        .take_while(Option::is_some)
-        .map(Option::unwrap)
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::leading_values;
-
-    #[test]
-    fn takes_only_leading_present_values() {
-        let values = |parts: &[Option<&str>]| {
-            parts
-                .iter()
-                .map(|part| part.map(str::to_owned))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(leading_values(vec![]), Vec::<String>::new());
-        assert_eq!(
-            leading_values(values(&[Some("a"), Some("b"), None, None])),
-            vec!["a".to_owned(), "b".to_owned()]
-        );
-        // An empty-string token is a real value, not absence.
-        assert_eq!(
-            leading_values(values(&[Some("a"), Some(""), None])),
-            vec!["a".to_owned(), String::new()]
-        );
-        // A Some after a None cannot occur through the insert paths, but the
-        // leading prefix still wins.
-        assert_eq!(
-            leading_values(values(&[Some("a"), None, Some("b")])),
-            vec!["a".to_owned()]
-        );
-    }
 }
