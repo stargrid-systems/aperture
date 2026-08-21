@@ -174,10 +174,11 @@ pub async fn create_enforcer(storage: &Storage) -> casbin::Result<Enforcer> {
     Ok(e)
 }
 
-/// Adds the built-in role and permission grants that are missing from the
-/// enforcer. Runs on every boot so databases seeded by older builds receive
-/// grants introduced since, and so an interrupted first boot self-heals on
-/// the next start. Existing rows are never modified or removed.
+/// Adds the built-in role and permission grants that are missing.
+///
+/// Runs on every boot so databases seeded by older builds receive grants
+/// introduced since, and so an interrupted first boot self-heals on the next
+/// start. Existing rows are never modified or removed.
 ///
 /// Admin is the superuser (`*:*`). Operator and viewer get explicit per-object
 /// grants rather than wildcards, so adding a new object never silently becomes
@@ -238,9 +239,11 @@ mod tests {
 
     use super::*;
 
-    /// Simulates a restart: seed one enforcer, drop it, then load a second
-    /// enforcer over the same storage. The persisted rules must keep their
-    /// real arity so enforcement and role assignments still work.
+    /// Simulates a restart.
+    ///
+    /// Seeds one enforcer, drops it, then loads a second enforcer over the
+    /// same storage. The persisted rules must keep their real arity so
+    /// enforcement and role assignments still work.
     #[tokio::test]
     async fn seeded_policies_survive_reload() {
         let storage = Storage::open(":memory:").await.unwrap();
@@ -269,8 +272,10 @@ mod tests {
         assert!(e.has_role_for_user("actor:7", Role::Viewer.as_str(), None));
     }
 
-    /// Syncing on every boot must not duplicate rows: two syncs over the same
-    /// storage leave the row count stable and enforcement working.
+    /// Syncing on every boot must not duplicate rows.
+    ///
+    /// Two syncs over the same storage leave the row count stable and
+    /// enforcement working.
     #[tokio::test]
     async fn repeated_sync_does_not_duplicate_rules() {
         let storage = Storage::open(":memory:").await.unwrap();
@@ -295,6 +300,8 @@ mod tests {
         );
     }
 
+    /// Backfills grants missing from a partially seeded table.
+    ///
     /// A table seeded by an older build (or an interrupted first boot) holds
     /// only part of the built-in grants. The next sync must add the missing
     /// grants so they are enforced right away.
@@ -383,8 +390,9 @@ mod tests {
         assert!(policies.contains(&rule), "rule must reload with arity 3");
     }
 
-    /// The sync only adds p rules. Custom g rules (role assignments) must
-    /// survive it unchanged.
+    /// The sync only adds p rules.
+    ///
+    /// Custom g rules (role assignments) must survive it unchanged.
     #[tokio::test]
     async fn sync_leaves_grouping_rules_alone() {
         let storage = Storage::open(":memory:").await.unwrap();

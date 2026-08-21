@@ -194,7 +194,7 @@ impl PolicyRuleRepository {
             if col_idx >= cols.len() {
                 break;
             }
-            // Only v0 and v1 are NOT NULL, the rest compare null-safely.
+            // Only v0 and v1 are NOT NULL, so the rest compare null-safely.
             if col_idx < 2 {
                 filters.eq_text(cols[col_idx], value);
             } else {

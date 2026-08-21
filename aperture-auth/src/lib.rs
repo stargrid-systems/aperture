@@ -100,8 +100,10 @@ pub struct AuthHandle {
 }
 
 impl AuthHandle {
-    /// Creates the auth handle: builds the enforcer, loads existing policies,
-    /// and syncs the built-in role and permission grants.
+    /// Creates the auth handle.
+    ///
+    /// Builds the enforcer, loads existing policies, and syncs the built-in
+    /// role and permission grants.
     ///
     /// # Errors
     ///
