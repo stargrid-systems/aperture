@@ -25,7 +25,7 @@ required-features = ["constellation", "planets", "thumbs"]
 # Byte-parity oracle: the upstream renderer, exercised against the upstream
 # style data. Exact pins: parity against a moving target is meaningless.
 dicebear-core = "=10.5.0"
-dicebear-styles = { version = "=10.4.0", features = ["constellation", "planets", "thumbs"] }
+dicebear-styles = { version = "=10.6.0", features = ["constellation", "planets", "thumbs"] }
 serde_json = "=1.0.151"
 
 [lints]

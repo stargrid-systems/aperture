@@ -1347,9 +1347,9 @@ checksum = "36b01d84059a5a32c90c4d942644d27a65661fd937c57bc70228090db0ec5579"
 
 [[package]]
 name = "dicebear-styles"
-version = "10.4.0"
+version = "10.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fda81aae7ff9af70c18bd67d1983a649ffa9d98f6c086b9ec9fd3466524a8c0"
+checksum = "db4dc8a6f047810b9e9160b236753550d71cb1560413b1ef14777db2254d1c79"
 
 [[package]]
 name = "digest"
