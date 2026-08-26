@@ -1318,9 +1318,9 @@ dependencies = [
 
 [[package]]
 name = "dicebear-core"
-version = "10.5.0"
+version = "10.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff6ed196464c1a92ebe22148729cecc73e6cc64e9d26ceba6346524a2b22032d"
+checksum = "2b4b95444a67d474a91052cace217b98d478a869e22a867b40d18543c9c05c13"
 dependencies = [
  "dicebear-schema",
  "indexmap",
