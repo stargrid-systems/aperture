@@ -33,7 +33,7 @@ dicebear-lite = { version = "0.1.0", path = "dicebear-lite" }
 
 anyhow = { version = "1", default-features = false }
 arc-swap = { version = "1", default-features = false }
-argon2 = { version = "0.5", default-features = false }
+argon2 = { version = "0.6", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 axum = { version = "0.8", default-features = false }
 backhand = { version = "0.25", default-features = false }
