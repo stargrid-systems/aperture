@@ -1,6 +1,5 @@
-use aperture_auth::{
-    Action, AuthenticatedActor, Object, Password, Role, Username, required_permission,
-};
+use aperture_auth::authz::{self, Permission, Role, Subject};
+use aperture_auth::{AuthenticatedActor, Password, Username};
 use aperture_storage::{ActorId, UserId};
 use axum::Json;
 use axum::body::Body;
@@ -13,6 +12,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::auth::Require;
 use crate::avatar::{AvatarAnimation, AvatarStyle};
 use crate::conditional::Etag;
 use crate::dto::{Page, SimpleListParams};
@@ -61,19 +61,15 @@ pub struct CreateUserRequest {
     get,
     path = "",
     operation_id = operation_ids::LIST_USERS,
-    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::user::Read::PERMISSION))),
     params(SimpleListParams),
     responses((status = 200, description = "Users", body = Page<UserResponse>)),
 )]
 async fn list_users(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::user::Read>,
     State(state): State<AppState>,
     Query(params): Query<SimpleListParams>,
 ) -> Result<Json<Page<UserResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::User, Action::Read)
-        .await?;
     let page = state.auth().list_users(&params.to_query()).await?;
     Ok(Json(Page::from_storage(page, UserResponse::from)))
 }
@@ -83,7 +79,7 @@ async fn list_users(
     post,
     path = "",
     operation_id = operation_ids::CREATE_USER,
-    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Create)))),
+    extensions(("x-required-permission" = json!(authz::user::Create::PERMISSION))),
     request_body = CreateUserRequest,
     responses(
         (status = 201, description = "User created", body = UserResponse),
@@ -91,25 +87,23 @@ async fn list_users(
     ),
 )]
 async fn create_user(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::user::Create>,
     State(state): State<AppState>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::User, Action::Create)
-        .await?;
     let actor = state
         .auth()
         .create_user(&request.username, &request.password, None)
         .await?;
-    if let Some(role) = &request.role {
-        let subject = aperture_auth::actor_subject(actor.id);
-        if let Err(err) = state.auth().assign_role(&subject, *role).await {
-            let now = jiff::Timestamp::now();
-            let _ = state.storage().actors()?.disable(actor.id, now).await;
-            return Err(err.into());
-        }
+    if let Some(role) = &request.role
+        && let Err(err) = state
+            .auth()
+            .assign_role(Subject::Actor(actor.id), *role)
+            .await
+    {
+        let now = jiff::Timestamp::now();
+        let _ = state.storage().actors()?.disable(actor.id, now).await;
+        return Err(err.into());
     }
     let user = state
         .storage()
@@ -125,7 +119,7 @@ async fn create_user(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_USER,
-    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::user::Read::PERMISSION))),
     params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 200, description = "User", body = UserResponse),
@@ -133,14 +127,10 @@ async fn create_user(
     ),
 )]
 async fn get_user(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::user::Read>,
     State(state): State<AppState>,
     Path(id): Path<UserId>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::User, Action::Read)
-        .await?;
     let user = state
         .storage()
         .users()?
@@ -155,7 +145,7 @@ async fn get_user(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_USER,
-    extensions(("x-required-permission" = json!(required_permission(Object::User, Action::Delete)))),
+    extensions(("x-required-permission" = json!(authz::user::Delete::PERMISSION))),
     params(("id" = UserId, Path, description = "User id")),
     responses(
         (status = 204, description = "User deleted"),
@@ -164,13 +154,10 @@ async fn get_user(
 )]
 async fn delete_user(
     auth: AuthenticatedActor,
+    Require(_permit): Require<authz::user::Delete>,
     State(state): State<AppState>,
     Path(id): Path<UserId>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::User, Action::Delete)
-        .await?;
     let user = state
         .storage()
         .users()?

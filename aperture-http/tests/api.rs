@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::{env, fs, process, str};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
-use aperture_auth::{Password, Role, Username};
+use aperture_auth::authz::{Role, Subject};
+use aperture_auth::{Password, Username};
 use aperture_http::{
     AppState, AvatarAnimation, AvatarStyle, PublicPaths, Spectra, SpectraConfig, app,
 };
@@ -90,8 +91,9 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         .await
         .unwrap();
     let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, Role::Admin).await.unwrap();
+    auth.assign_role(Subject::ApiKey(api_key.id), Role::Admin)
+        .await
+        .unwrap();
 
     let settings = test_settings(&storage);
     let state = AppState::new(
@@ -907,8 +909,9 @@ async fn app_with_role(role: Role) -> (Router, String) {
         .await
         .unwrap();
     let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
-    let subject = aperture_auth::apikey_subject(api_key.id);
-    auth.assign_role(&subject, role).await.unwrap();
+    auth.assign_role(Subject::ApiKey(api_key.id), role)
+        .await
+        .unwrap();
 
     let settings = test_settings(&storage);
     let state = AppState::new(
@@ -1042,7 +1045,7 @@ async fn key_for_role(
         .await
         .unwrap();
     let (raw, api_key) = auth.create_api_key(actor.id, "k").await.unwrap();
-    auth.assign_role(&aperture_auth::apikey_subject(api_key.id), role)
+    auth.assign_role(Subject::ApiKey(api_key.id), role)
         .await
         .unwrap();
     (actor.id, raw.as_str().to_owned())
@@ -1451,7 +1454,7 @@ async fn current_actor_returns_identity_and_role() {
         .create_user(&"carol".parse().unwrap(), &Password::new(pw.clone()), None)
         .await
         .unwrap();
-    auth.assign_role(&aperture_auth::actor_subject(actor.id), Role::Admin)
+    auth.assign_role(Subject::Actor(actor.id), Role::Admin)
         .await
         .unwrap();
     let carol_id = storage

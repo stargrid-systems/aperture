@@ -1,4 +1,4 @@
-use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
+use aperture_auth::authz::{self, Permission};
 use aperture_storage::TaskScheduleId;
 use aperture_tasks::NewTaskSchedule;
 use axum::Json;
@@ -10,6 +10,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::auth::Require;
 use crate::dto::{
     CreateTaskScheduleRequest, Page, TaskScheduleListParams, TaskScheduleResponse,
     UpdateTaskScheduleRequest,
@@ -31,19 +32,15 @@ pub fn router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_TASK_SCHEDULES,
-    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::task_schedule::Read::PERMISSION))),
     params(TaskScheduleListParams),
     responses((status = 200, description = "Task schedules", body = Page<TaskScheduleResponse>)),
 )]
 async fn list_task_schedules(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task_schedule::Read>,
     State(state): State<AppState>,
     Query(params): Query<TaskScheduleListParams>,
 ) -> Result<Json<Page<TaskScheduleResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::TaskSchedule, Action::Read)
-        .await?;
     let repo = state.storage().task_schedules()?;
     let page = repo.list(&params.to_query()).await?;
     Ok(Json(TaskScheduleResponse::page(page)))
@@ -54,7 +51,7 @@ async fn list_task_schedules(
     post,
     path = "",
     operation_id = operation_ids::CREATE_TASK_SCHEDULE,
-    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Create)))),
+    extensions(("x-required-permission" = json!(authz::task_schedule::Create::PERMISSION))),
     request_body = CreateTaskScheduleRequest,
     responses(
         (status = 201, description = "Task schedule created", body = TaskScheduleResponse),
@@ -62,14 +59,10 @@ async fn list_task_schedules(
     ),
 )]
 async fn create_task_schedule(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task_schedule::Create>,
     State(state): State<AppState>,
     Json(request): Json<CreateTaskScheduleRequest>,
 ) -> Result<(StatusCode, Json<TaskScheduleResponse>), ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::TaskSchedule, Action::Create)
-        .await?;
     let now = Timestamp::now();
     let repo = state.storage().task_schedules()?;
     let id = repo
@@ -90,7 +83,7 @@ async fn create_task_schedule(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK_SCHEDULE,
-    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::task_schedule::Read::PERMISSION))),
     params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     responses(
         (status = 200, description = "Task schedule", body = TaskScheduleResponse),
@@ -98,14 +91,10 @@ async fn create_task_schedule(
     ),
 )]
 async fn get_task_schedule(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task_schedule::Read>,
     State(state): State<AppState>,
     Path(id): Path<TaskScheduleId>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::TaskSchedule, Action::Read)
-        .await?;
     let schedule = state
         .storage()
         .task_schedules()?
@@ -120,7 +109,7 @@ async fn get_task_schedule(
     patch,
     path = "/{id}",
     operation_id = operation_ids::UPDATE_TASK_SCHEDULE,
-    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Update)))),
+    extensions(("x-required-permission" = json!(authz::task_schedule::Update::PERMISSION))),
     params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     request_body = UpdateTaskScheduleRequest,
     responses(
@@ -129,15 +118,11 @@ async fn get_task_schedule(
     ),
 )]
 async fn update_task_schedule(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task_schedule::Update>,
     State(state): State<AppState>,
     Path(id): Path<TaskScheduleId>,
     Json(request): Json<UpdateTaskScheduleRequest>,
 ) -> Result<Json<TaskScheduleResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::TaskSchedule, Action::Update)
-        .await?;
     let schedule = state
         .storage()
         .task_schedules()?
@@ -152,7 +137,7 @@ async fn update_task_schedule(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_TASK_SCHEDULE,
-    extensions(("x-required-permission" = json!(required_permission(Object::TaskSchedule, Action::Delete)))),
+    extensions(("x-required-permission" = json!(authz::task_schedule::Delete::PERMISSION))),
     params(("id" = TaskScheduleId, Path, description = "Task schedule id")),
     responses(
         (status = 204, description = "Task schedule deleted"),
@@ -160,14 +145,10 @@ async fn update_task_schedule(
     ),
 )]
 async fn delete_task_schedule(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task_schedule::Delete>,
     State(state): State<AppState>,
     Path(id): Path<TaskScheduleId>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::TaskSchedule, Action::Delete)
-        .await?;
     let removed = state.storage().task_schedules()?.delete(id).await?;
     if removed {
         Ok(StatusCode::NO_CONTENT)

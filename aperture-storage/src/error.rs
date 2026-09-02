@@ -37,9 +37,9 @@ pub enum StorageError {
     #[error("unknown actor kind {0:?}")]
     UnknownActorKind(String),
 
-    /// The database stored an unknown policy type string.
-    #[error("unknown policy type {0:?}")]
-    UnknownPolicyType(String),
+    /// The database stored an unknown subject kind string.
+    #[error("unknown subject kind {0:?}")]
+    UnknownSubjectKind(String),
 
     /// A cursor string from the client could not be decoded.
     #[error("invalid cursor: {0}")]

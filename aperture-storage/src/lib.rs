@@ -24,7 +24,7 @@ pub use self::log::{
 };
 pub use self::media_type::{InvalidMediaType, MediaType};
 pub use self::page::{Cursor, CursorValue, ListQuery, Listing, Order, Page, Paginator};
-pub use self::policy::{PolicyRule, PolicyRuleRepository, PolicyType};
+pub use self::role::{RoleAssignment, RoleAssignmentRepository, SubjectKind};
 pub use self::secret::{ApiKeyHash, PasswordHash, TokenHash};
 pub use self::session::{Session, SessionId, SessionRepository};
 pub use self::setting::{SettingRecord, SettingRepository};
@@ -51,8 +51,8 @@ mod macros;
 mod media_type;
 mod migration;
 mod page;
-mod policy;
 mod query;
+mod role;
 mod secret;
 mod serde_util;
 mod session;
@@ -193,13 +193,13 @@ impl Storage {
         Ok(ApiKeyRepository::new(self.connect()?))
     }
 
-    /// Returns the repository over the policy rules table.
+    /// Returns the repository over the role assignment table.
     ///
     /// # Errors
     ///
     /// Returns `StorageError::Database` if a new connection cannot be opened.
-    pub fn policy(&self) -> Result<PolicyRuleRepository> {
-        Ok(PolicyRuleRepository::new(self.connect()?))
+    pub fn role_assignments(&self) -> Result<RoleAssignmentRepository> {
+        Ok(RoleAssignmentRepository::new(self.connect()?))
     }
 
     /// Creates a user actor and user record in one transaction. If the user

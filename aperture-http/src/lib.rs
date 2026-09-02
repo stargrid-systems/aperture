@@ -161,6 +161,7 @@ pub fn app(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
+    use aperture_auth::authz::{self, Permission};
     use serde_json::Value;
 
     use super::*;
@@ -202,6 +203,33 @@ mod tests {
     #[test]
     fn spec_documents_permissions_per_operation() {
         let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+
+        // Every permission marker's `object:action` string. The annotation
+        // values come from the same marker types the Require extractor
+        // enforces, so membership here pins spec coverage to the PDP
+        // vocabulary.
+        let all_permissions = [
+            authz::artifact::Read::PERMISSION,
+            authz::artifact::Download::PERMISSION,
+            authz::artifact::Write::PERMISSION,
+            authz::artifact::Evict::PERMISSION,
+            authz::task::Read::PERMISSION,
+            authz::task::Create::PERMISSION,
+            authz::task::Cancel::PERMISSION,
+            authz::task_schedule::Read::PERMISSION,
+            authz::task_schedule::Create::PERMISSION,
+            authz::task_schedule::Update::PERMISSION,
+            authz::task_schedule::Delete::PERMISSION,
+            authz::log::Read::PERMISSION,
+            authz::user::Read::PERMISSION,
+            authz::user::Create::PERMISSION,
+            authz::user::Delete::PERMISSION,
+            authz::api_key::Create::PERMISSION,
+            authz::api_key::Delete::PERMISSION,
+            authz::setting::Read::PERMISSION,
+            authz::setting::Update::PERMISSION,
+        ];
+
         for (_, item) in spec["paths"].as_object().expect("paths") {
             for method in ["get", "post", "put", "patch", "delete"] {
                 let Some(op) = item.get(method) else {
@@ -212,22 +240,17 @@ mod tests {
 
                 // Looked up by the shared constant, so every annotation
                 // literal is pinned to it: a different name fails coverage.
-                let Some(permission) = op.get(aperture_auth::REQUIRED_PERMISSION_EXTENSION) else {
+                let Some(permission) = op.get(authz::REQUIRED_PERMISSION_EXTENSION) else {
                     assert!(
                         is_public || SESSION_ONLY.contains(&op_id.as_str()),
                         "{op_id} documents no required permission"
                     );
                     continue;
                 };
-                // The values come from Object and Action through
-                // required_permission, so the compiler already guarantees the
-                // vocabulary. Only the object:action shape needs checking.
+                let permission = permission.as_str().expect("permission is a string");
                 assert!(
-                    permission
-                        .as_str()
-                        .and_then(|perm| perm.split_once(':'))
-                        .is_some_and(|(object, action)| !object.is_empty() && !action.is_empty()),
-                    "{op_id} permission is not object:action: {permission}"
+                    all_permissions.contains(&permission),
+                    "{op_id} documents unknown permission {permission}"
                 );
             }
         }

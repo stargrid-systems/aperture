@@ -70,18 +70,12 @@ const TABLES: &str = sql!(
     CREATE INDEX idx_sessions_actor ON sessions (actor_id);
     CREATE INDEX idx_sessions_expires ON sessions (expires_at);
 
-    // v0 and v1 stay NOT NULL: every rule kind in the model (p, g) carries at least two values.
-    CREATE TABLE casbin_rule (
-        id INTEGER PRIMARY KEY,
-        ptype TEXT NOT NULL,
-        v0 TEXT NOT NULL,
-        v1 TEXT NOT NULL,
-        v2 TEXT,
-        v3 TEXT,
-        v4 TEXT,
-        v5 TEXT
+    CREATE TABLE role_assignment (
+        subject_kind TEXT NOT NULL,
+        subject_id INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        PRIMARY KEY (subject_kind, subject_id, role)
     ) STRICT;
-    CREATE INDEX idx_casbin_rule_ptype ON casbin_rule (ptype);
 
     CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,

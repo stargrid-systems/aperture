@@ -78,7 +78,8 @@ pub async fn serve(
 
     artifacts.sync().await?;
 
-    // Auth: build enforcer and seed default policies.
+    // Auth: permission grants live in code, so the handle only rebuilds the
+    // role index from storage.
     let auth = AuthHandle::new(storage.clone()).await?;
 
     let mut registry = TaskRegistry::new();
