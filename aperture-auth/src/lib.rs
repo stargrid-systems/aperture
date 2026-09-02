@@ -480,13 +480,17 @@ impl AuthHandle {
             return Err(AuthError::CannotDeleteSelf);
         }
 
-        // Check last-admin before any mutation. The self-delete guard above
-        // ensures this check can never see zero other admins in practice
-        // (the caller is always an admin and always counts as "other").
-        // This is defense-in-depth for future permission model changes.
+        // Check last-admin and mutate under one write lock. The check and the
+        // removal must be atomic: with separate locks, two admins deleting
+        // each other concurrently could both pass the check and leave the
+        // system with zero admins, which re-arms public setup.
+        // The self-delete guard above ensures the check can never see zero
+        // other admins in practice (the caller is always an admin and always
+        // counts as "other"). This is defense-in-depth for future permission
+        // model changes.
         let target = Subject::Actor(actor_id);
         {
-            let index = self.roles.read().await;
+            let mut index = self.roles.write().await;
             let other_admins = index
                 .iter()
                 .filter(|(subject, _)| **subject != target)
@@ -495,22 +499,19 @@ impl AuthHandle {
             if other_admins == 0 {
                 return Err(AuthError::LastAdmin);
             }
-        }
 
-        // Disable the actor first. If subsequent steps fail, a disabled actor
-        // with stale roles is safe: resolve_session and resolve_api_key both
-        // reject disabled actors.
-        let now = Timestamp::now();
-        let actors = self.storage.actors()?;
-        actors.disable(actor_id, now).await?;
+            // Disable the actor first. If subsequent steps fail, a disabled
+            // actor with stale roles is safe: resolve_session and
+            // resolve_api_key both reject disabled actors.
+            let now = Timestamp::now();
+            let actors = self.storage.actors()?;
+            actors.disable(actor_id, now).await?;
 
-        // Remove all role assignments from storage and the index.
-        self.storage
-            .role_assignments()?
-            .delete_for_subject(target.kind(), target.db_id())
-            .await?;
-        {
-            let mut index = self.roles.write().await;
+            // Remove all role assignments from storage and the index.
+            self.storage
+                .role_assignments()?
+                .delete_for_subject(target.kind(), target.db_id())
+                .await?;
             index.remove(&target);
         }
 

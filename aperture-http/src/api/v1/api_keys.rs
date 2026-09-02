@@ -139,7 +139,11 @@ async fn delete_api_key(
             .require::<authz::api_key::Delete>(&auth.subject)
             .await?;
     }
-    repo.delete(id).await?;
+    // Revoke the roles before deleting the key. If the delete then fails,
+    // the key is role-less, which fails closed. The other order could leave
+    // a stale role row behind on failure, and SQLite reuses rowids, so a
+    // future key could silently inherit this key's roles.
     state.auth().revoke_roles(Subject::ApiKey(id)).await?;
+    repo.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -1143,9 +1143,9 @@ async fn post_no_auth(app: &Router, uri: &str, body: Value) -> StatusCode {
 
 /// Regression net for the task-schedules class of bug: an authenticated but
 /// unprivileged token must be denied on every mutating endpoint. Adding a new
-/// resource without a `require()` call makes its mutation succeed here, failing
-/// the test. Bodies are kept valid enough to pass JSON extraction so the
-/// request reaches the authorization check.
+/// resource without enforcement makes its mutation succeed here, failing the
+/// test. The `Require` extractor rejects before body extraction, so bodies
+/// only need to be well-formed JSON, but they are kept valid anyway.
 #[tokio::test]
 async fn no_role_token_is_denied_on_all_mutations() {
     let (app, auth, _storage) = fresh_app().await;
@@ -1153,7 +1153,7 @@ async fn no_role_token_is_denied_on_all_mutations() {
 
     // (method, uri, json body)
     let pw = test_password();
-    let matrix: [(&str, &str, Value); 10] = [
+    let matrix: [(&str, &str, Value); 11] = [
         ("PUT", "/api/v1/artifacts/firmware", Value::Null),
         (
             "POST",
@@ -1175,6 +1175,11 @@ async fn no_role_token_is_denied_on_all_mutations() {
         ),
         ("DELETE", "/api/v1/users/1", Value::Null),
         ("POST", "/api/v1/api-keys", json!({"name": "k"})),
+        (
+            "PUT",
+            "/api/v1/settings/aperture.http.tls.enabled",
+            json!({"value": true}),
+        ),
         (
             "DELETE",
             "/api/v1/artifacts/firmware/versions/sha256:\
@@ -1407,6 +1412,62 @@ async fn no_role_token_cannot_delete_others_api_key() {
     let (_nobody_actor, nobody_key) = no_role_key(&auth, "nobody").await;
     let status = delete(&app, &nobody_key, &format!("/api/v1/api-keys/{key_id}")).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Deleting an API key must remove its role rows. SQLite reuses rowids, so a
+/// stale row could otherwise hand the dead key's roles to a future key.
+#[tokio::test]
+async fn deleting_an_api_key_removes_its_role_assignments() {
+    let (app, auth, storage) = fresh_app().await;
+    let (_admin_actor, admin_key) = key_for_role(&auth, "admin", Role::Admin).await;
+
+    let (status, body) = post_json(
+        &app,
+        &admin_key,
+        "/api/v1/api-keys",
+        json!({"name": "scoped", "role": "operator"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let key_id: aperture_storage::ApiKeyId = body["id"].as_str().unwrap().parse().unwrap();
+
+    let repo = storage.role_assignments().unwrap();
+    let roles = repo
+        .roles_for(aperture_storage::SubjectKind::ApiKey, key_id.get())
+        .await
+        .unwrap();
+    assert_eq!(roles, vec!["operator".to_owned()]);
+
+    let status = delete(&app, &admin_key, &format!("/api/v1/api-keys/{key_id}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let roles = repo
+        .roles_for(aperture_storage::SubjectKind::ApiKey, key_id.get())
+        .await
+        .unwrap();
+    assert!(
+        roles.is_empty(),
+        "a deleted key must not keep its role rows"
+    );
+}
+
+/// A viewer token can read every read-only endpoint. Guards against a 403
+/// regression on reads, which the mutation matrix does not cover.
+#[tokio::test]
+async fn viewer_can_read_list_endpoints() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_viewer_actor, viewer_key) = key_for_role(&auth, "viewer", Role::Viewer).await;
+
+    for uri in [
+        "/api/v1/artifacts",
+        "/api/v1/tasks",
+        "/api/v1/task-schedules",
+        "/api/v1/logs",
+        "/api/v1/settings",
+    ] {
+        let (status, _) = get_json(&app, &viewer_key, uri).await;
+        assert_eq!(status, StatusCode::OK, "GET {uri}: expected 200 for viewer");
+    }
 }
 
 #[tokio::test]
