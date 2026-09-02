@@ -3,6 +3,8 @@
 //! Builds the axum application: a versioned JSON API under `/api` plus the
 //! Spectra frontend served as a fallback.
 
+use std::sync::Arc;
+
 use aperture_settings::Settings;
 use aperture_storage::{ApiKeyId, ArtifactKey, Storage, UserId};
 use aperture_tasks::Tasks;
@@ -16,6 +18,7 @@ use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
+pub use self::auth::PublicPaths;
 use self::auth::SecurityAddon;
 pub use self::avatar::{AvatarAnimation, AvatarStyle};
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
@@ -45,6 +48,7 @@ pub struct AppState {
     settings: Settings,
     auth: aperture_auth::AuthHandle,
     login_limiter: aperture_auth::LoginLimiter,
+    public_paths: Arc<PublicPaths>,
 }
 
 impl AppState {
@@ -66,6 +70,7 @@ impl AppState {
             settings,
             auth,
             login_limiter: aperture_auth::LoginLimiter::default(),
+            public_paths: Arc::new(PublicPaths::from_spec(&self::openapi())),
         }
     }
 
@@ -99,6 +104,12 @@ impl AppState {
 
     pub(crate) const fn login_limiter(&self) -> &aperture_auth::LoginLimiter {
         &self.login_limiter
+    }
+
+    /// The public path set the auth middleware consults. Derived once from
+    /// the `OpenAPI` document, shared so cloning the state stays cheap.
+    pub fn public_paths(&self) -> &PublicPaths {
+        &self.public_paths
     }
 }
 
@@ -164,16 +175,29 @@ mod tests {
         "changePassword",
     ];
 
-    /// Operations that need no authentication at all.
-    const PUBLIC: &[&str] = &[
-        "login",
-        "setup",
-        "getSetupStatus",
-        "listTaskDefinitions",
-        "getTaskDefinition",
-        "listSettingDefinitions",
-        "getSettingDefinition",
+    /// Exact paths and covering prefixes the `security(())` annotations must
+    /// currently derive to. The definition list routes are parameter free
+    /// templates, so they show up as exact matches next to the prefixes
+    /// their by-key routes add. A changed set has to be a conscious
+    /// decision, not annotation or utoipa drift.
+    const PUBLIC_EXACT: &[&str] = &[
+        "/api/v1/auth/login",
+        "/api/v1/auth/setup",
+        "/api/v1/auth/setup-status",
+        "/api/v1/setting-definitions",
+        "/api/v1/task-definitions",
     ];
+    const PUBLIC_PREFIXES: &[&str] = &["/api/v1/setting-definitions", "/api/v1/task-definitions"];
+
+    /// Deriving the public paths from the document yields exactly the
+    /// expected set. This is the tripwire for annotation and utoipa drift.
+    #[test]
+    fn spec_derives_the_expected_public_paths() {
+        assert_eq!(
+            PublicPaths::from_spec(&openapi()),
+            PublicPaths::new(PUBLIC_EXACT, PUBLIC_PREFIXES)
+        );
+    }
 
     #[test]
     fn spec_documents_permissions_per_operation() {
@@ -185,12 +209,6 @@ mod tests {
                 };
                 let op_id = op["operationId"].as_str().expect("operation id").to_owned();
                 let is_public = op["security"] == Value::Array(vec![serde_json::json!({})]);
-
-                assert_eq!(
-                    is_public,
-                    PUBLIC.contains(&op_id.as_str()),
-                    "{op_id} public flag mismatch"
-                );
 
                 // Looked up by the shared constant, so every annotation
                 // literal is pinned to it: a different name fails coverage.

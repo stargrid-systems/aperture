@@ -3,7 +3,9 @@ use std::{env, fs, process, str};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, DownloadDefinition, Storage};
 use aperture_auth::{Password, Role, Username};
-use aperture_http::{AppState, AvatarAnimation, AvatarStyle, Spectra, SpectraConfig, app};
+use aperture_http::{
+    AppState, AvatarAnimation, AvatarStyle, PublicPaths, Spectra, SpectraConfig, app,
+};
 use aperture_settings::{SettingRegistry, Settings};
 use aperture_storage::{ActorId, ArtifactId};
 use aperture_tasks::{TaskRegistry, TaskStatus, Tasks};
@@ -373,6 +375,28 @@ async fn gets_setting_definition_schema() {
 
     let (status, _) = get_json(&app, &token, "/api/v1/setting-definitions/nope").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn serves_definition_routes_without_credentials() {
+    let (app, _artifacts, _storage, _token) = seeded_app().await;
+
+    for uri in [
+        "/api/v1/task-definitions",
+        "/api/v1/setting-definitions",
+        "/api/v1/task-definitions/download",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "GET {uri} without credentials"
+        );
+    }
 }
 
 #[tokio::test]
@@ -942,6 +966,13 @@ fn test_password() -> String {
 /// Builds a fresh app with no pre-seeded data and returns it alongside the
 /// auth handle and storage so tests can create users and keys directly.
 async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
+    let (state, auth, storage) = fresh_state().await;
+    (app(state), auth, storage)
+}
+
+/// Same construction as [`fresh_app`] but returns the state before the app
+/// consumes it, so tests can inspect what the app was assembled around.
+async fn fresh_state() -> (AppState, aperture_auth::AuthHandle, Storage) {
     let root = env::temp_dir().join(format!(
         "aperture-api-{}-{}",
         process::id(),
@@ -976,7 +1007,27 @@ async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
         settings,
         auth.clone(),
     );
-    (app(state), auth, storage)
+    (state, auth, storage)
+}
+
+/// The middleware consults the public paths the state derives from the
+/// spec, so the live set must equal the expected one.
+#[tokio::test]
+async fn app_state_derives_the_expected_public_paths() {
+    let (state, _auth, _storage) = fresh_state().await;
+    assert_eq!(
+        state.public_paths(),
+        &PublicPaths::new(
+            &[
+                "/api/v1/auth/login",
+                "/api/v1/auth/setup",
+                "/api/v1/auth/setup-status",
+                "/api/v1/setting-definitions",
+                "/api/v1/task-definitions"
+            ],
+            &["/api/v1/setting-definitions", "/api/v1/task-definitions"]
+        )
+    );
 }
 
 /// Creates a user and returns an API key carrying `role`.
