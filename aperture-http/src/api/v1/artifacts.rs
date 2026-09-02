@@ -3,7 +3,7 @@
 use std::io;
 
 use aperture_artifacts::ArtifactError;
-use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
+use aperture_auth::authz::{self, Permission};
 use aperture_storage::{ArtifactKey, Digest, MediaType};
 use axum::Json;
 use axum::body::Body;
@@ -19,6 +19,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::auth::Require;
 use crate::conditional::{Etag, HttpDate};
 use crate::dto::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, Page, VersionListParams,
@@ -55,19 +56,15 @@ pub fn router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_ARTIFACTS,
-    extensions(("x-required-permission" = json!(required_permission(Object::Artifact, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::artifact::Read::PERMISSION))),
     params(ArtifactListParams),
     responses((status = 200, description = "Artifacts", body = Page<ArtifactSummaryResponse>)),
 )]
 async fn list_artifacts(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::artifact::Read>,
     State(state): State<AppState>,
     Query(params): Query<ArtifactListParams>,
 ) -> Result<Json<Page<ArtifactSummaryResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Artifact, Action::Read)
-        .await?;
     let page = state
         .spectra()
         .artifacts()
@@ -81,7 +78,7 @@ async fn list_artifacts(
     get,
     path = "/{key}",
     operation_id = operation_ids::GET_ARTIFACT,
-    extensions(("x-required-permission" = json!(required_permission(Object::Artifact, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::artifact::Read::PERMISSION))),
     params(("key" = ArtifactKey, Path, description = "Artifact key")),
     responses(
         (status = 200, description = "Artifact", body = ArtifactSummaryResponse),
@@ -89,14 +86,10 @@ async fn list_artifacts(
     ),
 )]
 async fn get_artifact(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::artifact::Read>,
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
 ) -> Result<Json<ArtifactSummaryResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Artifact, Action::Read)
-        .await?;
     let artifact = state.spectra().artifacts().artifact(&key).await?;
     artifact
         .map(|key| Json(key.into()))
@@ -108,7 +101,7 @@ async fn get_artifact(
     get,
     path = "/{key}/versions",
     operation_id = operation_ids::LIST_ARTIFACT_VERSIONS,
-    extensions(("x-required-permission" = json!(required_permission(Object::Artifact, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::artifact::Read::PERMISSION))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         VersionListParams,
@@ -116,15 +109,11 @@ async fn get_artifact(
     responses((status = 200, description = "Versions", body = Page<ArtifactVersionResponse>)),
 )]
 async fn list_versions(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::artifact::Read>,
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
     Query(params): Query<VersionListParams>,
 ) -> Result<Json<Page<ArtifactVersionResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Artifact, Action::Read)
-        .await?;
     let page = state
         .spectra()
         .artifacts()
@@ -144,7 +133,7 @@ async fn list_versions(
     get,
     path = "/{key}/versions/{digest}",
     operation_id = operation_ids::GET_ARTIFACT_VERSION,
-    extensions(("x-required-permission" = json!(required_permission(Object::Artifact, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::artifact::Read::PERMISSION))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         ("digest" = Digest, Path, description = "Content digest"),
@@ -155,14 +144,10 @@ async fn list_versions(
     ),
 )]
 async fn get_version(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::artifact::Read>,
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<Json<ArtifactVersionResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Artifact, Action::Read)
-        .await?;
     let version = state.spectra().artifacts().version(&key, &digest).await?;
     version
         .map(|version| Json(version.into()))
@@ -174,7 +159,7 @@ async fn get_version(
     delete,
     path = "/{key}/versions/{digest}",
     operation_id = operation_ids::DELETE_ARTIFACT_VERSION,
-    extensions(("x-required-permission" = json!(required_permission(Object::Artifact, Action::Evict)))),
+    extensions(("x-required-permission" = json!(authz::artifact::Evict::PERMISSION))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         ("digest" = Digest, Path, description = "Content digest"),
@@ -185,14 +170,10 @@ async fn get_version(
     ),
 )]
 async fn delete_version(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::artifact::Evict>,
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, Digest)>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Artifact, Action::Evict)
-        .await?;
     let evicted = state
         .spectra()
         .artifacts()
@@ -217,7 +198,7 @@ async fn delete_version(
     put,
     path = "/{key}",
     operation_id = operation_ids::UPLOAD_ARTIFACT,
-    extensions(("x-required-permission" = json!(required_permission(Object::Artifact, Action::Write)))),
+    extensions(("x-required-permission" = json!(authz::artifact::Write::PERMISSION))),
     params(("key" = ArtifactKey, Path, description = "Artifact key")),
     request_body(
         content_type = "application/octet-stream",
@@ -232,7 +213,7 @@ async fn delete_version(
     ),
 )]
 async fn upload_artifact(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::artifact::Write>,
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
     headers: HeaderMap,
@@ -245,10 +226,6 @@ async fn upload_artifact(
     ),
     ApiError,
 > {
-    state
-        .auth()
-        .require(&auth.subject, Object::Artifact, Action::Write)
-        .await?;
     // Parse Content-Type as a MediaType at the boundary. An unparsable
     // value is treated as absent, so the store records no media type rather
     // than garbage.
@@ -281,7 +258,7 @@ async fn upload_artifact(
     get,
     path = "/{key}/versions/{digest}/blob",
     operation_id = operation_ids::DOWNLOAD_ARTIFACT_BLOB,
-    extensions(("x-required-permission" = json!(required_permission(Object::Artifact, Action::Download)))),
+    extensions(("x-required-permission" = json!(authz::artifact::Download::PERMISSION))),
     params(
         ("key" = ArtifactKey, Path, description = "Artifact key"),
         ("digest" = Digest, Path, description = "Content digest"),
@@ -299,15 +276,11 @@ async fn upload_artifact(
     ),
 )]
 async fn download_artifact_blob(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::artifact::Download>,
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, Digest)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Artifact, Action::Download)
-        .await?;
     let artifacts = state.spectra().artifacts();
     let artifact = artifacts
         .version(&key, &digest)

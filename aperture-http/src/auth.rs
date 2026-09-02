@@ -4,8 +4,10 @@
 use std::collections::HashSet;
 use std::error::Error as StdError;
 
+use aperture_auth::authz::{Permission, Permit};
 use aperture_auth::{AuthenticatedActor, RawApiKey, SessionToken};
-use axum::extract::{Request, State};
+use axum::extract::{FromRequestParts, Request, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -17,7 +19,31 @@ use utoipa::openapi::security::{
     ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityRequirement, SecurityScheme,
 };
 
+use crate::error::ApiError;
 use crate::{AppState, OpenApiSpec};
+
+/// Extractor that enforces permission `P` and yields the PDP's permit.
+///
+/// A handler taking `Require<P>` cannot run unless the authenticated
+/// subject's roles grant `P`. Rejection is 403, or 401 when no actor is
+/// attached (cannot happen behind the auth middleware).
+pub struct Require<P>(pub Permit<P>);
+
+impl<P: Permission + 'static> FromRequestParts<AppState> for Require<P> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let auth = parts
+            .extensions
+            .get::<AuthenticatedActor>()
+            .ok_or(ApiError::UNAUTHORIZED)?;
+        let permit = state.auth().require(&auth.subject).await?;
+        Ok(Self(permit))
+    }
+}
 
 /// Name of the session cookie.
 pub const SESSION_COOKIE: &str = "aperture_session";

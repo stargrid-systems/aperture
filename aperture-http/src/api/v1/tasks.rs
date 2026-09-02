@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
+use aperture_auth::AuthenticatedActor;
+use aperture_auth::authz::{self, Permission};
 use aperture_storage::TaskId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -10,6 +11,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::auth::Require;
 use crate::dto::{
     CreateTaskRequest, Page, SimpleListParams, TaskDefinitionResponse, TaskDefinitionSummary,
     TaskListParams, TaskResponse,
@@ -35,19 +37,15 @@ pub fn definitions_router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_TASKS,
-    extensions(("x-required-permission" = json!(required_permission(Object::Task, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::task::Read::PERMISSION))),
     params(TaskListParams),
     responses((status = 200, description = "Tasks", body = Page<TaskResponse>)),
 )]
 async fn list_tasks(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task::Read>,
     State(state): State<AppState>,
     Query(params): Query<TaskListParams>,
 ) -> Result<Json<Page<TaskResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Task, Action::Read)
-        .await?;
     let tasks = state.tasks();
     let json = params.json_filters().map_err(|_| ApiError::BAD_REQUEST)?;
     let parent = params.parent_filter();
@@ -77,7 +75,7 @@ async fn list_tasks(
     post,
     path = "",
     operation_id = operation_ids::CREATE_TASK,
-    extensions(("x-required-permission" = json!(required_permission(Object::Task, Action::Create)))),
+    extensions(("x-required-permission" = json!(authz::task::Create::PERMISSION))),
     request_body = CreateTaskRequest,
     responses(
         (status = 202, description = "Task created", body = TaskResponse),
@@ -86,13 +84,10 @@ async fn list_tasks(
 )]
 async fn create_task(
     auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task::Create>,
     State(state): State<AppState>,
     Json(request): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Task, Action::Create)
-        .await?;
     let task = state
         .tasks()
         .create(&request.key, request.input, auth.actor.id)
@@ -105,7 +100,7 @@ async fn create_task(
     get,
     path = "/{id}",
     operation_id = operation_ids::GET_TASK,
-    extensions(("x-required-permission" = json!(required_permission(Object::Task, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::task::Read::PERMISSION))),
     params(("id" = TaskId, Path, description = "Task id")),
     responses(
         (status = 200, description = "Task", body = TaskResponse),
@@ -113,14 +108,10 @@ async fn create_task(
     ),
 )]
 async fn get_task(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task::Read>,
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<Json<TaskResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Task, Action::Read)
-        .await?;
     let task = state.tasks().get(id).await?.ok_or(ApiError::NOT_FOUND)?;
     let progress = state.tasks().progress(id);
     Ok(Json(TaskResponse::new(task, progress)))
@@ -131,7 +122,7 @@ async fn get_task(
     post,
     path = "/{id}/cancel",
     operation_id = operation_ids::CANCEL_TASK,
-    extensions(("x-required-permission" = json!(required_permission(Object::Task, Action::Cancel)))),
+    extensions(("x-required-permission" = json!(authz::task::Cancel::PERMISSION))),
     params(("id" = TaskId, Path, description = "Task id")),
     responses(
         (status = 202, description = "Cancellation requested"),
@@ -141,14 +132,10 @@ async fn get_task(
     ),
 )]
 async fn cancel_task(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::task::Cancel>,
     State(state): State<AppState>,
     Path(id): Path<TaskId>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Task, Action::Cancel)
-        .await?;
     if state.tasks().cancel(id).await? {
         Ok(StatusCode::ACCEPTED)
     } else {
