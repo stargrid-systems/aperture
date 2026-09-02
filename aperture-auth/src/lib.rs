@@ -100,18 +100,20 @@ pub struct AuthHandle {
 }
 
 impl AuthHandle {
-    /// Creates the auth handle: builds the enforcer, loads existing policies,
-    /// and seeds built-in roles if the policy table is empty.
+    /// Creates the auth handle.
+    ///
+    /// Builds the enforcer, loads existing policies, and syncs the built-in
+    /// role and permission grants.
     ///
     /// # Errors
     ///
     /// Returns an error if the enforcer cannot be created or policies cannot
-    /// be loaded or seeded.
+    /// be loaded or synced.
     pub async fn new(storage: Storage) -> Result<Self> {
         let mut enforcer = policy::create_enforcer(&storage)
             .await
             .map_err(AuthError::from_casbin)?;
-        policy::seed_builtin_policies(&mut enforcer, &storage)
+        policy::sync_builtin_policies(&mut enforcer)
             .await
             .map_err(AuthError::from_casbin)?;
         Ok(Self {

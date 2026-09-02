@@ -3,6 +3,10 @@
 //! The `casbin_rule` table holds casbin's standard `(ptype, v0..v5)` row
 //! format. This repository provides the CRUD operations the casbin adapter
 //! needs, without coupling the storage layer to casbin itself.
+//!
+//! Rules rarely use all six value columns, so a row encodes the rule's arity
+//! as trailing NULLs. This module owns that encoding: it pads on write and
+//! resolves it on read, so callers only ever see the real values.
 
 use std::fmt;
 use std::str::FromStr;
@@ -13,6 +17,19 @@ use crate::error::{Result, StorageError};
 use crate::macros::sql;
 use crate::query::Filters;
 use crate::sql::{ToSql, get};
+
+/// Inserts one rule unless an identical rule exists.
+///
+/// A unique index cannot dedup here because SQLite treats NULLs as distinct.
+const INSERT_RULE: &str = sql!(
+    INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5)
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+    WHERE NOT EXISTS (
+        SELECT 1 FROM casbin_rule
+        WHERE ptype = ?1 AND v0 = ?2 AND v1 = ?3 AND v2 IS ?4
+            AND v3 IS ?5 AND v4 IS ?6 AND v5 IS ?7
+    )
+);
 
 /// Whether a rule is a policy (`p`) or a grouping (`g`) rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,12 +77,17 @@ impl ToSql for PolicyType {
 }
 
 /// One policy or grouping rule, in casbin's flat string format.
+///
+/// The length of [`values`](Self::values) is the rule's arity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyRule {
     /// Whether this is a policy or grouping rule.
     pub ptype: PolicyType,
-    /// The rule values (v0 through v5). Unused trailing values are empty
-    /// strings.
+    /// The rule values, whose length is the rule's arity.
+    ///
+    /// Storage encodes arity on disk as trailing NULLs across the fixed
+    /// v0..v5 columns and resolves it at this boundary, so callers never
+    /// see the padding.
     pub values: Vec<String>,
 }
 
@@ -98,31 +120,36 @@ impl PolicyRuleRepository {
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             let ptype: String = get(&row, 0)?;
             let ptype = PolicyType::from_db(&ptype)?;
+            // A row encodes arity as trailing NULLs, so the values end at
+            // the first NULL. Stopping there rather than stripping empty
+            // strings keeps a real empty token and guards against a stray
+            // intermediary NULL, which the write paths never produce.
             let mut values = Vec::with_capacity(6);
             for i in 1..=6 {
-                values.push(get::<String>(&row, i)?);
+                match get::<Option<String>>(&row, i)? {
+                    Some(value) => values.push(value),
+                    None => break,
+                }
             }
             rules.push(PolicyRule { ptype, values });
         }
         Ok(rules)
     }
 
-    /// Inserts a single rule.
+    /// Inserts a single rule unless an identical one exists.
+    ///
+    /// The values are padded with NULLs across v0..v5 to encode the rule's
+    /// arity. The casbin adapter relies on duplicates being skipped for its
+    /// single-rule add path.
     ///
     /// # Errors
     ///
     /// Returns `StorageError::Database` if the insert fails.
     #[tracing::instrument(level = "info", skip(self, values))]
     pub async fn insert(&self, ptype: PolicyType, values: &[String]) -> Result<()> {
-        let params = padded_params(ptype, values);
+        let params = rule_params(ptype, values);
         self.connection
-            .execute(
-                sql!(
-                    INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, v4, v5)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                ),
-                params_from_iter(params),
-            )
+            .execute(INSERT_RULE, params_from_iter(params))
             .await
             .map_err(StorageError::from_turso)?;
         Ok(())
@@ -140,14 +167,14 @@ impl PolicyRuleRepository {
     /// Never panics in practice. The affected row count fits `usize`.
     #[tracing::instrument(level = "info", skip(self, values))]
     pub async fn delete(&self, ptype: PolicyType, values: &[String]) -> Result<usize> {
-        let params = padded_params(ptype, values);
+        let params = rule_params(ptype, values);
         let affected = self
             .connection
             .execute(
                 sql!(
                     DELETE FROM casbin_rule
-                    WHERE ptype = ?1 AND v0 = ?2 AND v1 = ?3 AND v2 = ?4
-                        AND v3 = ?5 AND v4 = ?6 AND v5 = ?7
+                    WHERE ptype = ?1 AND v0 = ?2 AND v1 = ?3 AND v2 IS ?4
+                        AND v3 IS ?5 AND v4 IS ?6 AND v5 IS ?7
                 ),
                 params_from_iter(params),
             )
@@ -182,7 +209,12 @@ impl PolicyRuleRepository {
             if col_idx >= cols.len() {
                 break;
             }
-            filters.eq_text(cols[col_idx], value);
+            // Only v0 and v1 are NOT NULL, so the rest compare null-safely.
+            if col_idx < 2 {
+                filters.eq_text(cols[col_idx], value);
+            } else {
+                filters.is_text(cols[col_idx], value);
+            }
         }
         let sql_str = format!("DELETE FROM casbin_rule {}", filters.where_clause());
         let affected = self
@@ -246,7 +278,10 @@ impl PolicyRuleRepository {
         Ok(())
     }
 
-    /// Inserts multiple rules in a single transaction.
+    /// Inserts multiple rules in a single transaction unless identical rules
+    /// exist.
+    ///
+    /// Skipping repeats lets the builtin policy sync run on every boot.
     ///
     /// # Errors
     ///
@@ -287,14 +322,63 @@ impl PolicyRuleRepository {
     }
 }
 
-fn padded_params(ptype: PolicyType, values: &[String]) -> Vec<Value> {
+/// Binds one rule's columns, padding absent trailing values with NULLs.
+fn rule_params(ptype: PolicyType, values: &[String]) -> Vec<Value> {
     let mut params: Vec<Value> = vec![ptype.to_sql()];
     for i in 0..6 {
-        if i < values.len() {
-            params.push(values[i].to_sql());
-        } else {
-            params.push("".to_sql());
-        }
+        params.push(values.get(i).map_or(Value::Null, ToSql::to_sql));
     }
     params
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Storage;
+
+    /// Pins the on-disk contract: a rule's arity lives in trailing NULLs.
+    #[tokio::test]
+    async fn pads_absent_trailing_values_with_nulls() {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let repo = storage.policy().unwrap();
+        repo.insert(
+            PolicyType::Grouping,
+            &["actor:7".to_owned(), "viewer".to_owned()],
+        )
+        .await
+        .unwrap();
+
+        let conn = storage.connect().unwrap();
+        let mut rows = conn
+            .query(sql!(SELECT v0, v1, v2, v3, v4, v5 FROM casbin_rule), ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("one row");
+        assert_eq!(row.get_value(0).unwrap(), Value::Text("actor:7".to_owned()));
+        assert_eq!(row.get_value(1).unwrap(), Value::Text("viewer".to_owned()));
+        for i in 2..=5 {
+            assert_eq!(row.get_value(i).unwrap(), Value::Null);
+        }
+    }
+
+    /// An empty-string token is a real value and must never become NULL.
+    #[tokio::test]
+    async fn keeps_empty_string_tokens_as_text() {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let repo = storage.policy().unwrap();
+        repo.insert(
+            PolicyType::Policy,
+            &["special".to_owned(), "task".to_owned(), String::new()],
+        )
+        .await
+        .unwrap();
+
+        let conn = storage.connect().unwrap();
+        let mut rows = conn
+            .query(sql!(SELECT v2 FROM casbin_rule), ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("one row");
+        assert_eq!(row.get_value(0).unwrap(), Value::Text(String::new()));
+    }
 }
