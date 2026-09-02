@@ -2144,7 +2144,7 @@
               },
               {
                 "$ref": "#/components/schemas/Role",
-                "description": "Optional role to assign to this key's casbin subject."
+                "description": "Optional role to assign to this key's subject."
               }
             ]
           }
@@ -3443,7 +3443,7 @@
       },
       "Role": {
         "type": "string",
-        "description": "A built-in role. Stored as its lowercase name in casbin grouping rules.",
+        "description": "A built-in role. Stored as its lowercase name in the `role_assignment`\ntable.",
         "enum": [
           "admin",
           "operator",
