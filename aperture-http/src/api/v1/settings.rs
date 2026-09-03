@@ -1,4 +1,5 @@
-use aperture_auth::{Action, AuthenticatedActor, Object, required_permission};
+use aperture_auth::AuthenticatedActor;
+use aperture_auth::authz::{self, Permission};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde_json::Value;
@@ -7,6 +8,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::auth::Require;
 use crate::dto::{
     Page, SettingDefinitionResponse, SettingDefinitionSummary, SettingResponse, SimpleListParams,
     UpdateSettingRequest,
@@ -30,17 +32,13 @@ pub fn definitions_router() -> OpenApiRouter<AppState> {
     get,
     path = "",
     operation_id = operation_ids::LIST_SETTINGS,
-    extensions(("x-required-permission" = json!(required_permission(Object::Setting, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::setting::Read::PERMISSION))),
     responses((status = 200, description = "Settings", body = [SettingResponse])),
 )]
 async fn list_settings(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::setting::Read>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SettingResponse>>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Setting, Action::Read)
-        .await?;
     let entries = state.settings().list().await?;
     let response = entries
         .into_iter()
@@ -54,7 +52,7 @@ async fn list_settings(
     get,
     path = "/{key}",
     operation_id = operation_ids::GET_SETTING,
-    extensions(("x-required-permission" = json!(required_permission(Object::Setting, Action::Read)))),
+    extensions(("x-required-permission" = json!(authz::setting::Read::PERMISSION))),
     params(("key" = String, Path, description = "Setting key")),
     responses(
         (status = 200, description = "Setting value", body = SettingResponse),
@@ -62,14 +60,10 @@ async fn list_settings(
     ),
 )]
 async fn get_setting(
-    auth: AuthenticatedActor,
+    Require(_permit): Require<authz::setting::Read>,
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> Result<Json<SettingResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Setting, Action::Read)
-        .await?;
     let value = state.settings().get_value(&key).await?;
     Ok(Json(SettingResponse { key, value }))
 }
@@ -79,7 +73,7 @@ async fn get_setting(
     put,
     path = "/{key}",
     operation_id = operation_ids::UPDATE_SETTING,
-    extensions(("x-required-permission" = json!(required_permission(Object::Setting, Action::Update)))),
+    extensions(("x-required-permission" = json!(authz::setting::Update::PERMISSION))),
     params(("key" = String, Path, description = "Setting key")),
     request_body = UpdateSettingRequest,
     responses(
@@ -90,14 +84,11 @@ async fn get_setting(
 )]
 async fn update_setting(
     auth: AuthenticatedActor,
+    Require(_permit): Require<authz::setting::Update>,
     State(state): State<AppState>,
     Path(key): Path<String>,
     Json(request): Json<UpdateSettingRequest>,
 ) -> Result<Json<SettingResponse>, ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::Setting, Action::Update)
-        .await?;
     state
         .settings()
         .set_value(&key, request.value, auth.actor.id)

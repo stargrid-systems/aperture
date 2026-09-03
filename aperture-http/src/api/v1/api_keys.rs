@@ -1,4 +1,5 @@
-use aperture_auth::{Action, AuthenticatedActor, Object, RawApiKey, Role, required_permission};
+use aperture_auth::authz::{self, Permission, Role, Subject};
+use aperture_auth::{AuthenticatedActor, RawApiKey};
 use aperture_storage::ApiKeyId;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -11,6 +12,7 @@ use utoipa_axum::routes;
 
 use super::operation_ids;
 use crate::AppState;
+use crate::auth::Require;
 use crate::dto::{Page, SimpleListParams};
 use crate::error::ApiError;
 
@@ -40,7 +42,7 @@ pub struct CreateApiKeyResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateApiKeyRequest {
     name: String,
-    /// Optional role to assign to this key's casbin subject.
+    /// Optional role to assign to this key's subject.
     role: Option<Role>,
 }
 
@@ -75,30 +77,29 @@ async fn list_api_keys(
     post,
     path = "",
     operation_id = operation_ids::CREATE_API_KEY,
-    extensions(("x-required-permission" = json!(required_permission(Object::ApiKey, Action::Create)))),
+    extensions(("x-required-permission" = json!(authz::api_key::Create::PERMISSION))),
     request_body = CreateApiKeyRequest,
     responses((status = 201, description = "API key created", body = CreateApiKeyResponse)),
 )]
 async fn create_api_key(
     auth: AuthenticatedActor,
+    Require(_permit): Require<authz::api_key::Create>,
     State(state): State<AppState>,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateApiKeyResponse>), ApiError> {
-    state
-        .auth()
-        .require(&auth.subject, Object::ApiKey, Action::Create)
-        .await?;
     let (raw_key, api_key) = state
         .auth()
         .create_api_key(auth.actor.id, &request.name)
         .await?;
-    if let Some(role) = &request.role {
-        let subject = aperture_auth::apikey_subject(api_key.id);
-        if let Err(err) = state.auth().assign_role(&subject, *role).await {
-            let repo = state.storage().api_keys()?;
-            let _ = repo.delete(api_key.id).await;
-            return Err(err.into());
-        }
+    if let Some(role) = &request.role
+        && let Err(err) = state
+            .auth()
+            .assign_role(Subject::ApiKey(api_key.id), *role)
+            .await
+    {
+        let repo = state.storage().api_keys()?;
+        let _ = repo.delete(api_key.id).await;
+        return Err(err.into());
     }
     Ok((
         StatusCode::CREATED,
@@ -116,7 +117,7 @@ async fn create_api_key(
     delete,
     path = "/{id}",
     operation_id = operation_ids::DELETE_API_KEY,
-    extensions(("x-required-permission" = json!(required_permission(Object::ApiKey, Action::Delete)))),
+    extensions(("x-required-permission" = json!(authz::api_key::Delete::PERMISSION))),
     params(("id" = ApiKeyId, Path, description = "API key id")),
     responses(
         (status = 204, description = "API key deleted"),
@@ -130,14 +131,19 @@ async fn delete_api_key(
 ) -> Result<StatusCode, ApiError> {
     let repo = state.storage().api_keys()?;
     let key = repo.get(id).await?.ok_or(ApiError::NOT_FOUND)?;
+    // Owners may delete their own keys, so the permission check is
+    // conditional and cannot be declared with the Require extractor.
     if key.actor_id != auth.actor.id {
-        state
+        let _ = state
             .auth()
-            .require(&auth.subject, Object::ApiKey, Action::Delete)
+            .require::<authz::api_key::Delete>(&auth.subject)
             .await?;
     }
+    // Revoke the roles before deleting the key. If the delete then fails,
+    // the key is role-less, which fails closed. The other order could leave
+    // a stale role row behind on failure, and SQLite reuses rowids, so a
+    // future key could silently inherit this key's roles.
+    state.auth().revoke_roles(Subject::ApiKey(id)).await?;
     repo.delete(id).await?;
-    let subject = aperture_auth::apikey_subject(id);
-    state.auth().revoke_permissions(&subject).await?;
     Ok(StatusCode::NO_CONTENT)
 }

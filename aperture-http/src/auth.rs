@@ -1,30 +1,124 @@
 //! Auth middleware, path predicates, session cookie helpers, and `OpenAPI`
 //! security scheme registration.
 
+use std::collections::HashSet;
 use std::error::Error as StdError;
 
+use aperture_auth::authz::{Permission, Permit};
 use aperture_auth::{AuthenticatedActor, RawApiKey, SessionToken};
-use axum::extract::{Request, State};
+use axum::extract::{FromRequestParts, Request, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use cookie::time::Duration as CookieDuration;
 use cookie::{Cookie, SameSite};
 use utoipa::openapi::Components;
-use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
+use utoipa::openapi::path::Operation;
+use utoipa::openapi::security::{
+    ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityRequirement, SecurityScheme,
+};
 
+use crate::error::ApiError;
 use crate::{AppState, OpenApiSpec};
+
+/// Extractor that enforces permission `P` and yields the PDP's permit.
+///
+/// A handler taking `Require<P>` cannot run unless the authenticated
+/// subject's roles grant `P`. Rejection is 403, or 401 when no actor is
+/// attached (cannot happen behind the auth middleware).
+pub struct Require<P>(pub Permit<P>);
+
+impl<P: Permission + 'static> FromRequestParts<AppState> for Require<P> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let auth = parts
+            .extensions
+            .get::<AuthenticatedActor>()
+            .ok_or(ApiError::UNAUTHORIZED)?;
+        let permit = state.auth().require(&auth.subject).await?;
+        Ok(Self(permit))
+    }
+}
 
 /// Name of the session cookie.
 pub const SESSION_COOKIE: &str = "aperture_session";
 
-/// Paths that do not require authentication.
-fn is_public_path(path: &str) -> bool {
-    path == "/api/v1/auth/login"
-        || path == "/api/v1/auth/setup"
-        || path == "/api/v1/auth/setup-status"
-        || path == "/api/openapi.json"
-        || !path.starts_with("/api/")
+/// API paths that skip authentication, derived from the `OpenAPI` document.
+///
+/// Every operation annotated with `security(())` renders an empty security
+/// requirement and marks its path public. Templates without a parameter
+/// (for example `/api/v1/auth/login`) become exact matches. Templates with
+/// a parameter (for example `/api/v1/task-definitions/{key}`) cover every
+/// key below the prefix before the first `{`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PublicPaths {
+    exact: HashSet<String>,
+    prefixes: Vec<String>,
+}
+
+impl PublicPaths {
+    /// Derives the public paths from the paths of an `OpenAPI` document.
+    pub fn from_spec(spec: &OpenApiSpec) -> Self {
+        let mut public = Self {
+            exact: HashSet::new(),
+            prefixes: Vec::new(),
+        };
+        for (template, item) in &spec.paths.paths {
+            let operations = [
+                &item.get,
+                &item.post,
+                &item.put,
+                &item.patch,
+                &item.delete,
+                &item.options,
+                &item.head,
+                &item.trace,
+            ];
+            if !operations.into_iter().flatten().any(is_public_operation) {
+                continue;
+            }
+            match template.split_once('{') {
+                Some((prefix, _)) => public
+                    .prefixes
+                    .push(prefix.strip_suffix('/').unwrap_or(prefix).to_owned()),
+                None => {
+                    public.exact.insert(template.clone());
+                }
+            }
+        }
+        public.prefixes.sort();
+        public
+    }
+
+    /// Builds the set from explicit exact paths and prefixes.
+    pub fn new(exact: &[&str], prefixes: &[&str]) -> Self {
+        let mut prefixes: Vec<String> =
+            prefixes.iter().map(|prefix| (*prefix).to_owned()).collect();
+        prefixes.sort();
+        Self {
+            exact: exact.iter().map(|path| (*path).to_owned()).collect(),
+            prefixes,
+        }
+    }
+
+    /// Returns whether `path` requires no authentication.
+    pub fn is_public(&self, path: &str) -> bool {
+        self.exact.contains(path) || self.prefixes.iter().any(|prefix| path.starts_with(prefix))
+    }
+}
+
+/// An operation is public when its only security requirement is the empty
+/// one, which is how `security(())` renders.
+fn is_public_operation(operation: &Operation) -> bool {
+    matches!(
+        operation.security.as_deref(),
+        Some([requirement]) if *requirement == SecurityRequirement::default()
+    )
 }
 
 /// Paths accessible when the user must change their password.
@@ -35,7 +129,9 @@ fn is_password_change_path(path: &str) -> bool {
 }
 
 /// Auth middleware: resolves the actor from a session cookie or API key bearer
-/// token and stores it in request extensions. Public paths bypass auth.
+/// token and stores it in request extensions. Paths the `OpenAPI` document
+/// marks public bypass auth, as do the spec endpoint (which the document does
+/// not contain) and every non-`/api/` path served by the frontend fallback.
 pub async fn auth_middleware(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -44,7 +140,10 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = request.uri().path().to_owned();
 
-    if is_public_path(&path) {
+    if !path.starts_with("/api/")
+        || path == "/api/openapi.json"
+        || state.public_paths().is_public(&path)
+    {
         return next.run(request).await;
     }
 
@@ -154,6 +253,35 @@ impl utoipa::Modify for SecurityAddon {
         components.security_schemes.insert(
             "BearerAuth".to_owned(),
             SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_paths_match_only_themselves() {
+        let public = PublicPaths::new(&["/api/v1/auth/login"], &[]);
+        assert!(public.is_public("/api/v1/auth/login"));
+        assert!(!public.is_public("/api/v1/auth/login/extra"));
+        assert!(!public.is_public("/api/v1/auth/logout"));
+    }
+
+    #[test]
+    fn prefixes_cover_nested_by_key_routes() {
+        let public = PublicPaths::new(&[], &["/api/v1/task-definitions"]);
+        assert!(public.is_public("/api/v1/task-definitions/download"));
+        assert!(public.is_public("/api/v1/task-definitions/download/versions"));
+        assert!(!public.is_public("/api/v1/tasks"));
+    }
+
+    #[test]
+    fn construction_is_order_insensitive() {
+        assert_eq!(
+            PublicPaths::new(&[], &["/b", "/a"]),
+            PublicPaths::new(&[], &["/a", "/b"])
         );
     }
 }

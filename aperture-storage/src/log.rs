@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{Result, StorageError};
 use crate::macros::{db_id, sql};
-use crate::page::{CursorValue, Keyset, ListQuery, Order, Page, Paginator};
+use crate::page::{CursorValue, Keyset, ListQuery, Listing, Order, Page, Paginator};
 use crate::query::Filters;
 use crate::sql::{Columns, ToSql, get};
 
@@ -326,7 +326,7 @@ impl LogRepository {
         filter: &LogEventFilter,
         query: &ListQuery,
     ) -> Result<Page<LogEvent>> {
-        let paginator = Paginator::new(query, Order::Desc)?;
+        let paginator = Paginator::new(query, Order::Desc, Listing::LogEvents)?;
         let keyset = Keyset::with_id(col::TIMESTAMP, paginator.query_order());
 
         let mut filters = Filters::new();
@@ -400,7 +400,7 @@ impl LogRepository {
     /// cannot be read.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_targets(&self, q: Option<&str>, query: &ListQuery) -> Result<Page<String>> {
-        let paginator = Paginator::new(query, Order::Asc)?;
+        let paginator = Paginator::new(query, Order::Asc, Listing::LogTargets)?;
         let keyset = Keyset::unique(col::TARGET, paginator.query_order());
 
         let mut filters = Filters::new();
@@ -438,7 +438,7 @@ impl LogRepository {
     /// cannot be decoded.
     #[tracing::instrument(level = "info", skip_all)]
     pub async fn list_spans(&self, filter: &SpanFilter, query: &ListQuery) -> Result<Page<Span>> {
-        let paginator = Paginator::new(query, Order::Desc)?;
+        let paginator = Paginator::new(query, Order::Desc, Listing::LogSpans)?;
         let keyset = Keyset::with_id(col::STARTED_AT, paginator.query_order());
 
         let mut filters = Filters::new();
@@ -592,7 +592,7 @@ impl LogRepository {
     /// cannot be decoded.
     #[tracing::instrument(level = "info", skip(self, query))]
     pub async fn list_boots(&self, query: &ListQuery) -> Result<Page<BootInfo>> {
-        let paginator = Paginator::new(query, Order::Desc)?;
+        let paginator = Paginator::new(query, Order::Desc, Listing::LogBoots)?;
         let keyset = Keyset::unique("first_seen", paginator.query_order());
 
         let mut filters = Filters::new();

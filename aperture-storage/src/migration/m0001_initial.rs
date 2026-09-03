@@ -70,17 +70,12 @@ const TABLES: &str = sql!(
     CREATE INDEX idx_sessions_actor ON sessions (actor_id);
     CREATE INDEX idx_sessions_expires ON sessions (expires_at);
 
-    CREATE TABLE casbin_rule (
-        id INTEGER PRIMARY KEY,
-        ptype TEXT NOT NULL,
-        v0 TEXT NOT NULL,
-        v1 TEXT NOT NULL,
-        v2 TEXT NOT NULL,
-        v3 TEXT NOT NULL,
-        v4 TEXT NOT NULL,
-        v5 TEXT NOT NULL
+    CREATE TABLE role_assignment (
+        subject_kind TEXT NOT NULL,
+        subject_id INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        PRIMARY KEY (subject_kind, subject_id, role)
     ) STRICT;
-    CREATE INDEX idx_casbin_rule_ptype ON casbin_rule (ptype);
 
     CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,

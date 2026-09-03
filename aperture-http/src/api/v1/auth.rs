@@ -1,6 +1,7 @@
 use std::future::Future;
 
-use aperture_auth::{AuthenticatedActor, Password, Role, SessionToken, Username};
+use aperture_auth::authz::Role;
+use aperture_auth::{AuthenticatedActor, Password, SessionToken, Username};
 use aperture_storage::{ActorId, UserId};
 use axum::Json;
 use axum::extract::State;
