@@ -337,8 +337,9 @@ impl Artifacts {
     ///
     /// Removes catalog entries whose blob is missing, removes blobs that no
     /// entry references, and clears leftover temporary files. Each removal
-    /// emits an [`ArtifactRemoved`] event attributed to
-    /// [`ActorId::SYSTEM`].
+    /// emits an event attributed to [`ActorId::SYSTEM`] as soon as the
+    /// removal succeeds: [`ArtifactRemoved`] for catalog entries,
+    /// [`ArtifactOrphanRemoved`] for orphan blobs.
     ///
     /// # Errors
     ///
@@ -583,8 +584,11 @@ impl Inner {
         let repository = self.storage.artifacts()?;
         let mut report = SyncReport::default();
         let mut tracked: HashSet<Digest> = HashSet::new();
-        let mut removed_keys: Vec<String> = Vec::new();
 
+        // Each removal is emitted at the point it succeeds, so a failure
+        // later in the loop cannot leave earlier removals unaudited. serve
+        // connects and spawns the recorder before sync runs, so these emits
+        // drain into storage.
         for artifact in repository.all_versions().await? {
             if self.blobs.contains(&artifact.digest).await {
                 tracked.insert(artifact.digest.clone());
@@ -593,36 +597,31 @@ impl Inner {
                     .delete_version(&artifact.key, &artifact.digest)
                     .await?;
                 report.removed_entries += 1;
-                removed_keys.push(artifact.key.as_str().to_owned());
+                self.emit_event(
+                    ArtifactRemoved {
+                        key: artifact.key.as_str().to_owned(),
+                    },
+                    ActorId::SYSTEM,
+                )
+                .await;
             }
         }
 
-        let mut removed_digests: Vec<Digest> = Vec::new();
         for digest in self.blobs.list().await? {
             if !tracked.contains(&digest) {
                 self.blobs.remove(&digest).await?;
                 report.removed_blobs += 1;
-                removed_digests.push(digest);
-            }
-        }
-
-        // Emitted after the reconciliation work, outside any repository
-        // call. serve connects and spawns the recorder before sync runs, so
-        // these emits drain into storage. An orphan blob has no artifact
-        // key: its catalog entry is already gone, so the digest is the only
-        // identifier and gets its own event kind.
-        for key in removed_keys {
-            self.emit_event(ArtifactRemoved { key }, ActorId::SYSTEM)
+                // An orphan blob has no artifact key: its catalog entry is
+                // already gone, so the digest is the only identifier and
+                // gets its own event kind.
+                self.emit_event(
+                    ArtifactOrphanRemoved {
+                        digest: digest.to_string(),
+                    },
+                    ActorId::SYSTEM,
+                )
                 .await;
-        }
-        for digest in removed_digests {
-            self.emit_event(
-                ArtifactOrphanRemoved {
-                    digest: digest.to_string(),
-                },
-                ActorId::SYSTEM,
-            )
-            .await;
+            }
         }
 
         Ok(report)
