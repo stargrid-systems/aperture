@@ -168,10 +168,11 @@ mod tests {
     /// the payloads implement the other copy's `EventDefinition` trait.
     #[test]
     fn real_artifact_payloads_stay_inline() {
-        use aperture_artifacts::{ArtifactRemoved, ArtifactWritten};
+        use aperture_artifacts::{ArtifactOrphanRemoved, ArtifactRemoved, ArtifactWritten};
 
         assert!(size_of::<ArtifactWritten>() <= size_of::<S8>());
         assert!(size_of::<ArtifactRemoved>() <= size_of::<S8>());
+        assert!(size_of::<ArtifactOrphanRemoved>() <= size_of::<S8>());
     }
 
     #[test]
@@ -183,6 +184,12 @@ mod tests {
             size_of::<Large>(),
             "the Large mirror must track the real SettingChange layout",
         );
+        // The shipped workspace build enables serde_json's preserve_order
+        // (via utoipa), which grows `Value` and pushes `SettingChange` past
+        // the 64 byte inline budget. That spill is accepted: the envelope
+        // falls back to a single heap allocation. The ceiling catches
+        // runaway growth; single-crate builds stay inline.
+        assert!(size_of::<SettingChange>() <= 2 * size_of::<S8>());
     }
 
     #[test]
