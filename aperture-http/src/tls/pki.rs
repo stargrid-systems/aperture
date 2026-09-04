@@ -268,9 +268,9 @@ pub async fn ensure_certificates(
 
 /// Regenerates the leaf certificate with a new identity (SANs).
 ///
-/// Used when the advertised hostname changes. The existing CA is reused; only
-/// the leaf is re-issued. Live reload is triggered by the artifact change feed
-/// (see [`crate::tls::TlsReload`]).
+/// Used when the advertised hostname changes. The existing CA is reused
+/// and only the leaf is re-issued. Live reload is triggered by the
+/// artifact change feed (see [`crate::tls::TlsReload`]).
 ///
 /// # Errors
 ///

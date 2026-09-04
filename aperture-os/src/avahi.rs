@@ -127,7 +127,7 @@ impl ServicePublisher {
     /// `instance` and targets the mDNS host `host` (e.g. `aperture.local`),
     /// which should match the certificate SANs. The daemon state stream is
     /// subscribed before the group is created so a daemon restart during
-    /// publication is still observed; the group stream can only be
+    /// publication is still observed. The group stream can only be
     /// subscribed after the group exists.
     ///
     /// With an empty `services` slice nothing is published and
