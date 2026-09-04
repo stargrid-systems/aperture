@@ -394,11 +394,21 @@ mod tests {
         );
     }
 
-    /// A failed post-connect startup step must still persist the buffered
-    /// log records. The port is occupied so `HttpServer::start`, the last
-    /// startup step, fails after the log worker's repository is connected.
+    /// A failed startup must persist what the already-started workers hold:
+    /// the buffered log records and the events queued during startup, so
+    /// the destructive sync removals stay auditable. The port is occupied
+    /// so `HttpServer::start`, the last startup step, fails after both the
+    /// log worker and the event recorder are connected, and their drains
+    /// must still reach the database.
+    ///
+    /// This is a single test on purpose: `serve` installs a process-global
+    /// tracing subscriber that only the first caller in the process can
+    /// own, so the log persistence can only be asserted from the first
+    /// `serve` call. The data dir starts with more orphan blobs than the
+    /// recorder queue can hold: with no recorder draining, boot would
+    /// deadlock once the queue fills.
     #[tokio::test]
-    async fn failed_startup_persists_buffered_logs() {
+    async fn failed_startup_persists_buffered_logs_and_queued_events() {
         use std::env::temp_dir;
         use std::net::TcpListener;
         use std::process::id;
@@ -407,46 +417,6 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let dir = temp_dir().join(format!("aperture-failed-startup-{}", id()));
-        let _ = fs::remove_dir_all(&dir).await;
-        let result = serve(None, Some(addr), dir.clone(), false).await;
-        assert!(
-            result.is_err(),
-            "startup must fail while the port is occupied"
-        );
-
-        let db_path = dir.join("aperture.db");
-        let storage = Storage::open(db_path.to_str().unwrap()).await.unwrap();
-        let page = storage
-            .logs()
-            .unwrap()
-            .list_events(&LogEventFilter::default(), &ListQuery::default())
-            .await
-            .unwrap();
-        assert!(
-            !page.items.is_empty(),
-            "buffered startup logs must be persisted when startup fails"
-        );
-
-        drop(listener);
-        let _ = fs::remove_dir_all(&dir).await;
-    }
-
-    /// A failed startup must persist the events queued during startup, so
-    /// the destructive sync removals stay auditable. The data dir starts
-    /// with more orphan blobs than the recorder queue can hold: with no
-    /// recorder draining, boot would deadlock once the queue fills. The
-    /// port is occupied so startup fails after sync, and every queued
-    /// removal must still reach the database.
-    #[tokio::test]
-    async fn failed_startup_persists_queued_events() {
-        use std::env::temp_dir;
-        use std::net::TcpListener;
-        use std::process::id;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let dir = temp_dir().join(format!("aperture-failed-startup-events-{}", id()));
         let _ = fs::remove_dir_all(&dir).await;
         let blobs = dir.join("store").join("blobs").join("sha256");
         fs::create_dir_all(&blobs).await.unwrap();
@@ -464,6 +434,18 @@ mod tests {
 
         let db_path = dir.join("aperture.db");
         let storage = Storage::open(db_path.to_str().unwrap()).await.unwrap();
+
+        let page = storage
+            .logs()
+            .unwrap()
+            .list_events(&LogEventFilter::default(), &ListQuery::default())
+            .await
+            .unwrap();
+        assert!(
+            !page.items.is_empty(),
+            "buffered startup logs must be persisted when startup fails"
+        );
+
         let events = storage.events().unwrap();
         let mut query = ListQuery {
             limit: Some(200),
