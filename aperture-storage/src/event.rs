@@ -357,7 +357,9 @@ mod tests {
     /// turso cannot satisfy `ORDER BY timestamp` from an index because the
     /// `timestamp_us` custom type sorts as an encoded blob, so the listing
     /// still sorts and no plan test can demand otherwise. What the composite
-    /// indexes do serve today is the key-equality seek, pinned here.
+    /// index serves today is the key-equality seek, pinned here. The plain
+    /// `(timestamp, id)` index was removed after EXPLAIN QUERY PLAN showed
+    /// no listing shape ever picks it.
     #[tokio::test]
     async fn key_filtered_listing_uses_composite_index() {
         let storage = crate::Storage::open(":memory:").await.unwrap();

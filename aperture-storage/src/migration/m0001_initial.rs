@@ -123,7 +123,6 @@ const TABLES: &str = sql!(
         actor INTEGER NOT NULL REFERENCES actors (id),
         timestamp timestamp_us NOT NULL
     ) STRICT;
-    CREATE INDEX idx_events_timestamp_id ON events (timestamp, id);
     CREATE INDEX idx_events_key_timestamp_id ON events (key, timestamp, id);
 
     CREATE TABLE log_spans (
