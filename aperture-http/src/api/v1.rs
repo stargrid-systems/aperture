@@ -9,6 +9,7 @@ use crate::dto::VersionResponse;
 mod api_keys;
 mod artifacts;
 mod auth;
+mod events;
 mod logs;
 pub mod operation_ids;
 mod settings;
@@ -25,6 +26,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .nest("/task-definitions", tasks::definitions_router())
         .nest("/task-schedules", task_schedules::router())
         .nest("/logs", logs::router())
+        .nest("/events", events::router())
         .nest("/settings", settings::router())
         .nest("/setting-definitions", settings::definitions_router())
         .nest("/users", users::router())

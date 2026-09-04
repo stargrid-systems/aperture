@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use aperture_artifacts::Artifacts;
+use aperture_events::EventBus;
 use aperture_storage::ArtifactKey;
 use arc_swap::ArcSwap;
 use tokio::net::TcpListener;
@@ -15,7 +16,10 @@ pub use self::listener::TlsListener;
 pub use self::pki::{ensure_certificates, load_server_config};
 pub use self::redirect::redirect_router;
 pub use self::reload::TlsReload;
-pub use self::rotate::{RotateCertificateDefinition, install_default_rotation_schedule};
+pub use self::rotate::{
+    RegenerateCertificateDefinition, RegenerateCertificateInput, RotateCertificateDefinition,
+    install_default_rotation_schedule,
+};
 
 mod error;
 mod listener;
@@ -39,12 +43,16 @@ pub struct TlsEndpoint {
 }
 
 impl TlsEndpoint {
-    /// Loads the current cert and wires the change feed.
-    pub async fn new(artifacts: Artifacts, tcp_listener: TcpListener) -> Result<Self, TlsError> {
+    /// Loads the current cert and wires the event-based reload watcher.
+    pub async fn new(
+        artifacts: Artifacts,
+        tcp_listener: TcpListener,
+        event_bus: &EventBus,
+    ) -> Result<Self, TlsError> {
         let shared = load_shared_config(&artifacts).await?;
         Ok(Self {
             listener: TlsListener::new(tcp_listener, shared.clone()),
-            reload: TlsReload::new(artifacts, shared),
+            reload: TlsReload::new(artifacts, shared, event_bus),
         })
     }
 

@@ -9,3 +9,9 @@ pub const DOWNLOAD: &str = "download";
 
 /// Re-issues the leaf TLS certificate when it nears expiry.
 pub const ROTATE_CERTIFICATE: &str = "rotate-certificate";
+
+/// Re-issues the leaf TLS certificate for a new identity (e.g. hostname).
+pub const REGENERATE_CERTIFICATE: &str = "regenerate-certificate";
+
+/// Applies a new hostname to the running system.
+pub const APPLY_HOSTNAME: &str = "apply-hostname";

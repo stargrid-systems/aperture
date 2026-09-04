@@ -82,6 +82,7 @@ pub struct Cursor {
 /// into the cursors it issues, so cursors cannot be replayed across listings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Listing {
+    Events,
     LogEvents,
     LogTargets,
     LogSpans,
@@ -97,9 +98,9 @@ pub enum Listing {
 impl Listing {
     /// The flag tag for this listing. Always nonzero, so untagged cursors
     /// never match any listing.
-    // Tag 1 is reserved for the events listing a sibling branch adds.
     const fn tag(self) -> u8 {
         match self {
+            Self::Events => 1,
             Self::LogEvents => 2,
             Self::LogTargets => 3,
             Self::LogSpans => 4,

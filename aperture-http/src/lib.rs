@@ -25,7 +25,10 @@ use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, Ver
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
-pub use self::tls::{RotateCertificateDefinition, install_default_rotation_schedule};
+pub use self::tls::{
+    RegenerateCertificateDefinition, RegenerateCertificateInput, RotateCertificateDefinition,
+    install_default_rotation_schedule,
+};
 
 mod api;
 mod auth;
@@ -221,6 +224,7 @@ mod tests {
             authz::task_schedule::Update::PERMISSION,
             authz::task_schedule::Delete::PERMISSION,
             authz::log::Read::PERMISSION,
+            authz::event::Read::PERMISSION,
             authz::user::Read::PERMISSION,
             authz::user::Create::PERMISSION,
             authz::user::Delete::PERMISSION,

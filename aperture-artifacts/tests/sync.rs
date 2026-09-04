@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::{env, fs, process};
 
 use aperture_artifacts::{Artifact, ArtifactKey, Artifacts, ListQuery, Storage, VersionSort};
+use aperture_events::EventBus;
 use aperture_storage::ArtifactId;
 use jiff::Timestamp;
 
@@ -15,7 +16,8 @@ fn temp_root(tag: &str) -> PathBuf {
 async fn sync_removes_versions_without_blobs() {
     let root = temp_root("orphan-version");
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(storage.clone(), root.clone());
+    let event_bus = EventBus::new(storage.events().unwrap());
+    let artifacts = Artifacts::new(storage.clone(), root.clone(), event_bus);
     let repo = storage.artifacts().unwrap();
 
     // A catalog version whose blob never made it to disk.

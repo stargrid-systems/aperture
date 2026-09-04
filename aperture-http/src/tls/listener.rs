@@ -32,6 +32,15 @@ impl TlsListener {
     pub const fn new(inner: TcpListener, config: SharedConfig) -> Self {
         Self { inner, config }
     }
+
+    /// The address the underlying TCP listener is bound to.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the socket address cannot be determined.
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
 }
 
 impl Listener for TlsListener {

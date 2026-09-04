@@ -1,6 +1,7 @@
 [package]
-name = "aperture-artifacts"
+name = "aperture-os"
 version.workspace = true
+description = "OS integration for Aperture: mDNS service publication and hostname management."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,19 +14,15 @@ workspace = true
 
 [dependencies]
 aperture-events = { workspace = true }
+aperture-runtime = { workspace = true }
+aperture-settings = { workspace = true }
 aperture-storage = { workspace = true }
 aperture-tasks = { workspace = true }
-
 anyhow = { workspace = true, features = ["std"] }
-jiff = { workspace = true, features = ["std"] }
-oci-client = { workspace = true, features = ["rustls-tls"] }
+futures-util = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
-sha2 = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync"] }
-tracing = { workspace = true }
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+tracing = { workspace = true, features = ["std", "attributes"] }
 utoipa = { workspace = true, features = ["macros"] }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
-uuid = { workspace = true, features = ["std", "v4"] }
+zbus = { workspace = true, features = ["tokio"] }

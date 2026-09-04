@@ -1,26 +1,51 @@
 //! Aperture gateway: composes the HTTP layer with the artifact manager.
+//!
+//! # Features
+//!
+//! ## `os-integration`
+//!
+//! Opt-in deep OS integration, compiled in with this feature and enabled at
+//! runtime with the `--os-integration` flag (or the
+//! `APERTURE_OS_INTEGRATION` environment variable). When enabled, the
+//! gateway:
+//!
+//! - publishes its listeners on the local network via mDNS/Avahi (`_https._tcp`
+//!   and, without TLS, `_http._tcp`), including re-publication after hostname
+//!   changes or Avahi restarts
+//! - applies the configured hostname via systemd-hostnamed
+//! - bakes a `<hostname>.local` SAN into its TLS certificate
+//!
+//! Requires a system D-Bus with `org.freedesktop.hostname1`
+//! (systemd-hostnamed) and, for mDNS, `org.freedesktop.Avahi`
+//! (avahi-daemon).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aperture_artifacts::{Artifacts, DownloadDefinition};
+use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
+#[cfg(feature = "os-integration")]
+use aperture_events::EventDefinition as _;
+use aperture_events::{EventBus, EventRegistry};
 use aperture_http::{
-    AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
-    SpectraConfig, SpectraWorker, install_default_rotation_schedule,
+    AppState, AvatarAnimation, AvatarStyle, HttpServer, RegenerateCertificateDefinition,
+    RotateCertificateDefinition, Spectra, SpectraConfig, SpectraWorker,
+    install_default_rotation_schedule,
 };
 use aperture_runtime::Supervisor;
-use aperture_settings::{SettingRegistry, Settings};
+use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
-use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
+#[cfg(feature = "os-integration")]
+use aperture_tasks::TaskDefinition as _;
+use aperture_tasks::{Automation, TaskRegistry, Tasks};
+#[cfg(feature = "os-integration")]
+use serde_json::json;
+use tokio::sync::Mutex;
 use tokio::{fs, signal};
 use uuid::Uuid;
 
-use self::runtime::TasksWorker;
-
 mod logging;
-mod runtime;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -52,10 +77,12 @@ fn init_crypto_provider() {
 /// # Panics
 ///
 /// Panics if the rustls crypto provider is already installed.
+#[expect(clippy::too_many_lines)]
 pub async fn serve(
     tls_addr: Option<SocketAddr>,
     plain_addr: Option<SocketAddr>,
     data_dir: PathBuf,
+    os_integration: bool,
 ) -> anyhow::Result<()> {
     if tls_addr.is_none() && plain_addr.is_none() {
         anyhow::bail!(
@@ -72,7 +99,9 @@ pub async fn serve(
 
     init_crypto_provider();
     let boot_id = Uuid::new_v4();
-    let (artifacts, storage) = open_artifacts(&data_dir).await?;
+    let storage = open_storage(&data_dir).await?;
+    let event_bus = EventBus::new(storage.events()?);
+    let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"), event_bus.clone());
 
     let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
 
@@ -82,15 +111,50 @@ pub async fn serve(
     // role index from storage.
     let auth = AuthHandle::new(storage.clone()).await?;
 
-    let mut registry = TaskRegistry::new();
-    register_tasks(&mut registry, artifacts.clone());
-    let tasks = Tasks::new(storage.tasks()?, registry);
-
+    let mut task_registry = TaskRegistry::new();
     let mut setting_registry = SettingRegistry::new();
-    register_settings(&mut setting_registry);
-    let settings = Settings::new(storage.settings()?, setting_registry);
+    let mut event_registry = EventRegistry::new();
 
-    let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
+    #[cfg(feature = "os-integration")]
+    let os_reg = if os_integration {
+        Some(
+            aperture_os::register(
+                &mut task_registry,
+                &mut setting_registry,
+                &mut event_registry,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    #[cfg(not(feature = "os-integration"))]
+    let _ = os_integration;
+
+    register_tasks(&mut task_registry, artifacts.clone(), tls_addr);
+    register_settings(&mut setting_registry);
+
+    event_registry.register(Arc::new(SettingChange::default()));
+    event_registry.register(Arc::new(ArtifactWritten::default()));
+    event_registry.register(Arc::new(ArtifactRemoved::default()));
+
+    let tasks = Tasks::new(storage.tasks()?, task_registry);
+    let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
+    let automation = Automation::new(tasks.clone(), storage.task_schedules()?, &event_bus);
+
+    #[cfg(feature = "os-integration")]
+    let automation = {
+        let mut automation = automation;
+        if tls_addr.is_some() {
+            automation.on_event(
+                aperture_os::HostnameApplied::KEY,
+                RegenerateCertificateDefinition::KEY,
+                |data| json!({ "hostname": data["hostname"] }),
+            );
+        }
+        automation
+    };
 
     let spectra = Spectra::new(
         artifacts.clone(),
@@ -104,6 +168,19 @@ pub async fn serve(
         install_default_rotation_schedule(&storage).await?;
     }
 
+    #[cfg(feature = "os-integration")]
+    let (hostname, os) = match os_reg {
+        Some(reg) => {
+            let (hostname, os) =
+                aperture_os::bootstrap(reg, &settings, &tasks, event_bus.clone()).await?;
+            (Some(hostname), Some(os))
+        }
+        None => (None, None),
+    };
+
+    #[cfg(not(feature = "os-integration"))]
+    let hostname: Option<String> = None;
+
     let state = AppState::new(
         VERSION,
         boot_id,
@@ -115,13 +192,37 @@ pub async fn serve(
     );
     let app = aperture_http::app(state);
 
-    let server = HttpServer::start(artifacts, tls_addr, plain_addr, app).await?;
+    let server = HttpServer::start(
+        artifacts,
+        tls_addr,
+        plain_addr,
+        hostname.as_deref(),
+        app,
+        &event_bus,
+    )
+    .await?;
 
     let mut supervisor = Supervisor::new();
+
+    // Read the real bound ports before the server is moved into the
+    // supervisor, so mDNS advertises effective ports instead of configured
+    // ones (which may be 0 for bind-any-port).
+    #[cfg(feature = "os-integration")]
+    let bound_ports = (server.tls_port(), server.plain_port());
+
     supervisor.spawn("http", server);
-    supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
+    supervisor.spawn("automation", automation);
     supervisor.spawn("log", log_worker);
     supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
+
+    #[cfg(feature = "os-integration")]
+    if let Some(os) = os {
+        let (tls_port, plain_port) = bound_ports;
+        supervisor.spawn(
+            "os",
+            os.into_worker(tls_port, plain_port, tls_addr.is_some()),
+        );
+    }
 
     supervisor.run_until_signal(shutdown_signal()).await;
     Ok(())
@@ -152,9 +253,20 @@ async fn shutdown_signal() {
 }
 
 /// Registers every task definition the gateway supports.
-fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts) {
+fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts, tls_addr: Option<SocketAddr>) {
+    let cert_lock = Arc::new(Mutex::new(()));
+
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    registry.register(Arc::new(RotateCertificateDefinition::new(artifacts)));
+    registry.register(Arc::new(RotateCertificateDefinition::new(
+        artifacts.clone(),
+        cert_lock.clone(),
+    )));
+
+    if let Some(addr) = tls_addr {
+        registry.register(Arc::new(RegenerateCertificateDefinition::new(
+            artifacts, addr, cert_lock,
+        )));
+    }
 }
 
 /// Registers every setting the gateway supports.
@@ -193,19 +305,15 @@ pub async fn reset_password(username: &str, data_dir: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-/// Opens the storage database and blob store under `data_dir`.
-///
-/// Returns the artifact manager and the storage handle so callers can build
-/// their own repositories alongside it.
-async fn open_artifacts(data_dir: &Path) -> anyhow::Result<(Artifacts, Storage)> {
+/// Opens the storage database under `data_dir`.
+async fn open_storage(data_dir: &Path) -> anyhow::Result<Storage> {
     fs::create_dir_all(data_dir).await?;
     let db_path = data_dir.join("aperture.db");
     let db_path = db_path.to_str().ok_or_else(|| {
         anyhow::format_err!("data dir is not valid UTF-8: {}", data_dir.display())
     })?;
     let storage = Storage::open(db_path).await?;
-    let artifacts = Artifacts::new(storage.clone(), data_dir.join("store"));
-    Ok((artifacts, storage))
+    Ok(storage)
 }
 
 #[cfg(test)]
@@ -216,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_rejects_when_no_listeners_configured() {
-        let err = serve(None, None, PathBuf::from("/nonexistent"))
+        let err = serve(None, None, PathBuf::from("/nonexistent"), false)
             .await
             .unwrap_err();
         assert!(

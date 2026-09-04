@@ -62,6 +62,7 @@ pub enum Object {
     User,
     ApiKey,
     Setting,
+    Event,
 }
 
 impl Object {
@@ -75,6 +76,7 @@ impl Object {
             Self::User => "user",
             Self::ApiKey => "api-key",
             Self::Setting => "setting",
+            Self::Event => "event",
         }
     }
 }
@@ -271,6 +273,17 @@ pub mod log {
     );
 }
 
+/// Permissions on domain events.
+pub mod event {
+    use super::{Action, Object, Permission};
+
+    permissions!(
+        Object::Event, "event";
+        /// Guards reading domain events.
+        Read, Action::Read, "read";
+    );
+}
+
 /// Permissions on users.
 pub mod user {
     use super::{Action, Object, Permission};
@@ -370,9 +383,9 @@ const fn operator_allows(object: Object, action: Action) -> bool {
             | Action::Delete
             | Action::Cancel,
         )
-        | (Object::Log, Action::Read) => true,
+        | (Object::Log | Object::Event, Action::Read) => true,
         (
-            Object::Log,
+            Object::Log | Object::Event,
             Action::Download
             | Action::Write
             | Action::Evict
@@ -399,11 +412,21 @@ const fn operator_allows(object: Object, action: Action) -> bool {
 const fn viewer_allows(object: Object, action: Action) -> bool {
     match (object, action) {
         (
-            Object::Artifact | Object::Task | Object::TaskSchedule | Object::Log | Object::Setting,
+            Object::Artifact
+            | Object::Task
+            | Object::TaskSchedule
+            | Object::Log
+            | Object::Event
+            | Object::Setting,
             Action::Read,
         ) => true,
         (
-            Object::Artifact | Object::Task | Object::TaskSchedule | Object::Log | Object::Setting,
+            Object::Artifact
+            | Object::Task
+            | Object::TaskSchedule
+            | Object::Log
+            | Object::Event
+            | Object::Setting,
             Action::Download
             | Action::Write
             | Action::Evict
@@ -432,7 +455,7 @@ mod tests {
 
     /// Every object, in matrix order. The length must track the enum, so
     /// adding a variant breaks compilation here too.
-    const OBJECTS: [Object; 7] = [
+    const OBJECTS: [Object; 8] = [
         Object::Artifact,
         Object::Task,
         Object::TaskSchedule,
@@ -440,6 +463,7 @@ mod tests {
         Object::User,
         Object::ApiKey,
         Object::Setting,
+        Object::Event,
     ];
 
     /// Every action, in matrix order.
@@ -461,7 +485,7 @@ mod tests {
             Role::Admin => true,
             Role::Operator => match object {
                 Object::Artifact | Object::Task | Object::TaskSchedule | Object::Setting => true,
-                Object::Log => action == Action::Read,
+                Object::Log | Object::Event => action == Action::Read,
                 Object::User | Object::ApiKey => false,
             },
             Role::Viewer => match object {
@@ -469,6 +493,7 @@ mod tests {
                 | Object::Task
                 | Object::TaskSchedule
                 | Object::Log
+                | Object::Event
                 | Object::Setting => action == Action::Read,
                 Object::User | Object::ApiKey => false,
             },

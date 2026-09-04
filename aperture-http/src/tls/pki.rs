@@ -3,6 +3,7 @@
 //! Artifacts (all DER): `tls_ca-cert` (pkix-cert), `tls_ca-key` (pkcs8,
 //! secret), `tls_server-cert` (pkix-cert), `tls_server-key` (pkcs8, secret).
 
+use std::error::Error as StdError;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, LazyLock};
 
@@ -42,7 +43,7 @@ struct Pki {
 }
 
 /// Generates a CA and leaf cert signed by it. Blocking.
-fn generate_pki(bind_addr: SocketAddr) -> anyhow::Result<Pki> {
+fn generate_pki(bind_addr: SocketAddr, hostname: Option<&str>) -> anyhow::Result<Pki> {
     let mut ca_params = CertificateParams::default();
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
@@ -57,7 +58,7 @@ fn generate_pki(bind_addr: SocketAddr) -> anyhow::Result<Pki> {
     let ca_cert_der = ca_cert.der().clone();
     let issuer = Issuer::new(ca_params, ca_key);
 
-    let sans = compute_sans(bind_addr);
+    let sans = compute_sans(bind_addr, hostname);
     let subject = default_leaf_subject();
     let (server_cert, server_key) = generate_leaf(&issuer, &subject, &sans)?;
     Ok(Pki {
@@ -89,15 +90,17 @@ async fn regenerate_leaf_for_rotation(
 async fn regenerate_leaf_with_default_identity(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
+    hostname: Option<&str>,
 ) -> Result<(CertificateDer<'static>, PrivatePkcs8KeyDer<'static>), TlsError> {
     let ca_cert_der = read_artifact(artifacts, &CA_CERT).await?;
     let ca_key_der = read_artifact(artifacts, &CA_KEY).await?;
+    let hostname = hostname.map(str::to_owned);
 
     Ok(spawn_blocking(move || {
         let ca_key = KeyPair::try_from(ca_key_der.as_slice())?;
         let issuer = Issuer::from_ca_cert_der(&CertificateDer::from(ca_cert_der), ca_key)?;
         let subject = default_leaf_subject();
-        let sans = compute_sans(bind_addr);
+        let sans = compute_sans(bind_addr, hostname.as_deref());
         generate_leaf(&issuer, &subject, &sans)
     })
     .await??)
@@ -136,13 +139,27 @@ fn set_validity(params: &mut CertificateParams, days: u32) {
 }
 
 /// Computes SANs for a leaf cert. Localhost is always included. A non-loopback
-/// bind IP is appended if set.
-fn compute_sans(bind_addr: SocketAddr) -> Vec<SanType> {
+/// bind IP is appended if set. When `hostname` is set, `<hostname>.local` is
+/// added for mDNS reachability.
+fn compute_sans(bind_addr: SocketAddr, hostname: Option<&str>) -> Vec<SanType> {
     let mut sans = vec![
         SanType::DnsName("localhost".try_into().expect("valid DNS name")),
         SanType::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         SanType::IpAddress(IpAddr::V6(Ipv6Addr::LOCALHOST)),
     ];
+
+    if let Some(host) = hostname {
+        let mdns = format!("{host}.local");
+        match mdns.try_into() {
+            Ok(dns) => sans.push(SanType::DnsName(dns)),
+            Err(err) => tracing::warn!(
+                error = &err as &dyn StdError,
+                dns = format!("{host}.local"),
+                "dropping mDNS SAN"
+            ),
+        }
+    }
+
     let bind_ip = bind_addr.ip();
     let already = sans
         .iter()
@@ -220,6 +237,7 @@ fn ip_addr_from_octets(octets: &[u8]) -> anyhow::Result<IpAddr> {
 pub async fn ensure_certificates(
     artifacts: &Artifacts,
     bind_addr: SocketAddr,
+    hostname: Option<&str>,
 ) -> Result<(), TlsError> {
     let ca_present =
         artifacts.locate(&CA_CERT).await?.is_some() && artifacts.locate(&CA_KEY).await?.is_some();
@@ -232,17 +250,38 @@ pub async fn ensure_certificates(
 
     if !ca_present {
         tracing::info!("generating initial PKI");
-        let pki = spawn_blocking(move || generate_pki(bind_addr)).await??;
+        let hostname = hostname.map(str::to_owned);
+        let pki = spawn_blocking(move || generate_pki(bind_addr, hostname.as_deref())).await??;
         store_key_artifact(artifacts, &CA_KEY, &pki.ca_key).await?;
         store_cert_artifact(artifacts, &CA_CERT, &pki.ca_cert).await?;
-        // CA pair rotated. Regenerate leaf against the new CA.
         store_key_artifact(artifacts, &SERVER_KEY, &pki.server_key).await?;
         store_cert_artifact(artifacts, &SERVER_CERT, &pki.server_cert).await?;
         return Ok(());
     }
 
     tracing::info!("regenerating leaf certificate against existing CA");
-    let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr).await?;
+    let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr, hostname).await?;
+    store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
+    store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
+    Ok(())
+}
+
+/// Regenerates the leaf certificate with a new identity (SANs).
+///
+/// Used when the advertised hostname changes. The existing CA is reused
+/// and only the leaf is re-issued. Live reload is triggered by the
+/// artifact change feed (see [`crate::tls::TlsReload`]).
+///
+/// # Errors
+///
+/// Returns `TlsError` if the CA artifacts cannot be read, the leaf cannot be
+/// generated, or the new artifacts cannot be stored.
+pub async fn regenerate_leaf_for_identity(
+    artifacts: &Artifacts,
+    bind_addr: SocketAddr,
+    hostname: Option<&str>,
+) -> Result<(), TlsError> {
+    let (cert, key) = regenerate_leaf_with_default_identity(artifacts, bind_addr, hostname).await?;
     store_key_artifact(artifacts, &SERVER_KEY, &key).await?;
     store_cert_artifact(artifacts, &SERVER_CERT, &cert).await?;
     Ok(())
@@ -354,6 +393,37 @@ mod tests {
     use super::*;
     use crate::tls::{TlsReload, load_shared_config};
 
+    fn addr() -> SocketAddr {
+        "[::1]:8443".parse().unwrap()
+    }
+
+    fn dns_sans(sans: &[SanType]) -> Vec<String> {
+        sans.iter()
+            .filter_map(|san| match san {
+                SanType::DnsName(name) => Some(name.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compute_sans_includes_mdns_name_for_hostname() {
+        let sans = compute_sans(addr(), Some("aperture"));
+        let dns = dns_sans(&sans);
+        assert!(
+            dns.contains(&"aperture.local".to_owned()),
+            "expected <hostname>.local SAN, got {dns:?}"
+        );
+        assert!(dns.contains(&"localhost".to_owned()));
+    }
+
+    #[test]
+    fn compute_sans_omits_mdns_name_without_hostname() {
+        let sans = compute_sans(addr(), None);
+        let dns = dns_sans(&sans);
+        assert_eq!(dns, ["localhost"]);
+    }
+
     fn install_crypto() {
         use std::sync::Once;
 
@@ -384,26 +454,27 @@ mod tests {
         }
     }
 
-    async fn fresh_store() -> (Artifacts, TempDir) {
+    async fn fresh_store() -> (Artifacts, aperture_events::EventBus, TempDir) {
         let storage = Storage::open(":memory:").await.unwrap();
         let dir = TempDir::new();
-        let artifacts = Artifacts::new(storage, dir.0.clone());
-        (artifacts, dir)
+        let event_bus = aperture_events::EventBus::new(storage.events().unwrap());
+        let artifacts = Artifacts::new(storage, dir.0.clone(), event_bus.clone());
+        (artifacts, event_bus, dir)
     }
 
     #[tokio::test]
     async fn fresh_cert_does_not_need_rotation() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
         assert!(!needs_rotation(&artifacts).await.unwrap());
     }
 
     #[tokio::test]
     async fn expired_cert_needs_rotation() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let ca_cert_der = read_artifact(&artifacts, &CA_CERT).await.unwrap();
         let ca_key_der = read_artifact(&artifacts, &CA_KEY).await.unwrap();
@@ -439,9 +510,9 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_certificates_regenerates_only_leaf_when_ca_pair_intact() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let old_ca_cert = digest_of(&artifacts, &CA_CERT).await;
         let old_ca_key = digest_of(&artifacts, &CA_KEY).await;
@@ -453,7 +524,7 @@ mod tests {
             .await
             .unwrap();
 
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         assert_eq!(digest_of(&artifacts, &CA_CERT).await, old_ca_cert);
         assert_eq!(digest_of(&artifacts, &CA_KEY).await, old_ca_key);
@@ -471,9 +542,9 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_certificates_regenerates_everything_when_ca_pair_missing() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let old_ca_cert = digest_of(&artifacts, &CA_CERT).await;
         let old_ca_key = digest_of(&artifacts, &CA_KEY).await;
@@ -485,7 +556,7 @@ mod tests {
             .await
             .unwrap();
 
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         assert_ne!(
             digest_of(&artifacts, &CA_CERT).await,
@@ -512,9 +583,9 @@ mod tests {
     #[tokio::test]
     async fn load_server_config_succeeds_after_ensure() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
         let config = load_server_config(&artifacts).await.unwrap();
         let _ = config;
     }
@@ -522,9 +593,9 @@ mod tests {
     #[tokio::test]
     async fn load_server_config_fails_on_corrupt_key() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         artifacts
             .put(&SERVER_KEY, Some(&PKCS8), &b"corrupt"[..])
@@ -537,9 +608,9 @@ mod tests {
     #[tokio::test]
     async fn reload_certificates_swaps_shared_config() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let config = load_shared_config(&artifacts).await.unwrap();
         let old = config.load_full();
@@ -556,9 +627,9 @@ mod tests {
 
     #[tokio::test]
     async fn rotate_if_due_returns_false_for_fresh_cert() {
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let rotated = rotate_if_due(&artifacts).await.unwrap();
         assert!(!rotated, "fresh cert should not need rotation");
@@ -570,9 +641,9 @@ mod tests {
         use x509_parser::extensions::GeneralName as X509GeneralName;
 
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let ca_cert_der = read_artifact(&artifacts, &CA_CERT).await.unwrap();
         let ca_key_der = read_artifact(&artifacts, &CA_KEY).await.unwrap();
@@ -644,14 +715,14 @@ mod tests {
 
         install_crypto();
 
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let config = load_shared_config(&artifacts).await.unwrap();
         let old = config.load_full();
 
-        let reload = TlsReload::new(artifacts.clone(), config.clone());
+        let reload = TlsReload::new(artifacts.clone(), config.clone(), &bus);
         let token = CancellationToken::new();
         let handle = tokio::spawn(reload.run(token.clone()));
 
@@ -692,9 +763,11 @@ mod tests {
 
         install_crypto();
 
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        ensure_certificates(&artifacts, bind_addr).await.unwrap();
+        ensure_certificates(&artifacts, bind_addr, None)
+            .await
+            .unwrap();
 
         let shared = load_shared_config(&artifacts).await.unwrap();
 
@@ -746,9 +819,9 @@ mod tests {
     #[tokio::test]
     async fn reload_fails_on_half_written_key() {
         install_crypto();
-        let (artifacts, _dir) = fresh_store().await;
+        let (artifacts, _bus, _dir) = fresh_store().await;
         let addr: SocketAddr = "[::1]:8443".parse().unwrap();
-        ensure_certificates(&artifacts, addr).await.unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         let config = load_shared_config(&artifacts).await.unwrap();
         let before = config.load_full();

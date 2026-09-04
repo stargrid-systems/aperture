@@ -1,4 +1,4 @@
-//! Hot-reload of TLS certificates via the artifact change feed.
+//! Hot-reload of TLS certificates via domain events.
 //!
 //! Reloads when `tls_server-cert` or `tls_server-key` is written or removed.
 //! Writes within a short debounce window are coalesced. A failed reload is
@@ -8,9 +8,8 @@
 use std::error::Error as StdError;
 use std::time::Duration;
 
-use aperture_artifacts::{ArtifactChange, Artifacts, ChangeKind};
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::broadcast::error::RecvError;
+use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts};
+use aperture_events::{EventBus, TypedEventStream};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
@@ -24,20 +23,21 @@ const RELOAD_RETRY_BACKOFF: Duration = Duration::from_secs(5);
 /// Max reload attempts before giving up until the next change arrives.
 const MAX_RELOAD_RETRIES: u32 = 6;
 
-/// Watches the artifact change feed and hot-swaps the TLS server config.
+/// Watches artifact events and hot-swaps the TLS server config.
 pub struct TlsReload {
     artifacts: Artifacts,
     config: SharedConfig,
-    rx: Receiver<ArtifactChange>,
+    written: TypedEventStream<ArtifactWritten>,
+    removed: TypedEventStream<ArtifactRemoved>,
 }
 
 impl TlsReload {
-    pub fn new(artifacts: Artifacts, config: SharedConfig) -> Self {
-        let rx = artifacts.subscribe();
+    pub fn new(artifacts: Artifacts, config: SharedConfig, event_bus: &EventBus) -> Self {
         Self {
             artifacts,
             config,
-            rx,
+            written: event_bus.subscribe_typed::<ArtifactWritten>(),
+            removed: event_bus.subscribe_typed::<ArtifactRemoved>(),
         }
     }
 
@@ -52,8 +52,11 @@ impl TlsReload {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => return,
-                    recv = self.rx.recv() => {
-                        if !apply_change(recv, &mut deadline, &mut retries) { return; }
+                    Some(event) = self.written.recv() => {
+                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
+                    }
+                    Some(event) = self.removed.recv() => {
+                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
                     }
                     () = &mut sleep => {
                         match reload_certificates(&self.artifacts, &self.config).await {
@@ -87,8 +90,11 @@ impl TlsReload {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => return,
-                    recv = self.rx.recv() => {
-                        if !apply_change(recv, &mut deadline, &mut retries) { return; }
+                    Some(event) = self.written.recv() => {
+                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
+                    }
+                    Some(event) = self.removed.recv() => {
+                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
                     }
                 }
             }
@@ -96,33 +102,11 @@ impl TlsReload {
     }
 }
 
-/// Schedules a debounced reload when a relevant artifact changes (or the
-/// watcher lagged). Returns false when the feed has closed.
-fn apply_change(
-    change: Result<ArtifactChange, RecvError>,
-    deadline: &mut Option<Instant>,
-    retries: &mut u32,
-) -> bool {
-    match change {
-        Ok(ArtifactChange {
-            key,
-            kind: ChangeKind::Written | ChangeKind::Removed,
-            digest,
-        }) if key == SERVER_CERT || key == SERVER_KEY => {
-            tracing::debug!(%key, ?digest, "scheduling TLS reload");
-            *retries = 0;
-            *deadline = Some(Instant::now() + RELOAD_DEBOUNCE);
-        }
-        Ok(_) => {}
-        Err(RecvError::Lagged(n)) => {
-            tracing::warn!(lag = n, "tls reload watcher lagged, scheduling reload");
-            *retries = 0;
-            *deadline = Some(Instant::now() + RELOAD_DEBOUNCE);
-        }
-        Err(RecvError::Closed) => {
-            tracing::warn!("artifact change feed closed, TLS reload watcher exiting");
-            return false;
-        }
+/// Schedules a debounced reload when a relevant artifact changes.
+fn check_artifact_key(key: &str, deadline: &mut Option<Instant>, retries: &mut u32) {
+    if key == SERVER_CERT.as_str() || key == SERVER_KEY.as_str() {
+        tracing::debug!(%key, "scheduling TLS reload");
+        *retries = 0;
+        *deadline = Some(Instant::now() + RELOAD_DEBOUNCE);
     }
-    true
 }

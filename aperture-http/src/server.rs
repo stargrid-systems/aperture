@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use aperture_artifacts::Artifacts;
+use aperture_events::EventBus;
 use aperture_runtime::{Stop, Worker, WorkerSet};
 use axum::Router;
 use axum::serve::Listener;
@@ -55,6 +56,10 @@ impl HttpServer {
     /// Both set: HTTPS + HTTP redirect. HTTPS only: full API over TLS.
     /// HTTP only: full API (recovery mode). Neither: no listeners.
     ///
+    /// `hostname` is the advertised mDNS hostname. When set, it is baked into
+    /// the leaf cert as a `<hostname>.local` SAN. Pass `None` when OS
+    /// integration is disabled.
+    ///
     /// # Errors
     ///
     /// Returns an error if TLS setup, certificate provisioning, or listener
@@ -63,7 +68,9 @@ impl HttpServer {
         artifacts: Artifacts,
         tls_addr: Option<SocketAddr>,
         plain_addr: Option<SocketAddr>,
+        hostname: Option<&str>,
         app: Router,
+        event_bus: &EventBus,
     ) -> anyhow::Result<Self> {
         let mut server = Self::new();
         // The bound HTTPS port, so redirects target the real listener. With an
@@ -71,14 +78,14 @@ impl HttpServer {
         let mut https_port: Option<u16> = None;
 
         if let Some(tls_addr) = tls_addr {
-            ensure_certificates(&artifacts, tls_addr).await?;
+            ensure_certificates(&artifacts, tls_addr, hostname).await?;
             let tcp_listener = TcpListener::bind(tls_addr).await?;
             // Log the actual bound address so an OS-assigned port (":0")
             // surfaces in the startup banner instead of the requested one.
             let bound = tcp_listener.local_addr().unwrap_or(tls_addr);
             https_port = Some(bound.port());
             tracing::info!(%bound, "aperture listening (https)");
-            let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener).await?;
+            let endpoint = TlsEndpoint::new(artifacts.clone(), tcp_listener, event_bus).await?;
             server = server.serve_tls(endpoint, app.clone());
         }
 
@@ -121,6 +128,26 @@ impl HttpServer {
     pub fn serve_http(mut self, listener: TcpListener, app: Router) -> Self {
         self.http.push(HttpEntry { listener, app });
         self
+    }
+
+    /// The port the TLS listener is actually bound to. `None` when TLS is
+    /// not configured or the OS-assigned port cannot be determined.
+    ///
+    /// Unlike the configured port this is never `0`, so it is safe to
+    /// advertise.
+    #[must_use]
+    pub fn tls_port(&self) -> Option<u16> {
+        let entry = self.tls.as_ref()?;
+        entry.listener.local_addr().ok().map(|addr| addr.port())
+    }
+
+    /// The port the plain HTTP listener is actually bound to. `None` when
+    /// there is no plain listener or the OS-assigned port cannot be
+    /// determined.
+    #[must_use]
+    pub fn plain_port(&self) -> Option<u16> {
+        let entry = self.http.first()?;
+        entry.listener.local_addr().ok().map(|addr| addr.port())
     }
 
     /// Runs all listeners and reload watchers until `stop` is cancelled, then

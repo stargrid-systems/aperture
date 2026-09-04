@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 aperture-artifacts = { workspace = true }
 aperture-auth = { workspace = true }
+aperture-events = { workspace = true }
 aperture-runtime = { workspace = true }
 aperture-settings = { workspace = true }
 aperture-storage = { workspace = true }

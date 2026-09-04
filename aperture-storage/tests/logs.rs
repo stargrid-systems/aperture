@@ -1,6 +1,6 @@
 use aperture_storage::{
-    EventFilter, EventRecord, Level, ListQuery, SpanFilter, SpanParentFilter, SpanRecord, Storage,
-    StorageError,
+    Level, ListQuery, LogEventFilter, LogEventRecord, SpanFilter, SpanParentFilter, SpanRecord,
+    Storage, StorageError,
 };
 use jiff::Timestamp;
 
@@ -43,7 +43,7 @@ async fn seeded_storage() -> Storage {
         .unwrap();
 
     batch
-        .insert_event(EventRecord {
+        .insert_event(LogEventRecord {
             span_tracing_id: Some(1),
             level: Level::Info,
             target: "aperture_artifacts::fetch",
@@ -58,7 +58,7 @@ async fn seeded_storage() -> Storage {
         .unwrap();
 
     batch
-        .insert_event(EventRecord {
+        .insert_event(LogEventRecord {
             span_tracing_id: Some(1),
             level: Level::Warn,
             target: "aperture_artifacts::fetch",
@@ -73,7 +73,7 @@ async fn seeded_storage() -> Storage {
         .unwrap();
 
     batch
-        .insert_event(EventRecord {
+        .insert_event(LogEventRecord {
             span_tracing_id: None,
             level: Level::Error,
             target: "aperture_http::error",
@@ -103,7 +103,7 @@ async fn list_events_newest_first() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -138,7 +138,7 @@ async fn filter_by_min_level() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: Some(Level::Warn),
                 target: Vec::new(),
                 query: None,
@@ -165,7 +165,7 @@ async fn filter_by_target() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: vec!["aperture_artifacts::fetch".to_owned()],
                 query: None,
@@ -195,7 +195,7 @@ async fn filter_by_span_id() {
 
     let all = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -213,7 +213,7 @@ async fn filter_by_span_id() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -239,7 +239,7 @@ async fn filter_by_time_range() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -268,7 +268,7 @@ async fn filter_by_structured_fields() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -298,7 +298,7 @@ async fn query_matches_message() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: Some("download".to_owned()),
@@ -328,7 +328,7 @@ async fn query_matches_target() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: Some("aperture_http".to_owned()),
@@ -375,7 +375,7 @@ async fn rejects_cursor_from_another_listing() {
 
     let page = logs
         .list_events(
-            &EventFilter::default(),
+            &LogEventFilter::default(),
             &ListQuery {
                 limit: Some(1),
                 ..Default::default()
@@ -435,7 +435,7 @@ async fn prune_before_deletes_old_events() {
 
     let remaining = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -466,7 +466,7 @@ async fn record_dropped_inserts_synthetic_event() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -502,7 +502,7 @@ async fn paginate_events() {
     let mut batch = logs.batch().await.unwrap();
     for i in 0..5 {
         batch
-            .insert_event(EventRecord {
+            .insert_event(LogEventRecord {
                 span_tracing_id: None,
                 level: Level::Info,
                 target: "test",
@@ -520,7 +520,7 @@ async fn paginate_events() {
 
     let first = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -545,7 +545,7 @@ async fn paginate_events() {
 
     let second = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 min_level: None,
                 target: Vec::new(),
                 query: None,
@@ -686,7 +686,7 @@ async fn list_boots_groups_by_boot_id() {
 
     let mut batch = logs.batch().await.unwrap();
     batch
-        .insert_event(EventRecord {
+        .insert_event(LogEventRecord {
             span_tracing_id: None,
             level: Level::Info,
             target: "aperture",
@@ -700,7 +700,7 @@ async fn list_boots_groups_by_boot_id() {
         .await
         .unwrap();
     batch
-        .insert_event(EventRecord {
+        .insert_event(LogEventRecord {
             span_tracing_id: None,
             level: Level::Info,
             target: "aperture",
@@ -714,7 +714,7 @@ async fn list_boots_groups_by_boot_id() {
         .await
         .unwrap();
     batch
-        .insert_event(EventRecord {
+        .insert_event(LogEventRecord {
             span_tracing_id: None,
             level: Level::Info,
             target: "aperture",
@@ -743,7 +743,7 @@ async fn list_boots_groups_by_boot_id() {
 
     let page = logs
         .list_events(
-            &EventFilter {
+            &LogEventFilter {
                 boot_id: Some(a),
                 ..Default::default()
             },

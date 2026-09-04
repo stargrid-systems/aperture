@@ -5,25 +5,23 @@
 //! Reads fill from the definition default when no value has been stored, so a
 //! fresh install always returns a complete configuration.
 
+use std::error::Error as StdError;
 use std::sync::Arc;
 
+use aperture_events::EventBus;
 use aperture_storage::{ActorId, SettingRepository};
 use jiff::Timestamp;
 use serde_json::Value;
-use tokio::sync::broadcast;
 
 use crate::SettingRegistry;
 use crate::change::SettingChange;
 use crate::definition::SettingDefinition;
 use crate::error::SettingError;
 
-/// Capacity of the in-process change feed.
-const CHANGE_FEED_CAPACITY: usize = 64;
-
 struct SettingsInner {
     repo: SettingRepository,
     registry: SettingRegistry,
-    changes: broadcast::Sender<SettingChange>,
+    event_bus: EventBus,
 }
 
 /// Reads and writes setting values. Cheap to clone: all clones share one
@@ -35,21 +33,15 @@ pub struct Settings {
 
 impl Settings {
     /// Creates a settings service backed by `repo` and the keys in
-    /// `registry`.
-    pub fn new(repo: SettingRepository, registry: SettingRegistry) -> Self {
-        let (changes, _) = broadcast::channel(CHANGE_FEED_CAPACITY);
+    /// `registry`. Setting changes are emitted through `event_bus`.
+    pub fn new(repo: SettingRepository, registry: SettingRegistry, event_bus: EventBus) -> Self {
         Self {
             inner: Arc::new(SettingsInner {
                 repo,
                 registry,
-                changes,
+                event_bus,
             }),
         }
-    }
-
-    /// Subscribes to setting changes.
-    pub fn subscribe(&self) -> broadcast::Receiver<SettingChange> {
-        self.inner.changes.subscribe()
     }
 
     /// The registry of definitions, for listings and schema lookup.
@@ -62,8 +54,8 @@ impl Settings {
     ///
     /// # Errors
     ///
-    /// Returns `SettingError::NotRegistered` if `key` is unknown, or a storage
-    /// error if the read fails.
+    /// Returns [`SettingError::NotRegistered`] if `key` is unknown, or a
+    /// storage error if the read fails.
     pub async fn get_value(&self, key: &str) -> Result<Value, SettingError> {
         let definition = self
             .inner
@@ -81,8 +73,8 @@ impl Settings {
     ///
     /// # Errors
     ///
-    /// Returns `SettingError::NotRegistered` if the key is unknown,
-    /// `SettingError::Decode` if the stored value cannot be decoded, or a
+    /// Returns [`SettingError::NotRegistered`] if the key is unknown,
+    /// [`SettingError::Decode`] if the stored value cannot be decoded, or a
     /// storage error if the read fails.
     pub async fn get<D>(&self) -> Result<D, SettingError>
     where
@@ -97,9 +89,9 @@ impl Settings {
     ///
     /// # Errors
     ///
-    /// Returns `SettingError::NotRegistered` if `key` is unknown,
-    /// `SettingError::Decode` if the value does not fit the type, or a storage
-    /// error if the write fails.
+    /// Returns [`SettingError::NotRegistered`] if `key` is unknown,
+    /// [`SettingError::Decode`] if the value does not fit the type, or a
+    /// storage error if the write fails.
     pub async fn set_value(
         &self,
         key: &str,
@@ -114,12 +106,23 @@ impl Settings {
         definition.check_value(&value)?;
         let now = Timestamp::now();
         self.inner.repo.put(key, &value, updated_by, now).await?;
-        let _ = self.inner.changes.send(SettingChange {
-            key: key.to_owned(),
-            value,
-            actor: updated_by,
-            timestamp: now,
-        });
+        if let Err(err) = self
+            .inner
+            .event_bus
+            .emit(
+                SettingChange {
+                    key: key.to_owned(),
+                    value,
+                },
+                updated_by,
+            )
+            .await
+        {
+            tracing::warn!(
+                error = &err as &dyn StdError,
+                "failed to emit setting change event"
+            );
+        }
         Ok(())
     }
 
