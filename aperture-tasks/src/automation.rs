@@ -117,3 +117,100 @@ impl Automation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::future::{Future, ready};
+    use std::sync::Arc;
+
+    use aperture_events::EventBus;
+    use aperture_storage::{Event, EventId, ListQuery, Storage};
+    use jiff::Timestamp;
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    struct Ping;
+
+    impl crate::TaskDefinition for Ping {
+        const KEY: &'static str = "ping";
+
+        type Input = Value;
+        type Output = ();
+
+        fn capabilities(&self) -> crate::Capabilities {
+            crate::Capabilities::NONE
+        }
+
+        fn run(
+            &self,
+            _input: Self::Input,
+            _ctx: crate::TaskContext,
+        ) -> impl Future<Output = Result<Self::Output, crate::RunError>> + Send {
+            ready(Ok(()))
+        }
+    }
+
+    fn event(key: &str, data: Value) -> Event {
+        Event {
+            id: EventId::from(1),
+            key: key.to_owned(),
+            data,
+            actor: ActorId::SYSTEM,
+            timestamp: Timestamp::from_microsecond(0).unwrap(),
+        }
+    }
+
+    async fn automation_with_rule() -> (Automation, Storage) {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let mut registry = crate::TaskRegistry::new();
+        registry.register(Arc::new(Ping));
+        let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+        let schedules = storage.task_schedules().unwrap();
+        let event_bus = EventBus::new(storage.events().unwrap());
+        let mut automation = Automation::new(tasks, schedules, &event_bus);
+        automation.on_event(
+            "source.event",
+            "ping",
+            |data| json!({ "hostname": data["hostname"] }),
+        );
+        (automation, storage)
+    }
+
+    async fn spawned_inputs(storage: &Storage) -> Vec<Value> {
+        storage
+            .tasks()
+            .unwrap()
+            .list(None, Some("ping"), None, &[], &ListQuery::default())
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|task| task.input)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn matching_event_creates_task_with_mapped_input() {
+        let (automation, storage) = automation_with_rule().await;
+
+        automation
+            .handle_event(&event("source.event", json!({ "hostname": "aperture" })))
+            .await;
+
+        let inputs = spawned_inputs(&storage).await;
+        assert_eq!(inputs, [json!({ "hostname": "aperture" })]);
+    }
+
+    #[tokio::test]
+    async fn non_matching_event_creates_no_task() {
+        let (automation, storage) = automation_with_rule().await;
+
+        automation
+            .handle_event(&event("other.event", json!({ "hostname": "aperture" })))
+            .await;
+
+        let inputs = spawned_inputs(&storage).await;
+        assert!(inputs.is_empty());
+    }
+}
