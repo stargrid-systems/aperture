@@ -50,7 +50,7 @@ impl OsIntegration {
     ///
     /// `https_port` and `plain_port` are the ports the listeners actually
     /// bound (never `0`). The plain listener is only advertised as
-    /// `_http._tcp` when `tls_enabled` is false; with TLS it merely
+    /// `_http._tcp` when `tls_enabled` is false. With TLS it merely
     /// redirects.
     pub fn into_worker(
         self,

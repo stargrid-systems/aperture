@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use aperture_events::{Delivery, EventBus, TypedEventStream};
 use aperture_runtime::{Stop, Worker};
-use aperture_settings::SettingChange;
+use aperture_settings::{SettingChange, SettingChangeError};
 use aperture_storage::ActorId;
 use aperture_tasks::Tasks;
 use tokio::time::sleep;
@@ -39,8 +39,8 @@ pub struct OsWorker {
     tasks: Tasks,
     connection: zbus::Connection,
     hostname: String,
-    /// Service instance name currently published: the hostname plus a
-    /// numeric suffix after collisions.
+    /// Service instance name currently published: the hostname truncated
+    /// to the DNS label limit, plus a numeric suffix after collisions.
     instance: String,
     https_port: Option<u16>,
     plain_port: Option<u16>,
@@ -61,7 +61,7 @@ impl OsWorker {
         event_bus: EventBus,
         setting_changes: TypedEventStream<SettingChange>,
     ) -> Self {
-        let instance = hostname.clone();
+        let instance = plain_instance(&hostname);
         Self {
             tasks,
             connection,
@@ -155,13 +155,16 @@ impl Worker for OsWorker {
 impl OsWorker {
     /// Publishes the mDNS services for the current hostname.
     ///
-    /// The service instance name is [`Self::instance`]; the advertised host
+    /// The service instance name is [`Self::instance`]. The advertised host
     /// is the daemon's own FQDN, queried fresh at every publish so a
     /// renamed peer is never targeted. When the FQDN differs from
     /// `<hostname>.local`, TLS via the mDNS name fails until the hostname
-    /// setting is unique on the LAN; the mismatch is logged on each
-    /// publish. Retries with exponential backoff until publishing
-    /// succeeds or `stop` resolves. Returns `None` when stopped.
+    /// setting is unique on the LAN. The mismatch is logged on each
+    /// publish. With no advertisable services nothing is published and no
+    /// avahi query runs, so an avahi-less host still reaches the run loop
+    /// and reacts to hostname changes. Retries with exponential backoff
+    /// until publishing succeeds or `stop` resolves. Returns `None` when
+    /// stopped.
     async fn publish(&self, stop: &Stop) -> Option<ServicePublisher> {
         let services = services_to_publish(
             &self.hostname,
@@ -169,6 +172,15 @@ impl OsWorker {
             self.plain_port,
             self.tls_enabled,
         );
+        if services.is_empty() {
+            // `start` short-circuits on an empty service list, so this
+            // cannot fail and no avahi round trip happens.
+            let publisher =
+                ServicePublisher::start(&self.connection, &self.instance, "", &services)
+                    .await
+                    .expect("empty-service publication is infallible");
+            return Some(publisher);
+        }
         let mut delay = PUBLISH_RETRY_DELAY;
         loop {
             let (host, mismatch) = match host_fqdn(&self.connection).await {
@@ -188,7 +200,7 @@ impl OsWorker {
                 tracing::warn!(
                     host = %host,
                     setting = %self.hostname,
-                    "avahi reports a host differing from the os.hostname setting; \
+                    "avahi reports a host differing from the os.hostname setting. \
                      TLS via the mDNS name fails until the setting hostname is \
                      unique on the LAN"
                 );
@@ -289,7 +301,7 @@ impl OsWorker {
         }
 
         hostname.as_str().clone_into(&mut self.hostname);
-        hostname.as_str().clone_into(&mut self.instance);
+        self.instance = plain_instance(hostname.as_str());
         if !self.republish(publisher, stop).await {
             return true;
         }
@@ -297,14 +309,14 @@ impl OsWorker {
         // but a post-apply RUNNING signal can still arrive after the drain
         // and cause one redundant republish, which is harmless.
         publisher.drain_stale();
-        // The old backoff describes the pre-rename storm; the next
+        // The old backoff describes the pre-rename storm. The next
         // collision should start over.
         debounce.reset();
         true
     }
 
     /// Handles one settings-stream event. Returns
-    /// [`Self::on_hostname_change`]'s flag; non-hostname settings never
+    /// [`Self::on_hostname_change`]'s flag. Non-hostname settings never
     /// republish and are always `false`.
     async fn on_setting_change(
         &mut self,
@@ -313,8 +325,16 @@ impl OsWorker {
         stop: &Stop,
         debounce: &mut RecreateDebounce,
     ) -> bool {
-        let Some(setting) = event.decode::<HostnameSetting>() else {
-            return false;
+        let setting = match event.try_decode::<HostnameSetting>() {
+            Ok(setting) => setting,
+            Err(SettingChangeError::KeyMismatch) => return false,
+            Err(err) => {
+                tracing::warn!(
+                    error = &err as &dyn StdError,
+                    "malformed os.hostname setting change, skipping"
+                );
+                return false;
+            }
         };
         self.on_hostname_change(setting.hostname().clone(), publisher, stop, debounce)
             .await
@@ -323,12 +343,12 @@ impl OsWorker {
 
 /// Service instance name for the next publish attempt.
 ///
-/// A group collision means the name is taken by another host: bump the
-/// numeric suffix, `aperture` -> `aperture-2` -> `aperture-3`. The result
-/// always fits the 63-byte DNS label limit: the base is truncated to make
-/// room for the separator and the suffix digits. Any other trigger resets
-/// to the plain hostname: a daemon restart freed the old names, and a
-/// failure does not imply the name is taken.
+/// The result always fits the 63-byte DNS label limit. A group collision
+/// means the name is taken by another host: bump the numeric suffix,
+/// `aperture` -> `aperture-2` -> `aperture-3`, truncating the base so the
+/// separator and the suffix digits fit. Any other trigger resets to the
+/// plain hostname truncated to the label limit: a daemon restart freed the
+/// old names, and a failure does not imply the name is taken.
 fn next_instance(base: &str, current: &str, reason: &RecreateReason) -> String {
     match reason {
         RecreateReason::GroupCollision => current
@@ -338,8 +358,21 @@ fn next_instance(base: &str, current: &str, reason: &RecreateReason) -> String {
                 || suffixed_instance(base, 2),
                 |(prefix, n)| suffixed_instance(prefix, n.saturating_add(1)),
             ),
-        RecreateReason::Server | RecreateReason::GroupFailure => base.to_owned(),
+        RecreateReason::Server | RecreateReason::GroupFailure => plain_instance(base),
     }
+}
+
+/// Instance name without a collision suffix: `name` truncated to the
+/// 63-byte DNS label limit, never splitting a UTF-8 character.
+fn plain_instance(name: &str) -> String {
+    if name.len() <= INSTANCE_LABEL_LIMIT {
+        return name.to_owned();
+    }
+    let mut end = INSTANCE_LABEL_LIMIT;
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    name[..end].to_owned()
 }
 
 /// Appends `-<suffix>` to `base`, truncating the base so the whole label
@@ -368,10 +401,13 @@ const fn digit_count(n: u32) -> usize {
 /// hostname apply failed, `<hostname>.local` can name a different machine,
 /// and advertising it would silently misroute connections to that peer.
 /// The bool reports whether the FQDN differs from the certificate SAN host
-/// (`<hostname>.local`); when it does, TLS via the mDNS name fails against
-/// this machine until the hostname setting is unique on the LAN.
+/// (`<hostname>.local`). When it does, TLS via the mDNS name fails against
+/// this machine until the hostname setting is unique on the LAN. DNS names
+/// are case-insensitive, so the comparison ignores ASCII case.
 fn srv_host(fqdn: &str, hostname: &str) -> (String, bool) {
-    (fqdn.to_owned(), fqdn != format!("{hostname}.local"))
+    let san_host = format!("{hostname}.local");
+    let mismatch = !fqdn.eq_ignore_ascii_case(&san_host);
+    (fqdn.to_owned(), mismatch)
 }
 
 /// Sleeps out the retry delay and doubles it for the next round. Returns
@@ -419,7 +455,7 @@ impl RecreateDebounce {
 ///
 /// The HTTPS listener is always advertised as `_https._tcp`. The plain
 /// listener is advertised as `_http._tcp` only when it serves the API
-/// itself (no TLS configured); with TLS enabled it merely redirects.
+/// itself (no TLS configured). With TLS enabled it merely redirects.
 /// Bind-any-port configurations (`:0`) are never advertised because the
 /// real port is unknown, and neither is an empty hostname.
 fn services_to_publish(
@@ -582,6 +618,14 @@ mod tests {
     }
 
     #[test]
+    fn srv_host_compares_case_insensitively() {
+        let (host, mismatch) = srv_host("APERTURE.local", "aperture");
+        assert_eq!(host, "APERTURE.local");
+        assert!(!mismatch);
+        assert!(!srv_host("aperture.local", "APERTURE").1);
+    }
+
+    #[test]
     fn srv_host_flags_a_renamed_fqdn() {
         let (host, mismatch) = srv_host("aperture-2.local", "aperture");
         assert_eq!(host, "aperture-2.local");
@@ -599,6 +643,31 @@ mod tests {
             next_instance("aperture", "aperture-7", &RecreateReason::Server),
             "aperture"
         );
+    }
+
+    #[test]
+    fn plain_instance_truncates_a_dotted_hostname_over_the_limit() {
+        let hostname = format!("{}.{}", "a".repeat(63), "a".repeat(63));
+        assert!(Hostname::new(Box::from(hostname.as_str())).is_ok());
+        assert_eq!(plain_instance(&hostname), "a".repeat(63));
+    }
+
+    #[test]
+    fn plain_arm_truncates_a_dotted_hostname_over_the_limit() {
+        let hostname = format!("{}.{}", "b".repeat(63), "b".repeat(63));
+        for reason in [RecreateReason::Server, RecreateReason::GroupFailure] {
+            let instance = next_instance(&hostname, &hostname, &reason);
+            assert_eq!(instance, "b".repeat(63));
+        }
+    }
+
+    #[test]
+    fn collision_arm_truncates_a_dotted_hostname_over_the_limit() {
+        let hostname = format!("{}.{}", "c".repeat(63), "c".repeat(63));
+        let initial = plain_instance(&hostname);
+        let instance = next_instance(&hostname, &initial, &RecreateReason::GroupCollision);
+        assert_eq!(instance, format!("{}-2", "c".repeat(58)));
+        assert!(instance.len() <= INSTANCE_LABEL_LIMIT);
     }
 
     #[test]
