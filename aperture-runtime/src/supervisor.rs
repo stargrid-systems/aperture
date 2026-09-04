@@ -22,7 +22,7 @@ pub type Stop = CancellationToken;
 /// Why [`Supervisor::run_until_signal`] returned.
 #[derive(Debug)]
 pub enum ShutdownOutcome {
-    /// The shutdown signal fired and both tiers drained.
+    /// The shutdown signal fired and all three tiers drained.
     Signaled,
     /// A worker exited before the shutdown signal. The remaining workers
     /// were still drained.
@@ -139,13 +139,12 @@ impl Supervisor {
         let mut forced = false;
 
         // Wait for either the signal to fire or any worker in any tier to
-        // exit. The last and final tier branches are gated so an empty set
-        // cannot win the biased select immediately, which would abort the
-        // wait.
+        // exit. Every tier branch is gated so an empty set cannot win the
+        // biased select immediately, which would abort the wait.
         tokio::select! {
             biased;
             () = &mut signal => {}
-            name = self.workers.wait_for_any_exit() => {
+            name = self.workers.wait_for_any_exit(), if !self.workers.is_empty() => {
                 early_worker = name;
                 if let Some(name) = name {
                     tracing::info!(
@@ -239,7 +238,7 @@ impl Default for Supervisor {
 mod tests {
     use std::future::pending;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use tokio::sync::oneshot;
     use tokio::time::sleep;
@@ -317,6 +316,14 @@ mod tests {
         let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
 
         let mut supervisor = Supervisor::new();
+        supervisor.spawn(
+            "regular",
+            Recorder {
+                tag: "regular",
+                delay: Duration::from_millis(20),
+                order: Arc::clone(&order),
+            },
+        );
         supervisor.spawn_last(
             "late",
             Recorder {
@@ -345,7 +352,35 @@ mod tests {
             })
             .await;
         assert!(matches!(outcome, ShutdownOutcome::Signaled));
-        assert_eq!(*order.lock().unwrap(), vec!["late", "final"]);
+        assert_eq!(*order.lock().unwrap(), vec!["regular", "late", "final"]);
+    }
+
+    /// An empty regular tier must not win the first select: the supervisor
+    /// has to wait for the signal instead of reporting `Signaled`
+    /// immediately.
+    #[tokio::test]
+    async fn empty_regular_tier_waits_for_the_signal() {
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn_final(
+            "final",
+            Recorder {
+                tag: "final",
+                delay: Duration::ZERO,
+                order: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+
+        let start = Instant::now();
+        let outcome = supervisor
+            .run_until_signal(async {
+                sleep(Duration::from_millis(50)).await;
+            })
+            .await;
+        assert!(matches!(outcome, ShutdownOutcome::Signaled));
+        assert!(
+            start.elapsed() >= Duration::from_millis(50),
+            "the supervisor returned before the signal fired"
+        );
     }
 
     /// `shutdown` drains every tier in order without a shutdown signal. This
