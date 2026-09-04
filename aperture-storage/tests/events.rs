@@ -141,7 +141,7 @@ async fn list_paginates_by_timestamp_and_id() {
         .await
         .unwrap();
     assert_eq!(page.items.len(), 2);
-    // Two rows share the newest timestamp; the uuid tiebreak picks one.
+    // Two rows share the newest timestamp. The uuid tiebreak picks one.
     let n0 = page.items[0].data["n"].as_u64().unwrap();
     assert!(
         n0 == 5 || n0 == 6,

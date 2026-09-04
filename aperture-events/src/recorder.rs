@@ -23,7 +23,7 @@ use crate::payload::EventEnvelope;
 
 /// Flush after this many events, even if the interval has not elapsed.
 /// Doubles as the transaction chunk size. Not aligned with the log worker's
-/// batch bound; the two workers are tuned independently.
+/// batch bound. The two workers are tuned independently.
 const FLUSH_BATCH: usize = 64;
 
 /// Flush at latest this long after the first pending event.
@@ -111,8 +111,9 @@ struct EventSink<R> {
     retry_deadline: Duration,
     /// Total retry budget shared by all chunks of a shutdown drain.
     shutdown_budget: Duration,
-    /// Drop deadline of the shutdown budget, set on the first flush call
-    /// that observes stop, so no later flush call regrants the budget.
+    /// Drop deadline of the shutdown budget, latched on the first flush
+    /// chunk (or mid-chunk retry) that observes stop, so no later chunk,
+    /// in this or a later flush call, regrants the budget.
     shutdown_deadline: Option<Instant>,
 }
 

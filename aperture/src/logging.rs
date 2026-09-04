@@ -54,7 +54,7 @@ pub fn init() -> DeferredLogWorker {
         .try_init()
     {
         // Nothing is installed, so tracing cannot report this. In
-        // production serve runs once per process; the realistic trigger
+        // production serve runs once per process. The realistic trigger
         // is tests, whose output captures stderr.
         eprintln!("failed to install tracing subscriber: {err}");
     }

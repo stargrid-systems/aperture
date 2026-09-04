@@ -292,7 +292,7 @@ impl EventBatch<'_> {
     /// # Errors
     ///
     /// Returns [`StorageError::Database`] if the insert fails. Any error
-    /// poisons the transaction; drop it without committing to roll back.
+    /// poisons the transaction. Drop it without committing to roll back.
     pub async fn insert(&mut self, new: &NewEvent) -> Result<()> {
         let params = params_from_iter([
             new.id.to_sql(),

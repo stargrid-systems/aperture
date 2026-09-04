@@ -188,7 +188,7 @@ mod tests {
         // (via utoipa), which grows `Value` and pushes `SettingChange` past
         // the 64 byte inline budget. That spill is accepted: the envelope
         // falls back to a single heap allocation. The ceiling catches
-        // runaway growth; single-crate builds stay inline.
+        // runaway growth. Single-crate builds stay inline.
         assert!(size_of::<SettingChange>() <= 2 * size_of::<S8>());
     }
 

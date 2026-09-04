@@ -95,7 +95,7 @@ impl EventBus {
     ///
     /// Subscribers are dispatched to before the recorder queue is awaited, so
     /// a slow recorder never delays live subscribers. Blocks while the
-    /// recorder queue is full (see `RECORDER_CAPACITY`); until then emission
+    /// recorder queue is full (see `RECORDER_CAPACITY`). Until then emission
     /// is allocation-cheap for payloads up to 64 bytes.
     ///
     /// # Errors

@@ -19,8 +19,8 @@ use crate::Stop;
 /// Consumes batches of items drained from a channel.
 ///
 /// A sink owns the destination (a repository, a writer, ...) and decides
-/// what a flush means. Items are handed over by draining `batch`; the buffer
-/// is reused across flushes.
+/// what a flush means. Items are handed over by draining `batch`. The
+/// buffer is reused across flushes.
 pub trait BatchSink<T>: Send + 'static {
     /// Disposes of one batch.
     fn flush(&mut self, batch: &mut Vec<T>) -> impl Future<Output = ()> + Send;
