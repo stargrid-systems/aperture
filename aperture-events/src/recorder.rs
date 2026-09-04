@@ -2,10 +2,11 @@
 //!
 //! The recorder is the only consumer that serializes payloads for storage,
 //! and it does so inside flushes, off the emit path. One transaction per
-//! flush. A failing flush is retried with capped backoff within a retry
-//! window: 30 s while the recorder runs, then 5 s more once stop is
-//! cancelled. When the active window passes, the batch is dropped and the
-//! loss is logged with the id range.
+//! chunk of up to [`FLUSH_BATCH`] events. A failing chunk is retried with
+//! capped backoff within a retry window: 30 s while the recorder runs, then
+//! 5 s more once stop is cancelled. When the active window passes, the chunk
+//! is dropped and the loss is logged with the id range. Earlier chunks stay
+//! committed and later chunks are still attempted.
 
 use std::cmp;
 use std::error::Error as StdError;
@@ -20,6 +21,7 @@ use crate::bus::EventBus;
 use crate::payload::EventEnvelope;
 
 /// Flush after this many events, even if the interval has not elapsed.
+/// Doubles as the transaction chunk size, matching the log worker's bound.
 const FLUSH_BATCH: usize = 64;
 
 /// Flush at latest this long after the first pending event.
@@ -82,7 +84,7 @@ impl Worker for EventRecorder {
 ///
 /// Implemented by [`EventRepository`] and by in-test stubs that control
 /// when inserts fail.
-trait InsertEvents: Send + 'static {
+trait InsertEvents: Sync + Send + 'static {
     fn insert(&self, rows: &[NewEvent]) -> impl Future<Output = Result<(), StorageError>> + Send;
 }
 
@@ -136,6 +138,24 @@ impl<R: InsertEvents> BatchSink<EventEnvelope> for EventSink<R> {
                 }
             }
         }
+
+        // The shutdown path hands the whole queue over at once (up to the
+        // recorder channel's capacity plus one in-flight batch), so flush
+        // in chunks of FLUSH_BATCH, one transaction per chunk: a failing
+        // chunk loses only itself, and later chunks are still attempted.
+        while !rows.is_empty() {
+            let take = FLUSH_BATCH.min(rows.len());
+            let chunk: Vec<NewEvent> = rows.drain(..take).collect();
+            self.flush_chunk(chunk).await;
+        }
+    }
+}
+
+impl<R: InsertEvents> EventSink<R> {
+    /// Flushes one chunk in a single transaction. On failure the chunk is
+    /// retried with capped backoff within the active window and dropped with
+    /// its id range when the window passes.
+    async fn flush_chunk(&self, rows: Vec<NewEvent>) {
         if rows.is_empty() {
             return;
         }
@@ -143,7 +163,7 @@ impl<R: InsertEvents> BatchSink<EventEnvelope> for EventSink<R> {
         let last = rows[rows.len() - 1].id;
 
         // Once stop is cancelled the shutdown window replaces the running
-        // one: the drain flush is the batch's last chance, and the
+        // one: the drain flush is the chunk's last chance, and the
         // supervisor's drain budget outlasts this window.
         let mut stopped = self.stop.is_cancelled();
         let mut deadline = deadline_after(if stopped {
@@ -166,13 +186,13 @@ impl<R: InsertEvents> BatchSink<EventEnvelope> for EventSink<R> {
                             count = rows.len(),
                             first = %first,
                             last = %last,
-                            "event batch flush failed, dropping batch"
+                            "event chunk flush failed, dropping chunk"
                         );
                         return;
                     }
                     tracing::warn!(
                         error = &err as &dyn StdError,
-                        "event batch flush failed, retrying"
+                        "event chunk flush failed, retrying"
                     );
                     if stopped {
                         // The token is already cancelled: selecting on it
