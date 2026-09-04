@@ -48,10 +48,16 @@ pub fn init() -> DeferredLogWorker {
 
     // Only one global subscriber can exist. The serve tests install their
     // own, so a second init must degrade to a no-op instead of panicking.
-    let _ = tracing_subscriber::registry()
+    if let Err(err) = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(db_layer)
-        .try_init();
+        .try_init()
+    {
+        // Nothing is installed, so tracing cannot report this. In
+        // production serve runs once per process; the realistic trigger
+        // is tests, whose output captures stderr.
+        eprintln!("failed to install tracing subscriber: {err}");
+    }
 
     deferred
 }
