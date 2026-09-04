@@ -630,14 +630,15 @@
         ]
       }
     },
-    "/api/v1/events": {
+    "/api/v1/event-definitions": {
       "get": {
-        "summary": "Lists domain events with optional filtering.",
-        "operationId": "listEvents",
+        "summary": "Lists the registered event definitions.",
+        "operationId": "listEventDefinitions",
         "parameters": [
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum number of items to return. Clamped to `1..=200`, defaults to\n50.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -650,6 +651,7 @@
           {
             "name": "cursor",
             "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -658,6 +660,96 @@
           {
             "name": "order",
             "in": "query",
+            "description": "Sort direction. Defaults to ascending.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event definitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_EventDefinitionSummary"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/event-definitions/{key}": {
+      "get": {
+        "summary": "Returns one registered event definition with its full JSON Schema.",
+        "operationId": "getEventDefinition",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Event definition key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event definition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDefinitionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown event definition key"
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "summary": "Lists domain events with optional filtering.",
+        "operationId": "listEvents",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows to return. Defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a page's `next_cursor` or `prev_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort direction. Defaults to descending (newest first).",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/OrderParam"
@@ -666,7 +758,7 @@
           {
             "name": "key",
             "in": "query",
-            "description": "Filter by exact key, e.g. `os.hostname_applied`.",
+            "description": "Filter by exact key, e.g. `artifact.written`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -675,7 +767,7 @@
           {
             "name": "key_prefix",
             "in": "query",
-            "description": "Filter by key prefix, e.g. `os` matches all OS events.",
+            "description": "Filter by key prefix, e.g. `artifact` matches all artifact events.",
             "required": false,
             "schema": {
               "type": "string"
@@ -684,7 +776,7 @@
           {
             "name": "since",
             "in": "query",
-            "description": "Only events at or after this timestamp.",
+            "description": "Only events at or after this time (RFC 3339).",
             "required": false,
             "schema": {
               "type": "string",
@@ -694,7 +786,7 @@
           {
             "name": "until",
             "in": "query",
-            "description": "Only events before or at this timestamp.",
+            "description": "Only events at or before this time (RFC 3339).",
             "required": false,
             "schema": {
               "type": "string",
@@ -2400,9 +2492,40 @@
         "type": "string",
         "description": "Content digest, e.g. `sha256:hex`."
       },
+      "EventDefinitionResponse": {
+        "type": "object",
+        "description": "One registered event definition, with its full JSON Schema.",
+        "required": [
+          "key",
+          "payload_schema"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key string."
+          },
+          "payload_schema": {
+            "description": "Standalone JSON Schema (draft 2020-12) of the event's payload type."
+          }
+        }
+      },
+      "EventDefinitionSummary": {
+        "type": "object",
+        "description": "A registered event definition in a listing.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key string."
+          }
+        }
+      },
       "EventId": {
         "type": "string",
-        "description": "Primary key of a row in the `events` table."
+        "format": "uuid",
+        "description": "Primary key of a row in the `events` table.\n\nA `UUIDv7` assigned at emit time, so the id is known before the row is\npersisted by the recorder."
       },
       "EventResponse": {
         "type": "object",
@@ -2423,11 +2546,12 @@
             "description": "Event-specific payload."
           },
           "id": {
-            "$ref": "#/components/schemas/EventId"
+            "$ref": "#/components/schemas/EventId",
+            "description": "Unique event id (UUID)."
           },
           "key": {
             "type": "string",
-            "description": "Event key, e.g. `os.hostname_applied`."
+            "description": "Event key, e.g. `artifact.written`."
           },
           "timestamp": {
             "type": "string",
@@ -2963,6 +3087,46 @@
           }
         }
       },
+      "Page_EventDefinitionSummary": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A registered event definition in a listing.",
+              "required": [
+                "key"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "The key string."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
       "Page_EventResponse": {
         "type": "object",
         "description": "A page of results plus the cursors for the neighbouring pages.",
@@ -2991,11 +3155,12 @@
                   "description": "Event-specific payload."
                 },
                 "id": {
-                  "$ref": "#/components/schemas/EventId"
+                  "$ref": "#/components/schemas/EventId",
+                  "description": "Unique event id (UUID)."
                 },
                 "key": {
                   "type": "string",
-                  "description": "Event key, e.g. `os.hostname_applied`."
+                  "description": "Event key, e.g. `artifact.written`."
                 },
                 "timestamp": {
                   "type": "string",
