@@ -12,12 +12,12 @@ use std::error::Error as StdError;
 use std::sync::Arc;
 
 use anyhow::Context;
-use aperture_events::{EventBus, EventRegistry};
+use aperture_events::{EventBus, EventRegistry, TypedEventStream};
 use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_tasks::{TaskRegistry, Tasks};
 
 pub use self::error::HostnameError;
-use self::event::HostnameApplied;
+pub use self::event::HostnameApplied;
 use self::hostname::{ApplyHostnameDefinition, ApplyHostnameInput};
 pub use self::setting::Hostname;
 use self::setting::HostnameSetting;
@@ -33,6 +33,42 @@ mod worker;
 /// Internal state between [`register`] and [`bootstrap`].
 pub struct OsRegistration {
     conn: zbus::Connection,
+}
+
+/// Everything [`bootstrap`] produced and [`OsIntegration::into_worker`]
+/// consumes.
+pub struct OsIntegration {
+    conn: zbus::Connection,
+    hostname: String,
+    tasks: Tasks,
+    event_bus: EventBus,
+    setting_changes: TypedEventStream<SettingChange>,
+}
+
+impl OsIntegration {
+    /// Creates the background worker for the final listener layout.
+    ///
+    /// `https_port` and `plain_port` are the ports the listeners actually
+    /// bound (never `0`). The plain listener is only advertised as
+    /// `_http._tcp` when `tls_enabled` is false; with TLS it merely
+    /// redirects.
+    pub fn into_worker(
+        self,
+        https_port: Option<u16>,
+        plain_port: Option<u16>,
+        tls_enabled: bool,
+    ) -> OsWorker {
+        OsWorker::new(
+            self.tasks,
+            self.conn,
+            self.hostname,
+            https_port,
+            plain_port,
+            tls_enabled,
+            self.event_bus,
+            self.setting_changes,
+        )
+    }
 }
 
 /// Registers OS task, setting, and event definitions.
@@ -57,11 +93,30 @@ pub async fn register(
     Ok(OsRegistration { conn })
 }
 
-/// Bootstraps OS integration: applies the hostname and creates the worker.
+/// Bootstraps OS integration: applies the hostname and prepares the worker.
 ///
 /// Reads the configured hostname from settings and applies it via
 /// systemd-hostnamed. If the apply fails, a warning is logged and startup
 /// continues.
+///
+/// Returns the hostname plus the [`OsIntegration`] that builds the actual
+/// worker once the listeners are bound:
+///
+/// ```no_run
+/// # use aperture_events::EventBus;
+/// # use aperture_settings::Settings;
+/// # use aperture_tasks::Tasks;
+/// # async fn example(
+/// #     reg: aperture_os::OsRegistration,
+/// #     settings: &Settings,
+/// #     tasks: &Tasks,
+/// #     event_bus: EventBus,
+/// # ) -> anyhow::Result<()> {
+/// let (hostname, os) = aperture_os::bootstrap(reg, settings, tasks, event_bus).await?;
+/// let worker = os.into_worker(Some(8443), Some(8080), true);
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// # Errors
 ///
@@ -70,10 +125,8 @@ pub async fn bootstrap(
     reg: OsRegistration,
     settings: &Settings,
     tasks: &Tasks,
-    https_port: Option<u16>,
-    plain_port: Option<u16>,
     event_bus: EventBus,
-) -> anyhow::Result<(String, OsWorker)> {
+) -> anyhow::Result<(String, OsIntegration)> {
     let setting: HostnameSetting = settings.get().await?;
     let hostname = setting.hostname().clone();
     let hostname_str = hostname.as_str().to_owned();
@@ -104,15 +157,14 @@ pub async fn bootstrap(
     }
 
     let setting_changes = event_bus.subscribe_typed::<SettingChange>();
-    let worker = OsWorker::new(
-        tasks.clone(),
-        reg.conn,
+    Ok((
         hostname_str.clone(),
-        https_port,
-        plain_port,
-        event_bus,
-        setting_changes,
-    );
-
-    Ok((hostname_str, worker))
+        OsIntegration {
+            conn: reg.conn,
+            hostname: hostname_str,
+            tasks: tasks.clone(),
+            event_bus,
+            setting_changes,
+        },
+    ))
 }

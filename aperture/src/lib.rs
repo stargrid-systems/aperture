@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition};
 use aperture_auth::AuthHandle;
+#[cfg(feature = "os-integration")]
+use aperture_events::EventDefinition as _;
 use aperture_events::{EventBus, EventRegistry};
 use aperture_http::{
     AppState, AvatarAnimation, AvatarStyle, HttpServer, RegenerateCertificateDefinition,
@@ -15,7 +17,10 @@ use aperture_http::{
 use aperture_runtime::Supervisor;
 use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
-use aperture_tasks::{Automation, TaskDefinition, TaskRegistry, Tasks};
+#[cfg(feature = "os-integration")]
+use aperture_tasks::TaskDefinition as _;
+use aperture_tasks::{Automation, TaskRegistry, Tasks};
+#[cfg(feature = "os-integration")]
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::{fs, signal};
@@ -117,15 +122,20 @@ pub async fn serve(
 
     let tasks = Tasks::new(storage.tasks()?, task_registry);
     let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
-    let mut automation = Automation::new(tasks.clone(), storage.task_schedules()?, &event_bus);
+    let automation = Automation::new(tasks.clone(), storage.task_schedules()?, &event_bus);
 
-    if tls_addr.is_some() {
-        automation.on_event(
-            "os.hostname_applied",
-            RegenerateCertificateDefinition::KEY,
-            |data| json!({ "hostname": data["hostname"] }),
-        );
-    }
+    #[cfg(feature = "os-integration")]
+    let automation = {
+        let mut automation = automation;
+        if tls_addr.is_some() {
+            automation.on_event(
+                aperture_os::HostnameApplied::KEY,
+                RegenerateCertificateDefinition::KEY,
+                |data| json!({ "hostname": data["hostname"] }),
+            );
+        }
+        automation
+    };
 
     let spectra = Spectra::new(
         artifacts.clone(),
@@ -140,18 +150,11 @@ pub async fn serve(
     }
 
     #[cfg(feature = "os-integration")]
-    let (hostname, os_worker) = match os_reg {
+    let (hostname, os) = match os_reg {
         Some(reg) => {
-            let (h, w) = aperture_os::bootstrap(
-                reg,
-                &settings,
-                &tasks,
-                tls_addr.map(|a| a.port()),
-                plain_addr.map(|a| a.port()),
-                event_bus.clone(),
-            )
-            .await?;
-            (Some(h), Some(w))
+            let (hostname, os) =
+                aperture_os::bootstrap(reg, &settings, &tasks, event_bus.clone()).await?;
+            (Some(hostname), Some(os))
         }
         None => (None, None),
     };
@@ -181,14 +184,25 @@ pub async fn serve(
     .await?;
 
     let mut supervisor = Supervisor::new();
+
+    // Read the real bound ports before the server is moved into the
+    // supervisor, so mDNS advertises effective ports instead of configured
+    // ones (which may be 0 for bind-any-port).
+    #[cfg(feature = "os-integration")]
+    let bound_ports = (server.tls_port(), server.plain_port());
+
     supervisor.spawn("http", server);
     supervisor.spawn("automation", automation);
     supervisor.spawn("log", log_worker);
     supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
 
     #[cfg(feature = "os-integration")]
-    if let Some(worker) = os_worker {
-        supervisor.spawn("os", worker);
+    if let Some(os) = os {
+        let (tls_port, plain_port) = bound_ports;
+        supervisor.spawn(
+            "os",
+            os.into_worker(tls_port, plain_port, tls_addr.is_some()),
+        );
     }
 
     supervisor.run_until_signal(shutdown_signal()).await;
