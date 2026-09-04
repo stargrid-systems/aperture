@@ -1,0 +1,31 @@
+[package]
+name = "aperture-cellguard"
+version.workspace = true
+description = "CellGuard bus driver for Aperture: UART transport, telemetry polling, and staleness tracking."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aperture-events = { workspace = true }
+aperture-runtime = { workspace = true }
+aperture-storage = { workspace = true }
+arc-swap = { workspace = true }
+cellguard-protocol = { workspace = true, features = ["telemetry"] }
+hex = { workspace = true, features = ["alloc"] }
+jiff = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["std", "derive"] }
+thiserror = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["io-util", "sync", "time"] }
+tokio-serial = { workspace = true }
+tracing = { workspace = true }
+utoipa = { workspace = true, features = ["macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

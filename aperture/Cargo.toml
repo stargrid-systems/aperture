@@ -13,10 +13,12 @@ workspace = true
 
 [features]
 os-integration = ["dep:aperture-os"]
+cellguard = ["dep:aperture-cellguard"]
 
 [dependencies]
 aperture-artifacts = { workspace = true }
 aperture-auth = { workspace = true }
+aperture-cellguard = { workspace = true, optional = true }
 aperture-events = { workspace = true }
 aperture-http = { workspace = true }
 aperture-os = { workspace = true, optional = true }
