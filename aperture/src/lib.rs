@@ -274,6 +274,7 @@ fn register_settings(registry: &mut SettingRegistry) {
     registry.register(Arc::new(AvatarStyle::default()));
     registry.register(Arc::new(AvatarAnimation::default()));
 }
+
 /// Resets the password for `username` and prints the new password to stdout.
 ///
 /// Revokes every active session for the user's actor so the old password
