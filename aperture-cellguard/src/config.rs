@@ -19,8 +19,12 @@ pub struct CellguardConfig {
     pub poll_interval: Duration,
     /// How long one exchange waits for a complete reply frame.
     pub reply_timeout: Duration,
-    /// Consecutive unanswered poll intervals after which a kind or the
-    /// device counts as stale.
+    /// Poll intervals after which a kind or the device counts as stale. A
+    /// kind is stale after this many consecutive failed polls. The device
+    /// is disconnected once this many intervals have elapsed since its
+    /// last valid reply: that threshold is elapsed time, so the
+    /// open-retry backoff cadence does not shift when the disconnect
+    /// fires.
     pub stale_after: u32,
     /// Delay before the first port-open retry.
     pub open_retry_delay: Duration,

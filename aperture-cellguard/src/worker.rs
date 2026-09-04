@@ -128,10 +128,15 @@ impl<T> SlotState<T> {
     }
 
     /// Records a successful read: fresh data and a cleared failure count.
-    fn note_success(&mut self, data: T, now: Timestamp) {
-        self.data = Some((data, now));
+    fn note_success(&mut self, data: T) {
+        self.data = Some((data, Timestamp::now()));
         self.failures = 0;
         self.stale_emitted = false;
+    }
+
+    /// Records one failed poll for the kind.
+    const fn note_failure(&mut self) {
+        self.failures += 1;
     }
 
     /// Consumes a staleness transition: `true` exactly once when the kind
@@ -142,6 +147,11 @@ impl<T> SlotState<T> {
             return true;
         }
         false
+    }
+
+    /// Clears the staleness episode so the next one can emit again.
+    const fn reset_stale(&mut self) {
+        self.stale_emitted = false;
     }
 }
 
@@ -162,8 +172,14 @@ struct WorkingState {
     connected: bool,
     /// Identity queries run once per link, on first contact.
     identity_pending: bool,
-    /// Consecutive poll intervals without any valid reply.
-    dead_rounds: u32,
+    /// Monotonic time of the last valid reply of any kind. The disconnect
+    /// threshold is elapsed time against this, so the open-retry backoff
+    /// cadence cannot shift when it fires.
+    last_contact: Option<Instant>,
+    /// Identity replies cached until both halves arrived, so a late reply
+    /// still completes the identity on a later round.
+    partial_device_id: Option<DeviceId>,
+    partial_serial: Option<SerialNumber>,
     cell_voltages: SlotState<Snapshot>,
     balance_currents: SlotState<Snapshot>,
     rails: SlotState<RailSnapshot>,
@@ -177,7 +193,9 @@ impl WorkingState {
             identity: None,
             connected: false,
             identity_pending: false,
-            dead_rounds: 0,
+            last_contact: None,
+            partial_device_id: None,
+            partial_serial: None,
             cell_voltages: SlotState::empty(),
             balance_currents: SlotState::empty(),
             rails: SlotState::empty(),
@@ -186,32 +204,32 @@ impl WorkingState {
         }
     }
 
-    /// Records one failed attempt for the slot.
+    /// Records one failed poll for the slot.
     const fn note_failure(&mut self, slot: Slot) {
         match slot {
-            Slot::CellVoltages => self.cell_voltages.failures += 1,
-            Slot::BalanceCurrents => self.balance_currents.failures += 1,
-            Slot::Rails => self.rails.failures += 1,
-            Slot::Temperatures => self.temperatures.failures += 1,
-            Slot::BalancerStatus => self.balancer_status.failures += 1,
+            Slot::CellVoltages => self.cell_voltages.note_failure(),
+            Slot::BalanceCurrents => self.balance_currents.note_failure(),
+            Slot::Rails => self.rails.note_failure(),
+            Slot::Temperatures => self.temperatures.note_failure(),
+            Slot::BalancerStatus => self.balancer_status.note_failure(),
         }
     }
 
     /// Stores a decoded reply where it belongs.
-    fn store(&mut self, slot: Slot, data: SlotData, now: Timestamp) {
+    fn store(&mut self, slot: Slot, data: SlotData) {
         match (slot, data) {
             (Slot::CellVoltages, SlotData::CellVoltages(data)) => {
-                self.cell_voltages.note_success(data, now);
+                self.cell_voltages.note_success(data);
             }
             (Slot::BalanceCurrents, SlotData::BalanceCurrents(data)) => {
-                self.balance_currents.note_success(data, now);
+                self.balance_currents.note_success(data);
             }
-            (Slot::Rails, SlotData::Rails(data)) => self.rails.note_success(data, now),
+            (Slot::Rails, SlotData::Rails(data)) => self.rails.note_success(data),
             (Slot::Temperatures, SlotData::Temperatures(data)) => {
-                self.temperatures.note_success(data, now);
+                self.temperatures.note_success(data);
             }
             (Slot::BalancerStatus, SlotData::BalancerStatus(data)) => {
-                self.balancer_status.note_success(data, now);
+                self.balancer_status.note_success(data);
             }
             // `Slot::decode` keys the payload to the slot, so a mismatched
             // pair cannot be constructed.
@@ -227,6 +245,20 @@ impl WorkingState {
             Slot::Rails => self.rails.take_stale(stale_after, connected),
             Slot::Temperatures => self.temperatures.take_stale(stale_after, connected),
             Slot::BalancerStatus => self.balancer_status.take_stale(stale_after, connected),
+        }
+    }
+
+    /// Clears the staleness episode of every kind, so a second episode
+    /// after a reconnect can emit again.
+    fn reset_stale(&mut self) {
+        for slot in POLL_SLOTS {
+            match slot {
+                Slot::CellVoltages => self.cell_voltages.reset_stale(),
+                Slot::BalanceCurrents => self.balance_currents.reset_stale(),
+                Slot::Rails => self.rails.reset_stale(),
+                Slot::Temperatures => self.temperatures.reset_stale(),
+                Slot::BalancerStatus => self.balancer_status.reset_stale(),
+            }
         }
     }
 }
@@ -269,6 +301,17 @@ enum IdentityOutcome {
     Identified(BoardIdentity),
     Unavailable,
     Aborted,
+}
+
+/// A transition to emit after the snapshot is published, so a subscriber
+/// reading the snapshot from the event sees the state it describes.
+enum PendingEvent {
+    Connected(Option<BoardIdentity>),
+    Disconnected(Option<BoardIdentity>),
+    Stale {
+        kind: String,
+        identity: Option<BoardIdentity>,
+    },
 }
 
 /// Shared state of the [`Cellguard`](crate::Cellguard) handle and its
@@ -322,8 +365,8 @@ impl<F: LinkFactory> Worker for CellguardWorker<F> {
                             error = &err as &dyn StdError,
                             "failed to open the cellguard serial port, retrying"
                         );
-                        self.transitions(false).await;
-                        self.publish();
+                        let events = self.transitions(false);
+                        self.publish_and_emit(events).await;
                         if !self.sleep_or_stop(open_backoff, &stop).await {
                             return;
                         }
@@ -398,7 +441,7 @@ impl<F: LinkFactory> CellguardWorker<F> {
             }
             ExpectResult::Rejected => SlotOutcome::Rejected,
             ExpectResult::Reply(data) => {
-                self.state.store(slot, data, Timestamp::now());
+                self.state.store(slot, data);
                 SlotOutcome::Data
             }
         }
@@ -408,7 +451,9 @@ impl<F: LinkFactory> CellguardWorker<F> {
     ///
     /// Replies for other slots are not lost when they arrive late: they are
     /// stored where they belong, and the wait for this slot's reply
-    /// continues within the same timeout window.
+    /// continues within the same timeout window. Corrupt frames are
+    /// skipped inside the transport, so only a true timeout or a broken
+    /// link ends the wait early.
     async fn exchange<T>(
         &mut self,
         link: &mut Framed<F::Link>,
@@ -450,6 +495,9 @@ impl<F: LinkFactory> CellguardWorker<F> {
                     return ExpectResult::LinkDead;
                 }
                 Err(ExchangeError::Timeout) => return ExpectResult::Failed,
+                // The transport skips corrupt frames itself, so this arm
+                // only catches Decode and Parse if the transport ever
+                // surfaces them again.
                 Err(err) => {
                     tracing::warn!(
                         error = &err as &dyn StdError,
@@ -478,119 +526,196 @@ impl<F: LinkFactory> CellguardWorker<F> {
                             ExpectResult::Failed
                         };
                     }
-                    match Slot::from_reply(reply.kind) {
-                        Some(slot) => self.absorb_stray(slot, &reply),
-                        None => {
-                            tracing::debug!(kind = ?reply.kind, "ignoring unexpected reply kind");
-                        }
-                    }
+                    self.absorb_stray(&reply);
                 }
             }
         }
     }
 
-    /// Stores a late reply under its own slot.
-    fn absorb_stray(&mut self, slot: Slot, reply: &Reply) {
-        let now = Timestamp::now();
-        match slot.decode(&reply.payload) {
-            Some(data) => self.state.store(slot, data, now),
-            None => self.state.note_failure(slot),
+    /// Stores a late reply under its own slot, or caches it when it
+    /// belongs to the identity queries.
+    fn absorb_stray(&mut self, reply: &Reply) {
+        match reply.kind {
+            Kind::DeviceId => {
+                if let Some(id) = DeviceId::decode(&reply.payload) {
+                    self.state.partial_device_id = Some(id);
+                }
+            }
+            Kind::SerialNumber => {
+                if let Some(serial) = SerialNumber::decode(&reply.payload) {
+                    self.state.partial_serial = Some(serial);
+                }
+            }
+            _ => match Slot::from_reply(reply.kind) {
+                Some(slot) => match slot.decode(&reply.payload) {
+                    Some(data) => self.state.store(slot, data),
+                    None => self.state.note_failure(slot),
+                },
+                None => {
+                    tracing::debug!(kind = ?reply.kind, "ignoring unexpected reply kind");
+                }
+            },
         }
     }
 
     /// Applies the round's connect, disconnect, and staleness transitions,
-    /// then publishes the snapshot. Shutdown during the identity queries
-    /// skips the connect event. The loop exits on the next stop check.
+    /// then publishes the snapshot and only then emits the transitions, so
+    /// a subscriber reading the snapshot from an event sees the state the
+    /// event describes. Shutdown during the identity queries skips the
+    /// connect event. The loop exits on the next stop check.
     async fn finish_round(
         &mut self,
         round: &mut RoundState,
         link: &mut Framed<F::Link>,
         stop: &Stop,
     ) {
-        if round.answered && !self.state.connected {
-            if self.state.identity_pending {
-                self.state.identity_pending = false;
-                match self.query_identity(link, stop, round).await {
-                    IdentityOutcome::Identified(identity) => {
-                        self.state.identity = Some(identity);
-                    }
-                    IdentityOutcome::Unavailable => {}
-                    IdentityOutcome::Aborted => {
-                        self.publish();
-                        return;
-                    }
+        let mut events = Vec::new();
+        let mut connecting = round.answered && !self.state.connected;
+        let was_connected = self.state.connected;
+        if connecting && self.state.identity_pending {
+            self.state.identity_pending = false;
+            match self.query_identity(link, stop, round).await {
+                IdentityOutcome::Identified(identity) => {
+                    self.state.identity = Some(identity);
                 }
+                IdentityOutcome::Unavailable => {}
+                // Shutdown or a dead link: skip the connect transition.
+                // The loop exits or reopens on the next iteration.
+                IdentityOutcome::Aborted => connecting = false,
             }
-            self.state.connected = true;
-            let identity = self.state.identity.clone();
-            self.emit(DeviceConnected { identity }).await;
         }
-        self.transitions(round.answered).await;
-        self.publish();
+        if connecting {
+            self.state.connected = true;
+            events.push(PendingEvent::Connected(self.state.identity.clone()));
+        }
+        if was_connected && round.answered && self.state.identity.is_none() {
+            // A transient identity failure must not forfeit the identity
+            // for the life of the link: retry on later rounds while it is
+            // unset.
+            if let IdentityOutcome::Identified(identity) =
+                self.query_identity(link, stop, round).await
+            {
+                self.state.identity = Some(identity);
+            }
+        }
+        events.extend(self.transitions(round.answered));
+        self.publish_and_emit(events).await;
     }
 
-    /// Queries the cellcore identity, once per link at first contact.
+    /// Queries the cellcore identity: both request kinds, unless a late
+    /// reply already cached one half. A round that misses one half leaves
+    /// the cached half in place for the next attempt.
     async fn query_identity(
         &mut self,
         link: &mut Framed<F::Link>,
         stop: &Stop,
         round: &mut RoundState,
     ) -> IdentityOutcome {
-        let id = match self
-            .exchange(
-                link,
-                stop,
-                round,
-                Kind::ReadDeviceId,
-                Kind::DeviceId,
-                DeviceId::decode,
-            )
-            .await
-        {
-            ExpectResult::Reply(id) => id,
-            ExpectResult::Rejected | ExpectResult::Failed => return IdentityOutcome::Unavailable,
-            ExpectResult::LinkDead | ExpectResult::Stopped => return IdentityOutcome::Aborted,
-        };
-        let serial = match self
-            .exchange(
-                link,
-                stop,
-                round,
-                Kind::ReadSerialNumber,
-                Kind::SerialNumber,
-                SerialNumber::decode,
-            )
-            .await
-        {
-            ExpectResult::Reply(serial) => serial,
-            ExpectResult::Rejected | ExpectResult::Failed => return IdentityOutcome::Unavailable,
-            ExpectResult::LinkDead | ExpectResult::Stopped => return IdentityOutcome::Aborted,
-        };
-        IdentityOutcome::Identified(BoardIdentity::from_protocol(id, serial))
+        if self.state.partial_device_id.is_none() {
+            match self
+                .exchange(
+                    link,
+                    stop,
+                    round,
+                    Kind::ReadDeviceId,
+                    Kind::DeviceId,
+                    DeviceId::decode,
+                )
+                .await
+            {
+                ExpectResult::Reply(id) => self.state.partial_device_id = Some(id),
+                ExpectResult::Rejected | ExpectResult::Failed => {}
+                ExpectResult::LinkDead | ExpectResult::Stopped => {
+                    return IdentityOutcome::Aborted;
+                }
+            }
+        }
+        if self.state.partial_serial.is_none() {
+            match self
+                .exchange(
+                    link,
+                    stop,
+                    round,
+                    Kind::ReadSerialNumber,
+                    Kind::SerialNumber,
+                    SerialNumber::decode,
+                )
+                .await
+            {
+                ExpectResult::Reply(serial) => self.state.partial_serial = Some(serial),
+                ExpectResult::Rejected | ExpectResult::Failed => {}
+                ExpectResult::LinkDead | ExpectResult::Stopped => {
+                    return IdentityOutcome::Aborted;
+                }
+            }
+        }
+        match (
+            self.state.partial_device_id.take(),
+            self.state.partial_serial.take(),
+        ) {
+            (Some(id), Some(serial)) => {
+                IdentityOutcome::Identified(BoardIdentity::from_protocol(id, serial))
+            }
+            (id, serial) => {
+                self.state.partial_device_id = id;
+                self.state.partial_serial = serial;
+                IdentityOutcome::Unavailable
+            }
+        }
     }
 
-    /// Connect, disconnect, and staleness transitions for one poll interval.
-    async fn transitions(&mut self, answered: bool) {
+    /// Connect, disconnect, and staleness transitions for one round.
+    ///
+    /// The disconnect threshold is elapsed time since the last contact, so
+    /// it holds no matter whether a poll round or an open-retry attempt
+    /// evaluates it. Kind staleness counts consecutive failed polls, which
+    /// only happen while the link is open.
+    fn transitions(&mut self, answered: bool) -> Vec<PendingEvent> {
         let stale_after = self.inner.config.stale_after;
+        let window = self.inner.config.poll_interval * stale_after;
+        let now = Instant::now();
         if answered {
-            self.state.dead_rounds = 0;
-        } else {
-            self.state.dead_rounds += 1;
+            self.state.last_contact = Some(now);
         }
-        if !answered && self.state.connected && self.state.dead_rounds >= stale_after {
+        let mut events = Vec::new();
+        if self.state.connected
+            && self
+                .state
+                .last_contact
+                .is_some_and(|at| now.duration_since(at) >= window)
+        {
             self.state.connected = false;
-            let identity = self.state.identity.clone();
-            self.emit(DeviceDisconnected { identity }).await;
+            self.state.reset_stale();
+            events.push(PendingEvent::Disconnected(self.state.identity.clone()));
         }
         let connected = self.state.connected;
         for slot in POLL_SLOTS {
             if self.state.take_stale_event(slot, stale_after, connected) {
-                let identity = self.state.identity.clone();
-                self.emit(SnapshotStale {
+                events.push(PendingEvent::Stale {
                     kind: slot.name().to_owned(),
-                    identity,
-                })
-                .await;
+                    identity: self.state.identity.clone(),
+                });
+            }
+        }
+        events
+    }
+
+    /// Publishes the current state to the handle, then emits the round's
+    /// transitions. Publishing comes first so a subscriber reading the
+    /// snapshot on an event sees the state the event describes.
+    async fn publish_and_emit(&self, events: Vec<PendingEvent>) {
+        self.publish();
+        for event in events {
+            match event {
+                PendingEvent::Connected(identity) => {
+                    self.emit(DeviceConnected { identity }).await;
+                }
+                PendingEvent::Disconnected(identity) => {
+                    self.emit(DeviceDisconnected { identity }).await;
+                }
+                PendingEvent::Stale { kind, identity } => {
+                    self.emit(SnapshotStale { kind, identity }).await;
+                }
             }
         }
     }
@@ -644,9 +769,11 @@ mod tests {
     use cellguard_protocol::{
         Decoder, Packet, RAILS, SERIAL_LEN, TEMP_INVALID, TEMP_ORDER, encode_frame, max_encoded_len,
     };
+    use serde::{Deserialize, Serialize};
     use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
     use tokio::sync::Mutex;
     use tokio::time::timeout;
+    use utoipa::ToSchema;
 
     use super::*;
     use crate::config::CellguardConfig;
@@ -657,7 +784,7 @@ mod tests {
         let mut config = CellguardConfig::new("/dev/null".into(), 115_200);
         config.poll_interval = Duration::from_millis(10);
         config.reply_timeout = Duration::from_millis(50);
-        config.stale_after = 2;
+        config.stale_after = 4;
         config.open_retry_delay = Duration::from_millis(5);
         config.open_retry_max_delay = Duration::from_millis(20);
         config
@@ -676,6 +803,14 @@ mod tests {
     enum Action {
         /// A normal reply, after an optional delay.
         Reply {
+            /// The reply kind on the wire.
+            kind: Kind,
+            payload: Vec<u8>,
+            delay: Duration,
+        },
+        /// A reply written in two halves, `delay` apart: the first half
+        /// lands inside the reply window, the rest after the timeout.
+        SplitReply {
             /// The reply kind on the wire.
             kind: Kind,
             payload: Vec<u8>,
@@ -779,6 +914,18 @@ mod tests {
                         sleep(delay).await;
                         send_reply(&mut link, packet.id, kind, &payload).await;
                     }
+                    Some(Action::SplitReply {
+                        kind,
+                        payload,
+                        delay,
+                    }) => {
+                        let wire = wire_frame(packet.id, kind, &payload);
+                        let split_at = wire.len() / 2;
+                        sleep(delay).await;
+                        let _ = link.write_all(&wire[..split_at]).await;
+                        sleep(delay).await;
+                        let _ = link.write_all(&wire[split_at..]).await;
+                    }
                     Some(Action::Nack(payload)) => {
                         send_reply(&mut link, packet.id, Kind::Nack, &payload).await;
                     }
@@ -792,6 +939,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Encodes a request packet into a complete COBS frame.
+    fn wire_frame(id: u8, kind: Kind, payload: &[u8]) -> Vec<u8> {
+        let mut raw = [0; 256];
+        let raw_len = Packet::write(id, kind, payload, &mut raw).expect("packet fits");
+        let mut wire = [0; max_encoded_len(256)];
+        let wire_len = encode_frame(&raw[..raw_len], &mut wire).expect("wire fits");
+        wire[..wire_len].to_vec()
     }
 
     async fn send_reply(link: &mut DuplexStream, id: u8, kind: Kind, payload: &[u8]) {
@@ -929,6 +1085,18 @@ mod tests {
             Kind::ReadBalancerStatus,
             Action::reply(Kind::BalancerStatus, status_payload()),
         );
+    }
+
+    /// A `CellVoltages` reply frame with a corrupted payload CRC.
+    fn corrupt_voltages_frame() -> Vec<u8> {
+        let mut raw = [0; 256];
+        let raw_len = Packet::write(CELLCORE_ID, Kind::CellVoltages, &[9; 17], &mut raw).unwrap();
+        let mut wire = vec![0; max_encoded_len(256)];
+        let wire_len = encode_frame(&raw[..raw_len], &mut wire).unwrap();
+        wire.truncate(wire_len);
+        let last_payload_index = wire.len() - 4;
+        wire[last_payload_index] ^= 0x55;
+        wire
     }
 
     /// A device that answers the identity queries and every telemetry kind
@@ -1245,17 +1413,7 @@ mod tests {
     async fn corrupt_reply_is_a_kind_failure() {
         let event_bus = EventBus::new();
         // A reply frame whose payload CRC was corrupted in transit.
-        let mut wire = {
-            let mut raw = [0; 256];
-            let raw_len =
-                Packet::write(CELLCORE_ID, Kind::CellVoltages, &[9; 17], &mut raw).unwrap();
-            let mut wire = vec![0; max_encoded_len(256)];
-            let wire_len = encode_frame(&raw[..raw_len], &mut wire).unwrap();
-            wire.truncate(wire_len);
-            wire
-        };
-        let last_payload_index = wire.len() - 4;
-        wire[last_payload_index] ^= 0x55;
+        let wire = corrupt_voltages_frame();
 
         let mut device = DeviceState::default();
         answering(&mut device);
@@ -1492,5 +1650,555 @@ mod tests {
         // The handle path publishes the same initial state.
         let driver = crate::Cellguard::new(test_config(), event_bus);
         assert!(!driver.snapshot().connected);
+    }
+
+    #[tokio::test]
+    async fn split_late_reply_does_not_poison_the_next_round() {
+        let event_bus = EventBus::new();
+        // The rails reply is split in half: the first half lands inside
+        // the reply window, the rest after the timeout. The resync flush
+        // must dispose of the partial frame so the next round's reply
+        // decodes cleanly.
+        let mut device = DeviceState::default();
+        answering(&mut device);
+        device.enqueue(
+            Kind::ReadRails,
+            Action::SplitReply {
+                kind: Kind::Rails,
+                payload: rails_payload([7, 7, 7, 7, 7, 7, 7, 7]),
+                delay: Duration::from_millis(40),
+            },
+        );
+        device.enqueue(
+            Kind::ReadRails,
+            Action::reply(Kind::Rails, rails_payload([9, 9, 9, 9, 9, 9, 9, 9])),
+        );
+        let device = Arc::new(Mutex::new(device));
+        let factory = FakeFactory::new(VecDeque::from([Ok(device)]));
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async {
+                inner
+                    .snapshots
+                    .load_full()
+                    .cellcore
+                    .rails
+                    .as_ref()
+                    .is_some_and(|cached| cached.data.codes[0] == 9)
+            })
+            .await,
+            "the next round's rails reply must land cleanly"
+        );
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn garbage_frames_do_not_fail_the_exchange() {
+        let event_bus = EventBus::new();
+        // A corrupt frame arrives right before the good reply: the
+        // exchange must skip the garbage and take the valid frame behind
+        // it instead of failing the slot.
+        let mut device = DeviceState::default();
+        answering(&mut device);
+        let voltages = device
+            .replies
+            .iter_mut()
+            .find(|(kind, _)| *kind == Kind::ReadCellVoltages)
+            .map(|entry| &mut entry.1)
+            .expect("scripted");
+        voltages.push_front(Action::Garbage(corrupt_voltages_frame()));
+        let device = Arc::new(Mutex::new(device));
+        let factory = FakeFactory::new(VecDeque::from([Ok(device)]));
+        let stale_events = collect_events::<SnapshotStale>(&event_bus);
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async {
+                let snapshot = inner.snapshots.load_full();
+                snapshot
+                    .cellcore
+                    .cell_voltages
+                    .as_ref()
+                    .is_some_and(|cached| {
+                        cached.data.codes == [100, 200, 300, 400] && !cached.stale
+                    })
+            })
+            .await,
+            "the good reply behind the garbage must be stored"
+        );
+        assert!(stale_events.lock().await.is_empty());
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    /// An event nobody subscribes to, used to saturate the recorder
+    /// channel.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+    struct Clog;
+
+    impl EventDefinition for Clog {
+        const KEY: &'static str = "test.clog";
+    }
+
+    #[tokio::test]
+    async fn events_see_the_published_snapshot() {
+        let event_bus = EventBus::new();
+        // Saturate the recorder channel (capacity 1024) so the worker
+        // blocks inside `emit` after dispatching: the subscriber then
+        // reads the snapshot while the emit is still in flight, which
+        // makes the publish-before-emit order observable.
+        for _ in 0..1024 {
+            event_bus.emit(Clog, ActorId::SYSTEM).await.unwrap();
+        }
+
+        let device = answering_device();
+        let factory = FakeFactory::new(VecDeque::from([Ok(device)]));
+        let inner = test_inner(test_config(), &event_bus);
+
+        let observations: Arc<Mutex<Vec<Arc<DeviceSnapshot>>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = observations.clone();
+        let source = inner.clone();
+        let mut stream: TypedEventStream<DeviceConnected> = event_bus.subscribe_typed();
+        tokio::spawn(async move {
+            while let Some(Delivery::Event(event)) = stream.recv().await {
+                assert!(event.payload.identity.is_some());
+                sink.lock().await.push(source.snapshots.load_full());
+            }
+        });
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async { !observations.lock().await.is_empty() }).await,
+            "the connect event must arrive"
+        );
+
+        let observed = observations.lock().await[0].clone();
+        assert!(
+            observed.connected,
+            "the snapshot must be published before the event is emitted"
+        );
+        assert!(observed.cellcore.cell_voltages.is_some());
+
+        // No shutdown call: the worker stays blocked in the saturated
+        // emit and detached when the test runtime drops.
+    }
+
+    #[tokio::test]
+    async fn disconnect_follows_elapsed_time_during_open_retries() {
+        let event_bus = EventBus::new();
+        // Two healthy rounds, then the link dies and the port is gone for
+        // good: the factory script is exhausted. The disconnect must fire
+        // once the staleness window (8 intervals = 80 ms here) has elapsed
+        // since the last contact, not after eight failed open attempts.
+        let mut device = DeviceState::default();
+        answering(&mut device);
+        device.always(
+            Kind::ReadDeviceId,
+            &Action::reply(Kind::DeviceId, device_id_payload()),
+        );
+        device.always(
+            Kind::ReadSerialNumber,
+            &Action::reply(Kind::SerialNumber, serial_payload()),
+        );
+        device.always(
+            Kind::ReadCellVoltages,
+            &Action::reply(
+                Kind::CellVoltages,
+                snapshot_payload(1, [100, 200, 300, 400]),
+            ),
+        );
+        device.always(
+            Kind::ReadBalanceCurrents,
+            &Action::reply(Kind::BalanceCurrents, snapshot_payload(2, [10, 20, 30, 40])),
+        );
+        device.always(
+            Kind::ReadTemperatures,
+            &Action::reply(Kind::Temperatures, temps_payload()),
+        );
+        device.always(
+            Kind::ReadBalancerStatus,
+            &Action::reply(Kind::BalancerStatus, status_payload()),
+        );
+        // The rails read dies on the third round, right after contact.
+        for (kind, queue) in &mut device.replies {
+            if *kind == Kind::ReadRails {
+                *queue = VecDeque::from([
+                    Action::reply(Kind::Rails, rails_payload([1, 2, 3, 4, 5, 6, 7, 8])),
+                    Action::reply(Kind::Rails, rails_payload([1, 2, 3, 4, 5, 6, 7, 8])),
+                    Action::Die,
+                ]);
+            }
+        }
+        let device = Arc::new(Mutex::new(device));
+        let factory = FakeFactory::new(VecDeque::from([Ok(device)]));
+
+        let connected_events = collect_events::<DeviceConnected>(&event_bus);
+        let disconnected_events = collect_events::<DeviceDisconnected>(&event_bus);
+        let stale_events = collect_events::<SnapshotStale>(&event_bus);
+
+        let mut config = test_config();
+        config.reply_timeout = Duration::from_millis(10);
+        config.stale_after = 8;
+        config.open_retry_delay = Duration::from_millis(40);
+        config.open_retry_max_delay = Duration::from_millis(80);
+        let inner = test_inner(config, &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async { !connected_events.lock().await.is_empty() }).await,
+            "the worker must connect first"
+        );
+        let start = Instant::now();
+        assert!(
+            wait_for(|| async { !disconnected_events.lock().await.is_empty() }).await,
+            "the device must disconnect while the port is absent"
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(60),
+            "the disconnect fired {elapsed:?} after the connect, before the staleness window"
+        );
+        assert!(
+            elapsed <= Duration::from_millis(400),
+            "the disconnect fired {elapsed:?} after the connect, tracking open attempts instead \
+             of time"
+        );
+        assert_eq!(connected_events.lock().await.len(), 1);
+        assert!(stale_events.lock().await.is_empty());
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn identity_recovers_after_a_failed_round() {
+        let event_bus = EventBus::new();
+        // Both identity queries time out once: the identity must be
+        // retried on the next round instead of being lost for the life of
+        // the link.
+        let mut device = DeviceState::default();
+        device.enqueue(Kind::ReadDeviceId, Action::Silence);
+        device.enqueue(Kind::ReadSerialNumber, Action::Silence);
+        answering(&mut device);
+        answering_telemetry_forever(&mut device);
+        let device = Arc::new(Mutex::new(device));
+        let factory = FakeFactory::new(VecDeque::from([Ok(device.clone())]));
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async {
+                inner
+                    .snapshots
+                    .load_full()
+                    .cellcore
+                    .identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.board_model == 0x1234)
+            })
+            .await,
+            "the identity must arrive on a later round"
+        );
+
+        let received = device.lock().await;
+        assert_eq!(received.count(Kind::ReadDeviceId), 2);
+        assert_eq!(received.count(Kind::ReadSerialNumber), 2);
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn late_identity_replies_are_cached() {
+        let event_bus = EventBus::new();
+        // The DeviceId reply arrives during the serial number wait, after
+        // its own exchange timed out. It must be cached and complete the
+        // identity on the next round without a second DeviceId request.
+        let mut device = DeviceState::default();
+        device.enqueue(
+            Kind::ReadDeviceId,
+            Action::late_reply(
+                Kind::DeviceId,
+                device_id_payload(),
+                Duration::from_millis(130),
+            ),
+        );
+        device.enqueue(Kind::ReadSerialNumber, Action::Silence);
+        device.enqueue(
+            Kind::ReadSerialNumber,
+            Action::reply(Kind::SerialNumber, serial_payload()),
+        );
+        answering_telemetry_forever(&mut device);
+        let device = Arc::new(Mutex::new(device));
+        let factory = FakeFactory::new(VecDeque::from([Ok(device.clone())]));
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async { inner.snapshots.load_full().cellcore.identity.is_some() }).await,
+            "the late DeviceId reply must complete the identity"
+        );
+
+        let received = device.lock().await;
+        assert_eq!(
+            received.count(Kind::ReadDeviceId),
+            1,
+            "the cached reply must avoid a second DeviceId request"
+        );
+        assert_eq!(received.count(Kind::ReadSerialNumber), 2);
+        drop(received);
+
+        let identity = inner
+            .snapshots
+            .load_full()
+            .cellcore
+            .identity
+            .as_ref()
+            .expect("identity")
+            .clone();
+        assert_eq!(identity.serial, hex::encode([0xAB; SERIAL_LEN]));
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    fn answering_telemetry_forever(device: &mut DeviceState) {
+        device.always(
+            Kind::ReadCellVoltages,
+            &Action::reply(
+                Kind::CellVoltages,
+                snapshot_payload(1, [100, 200, 300, 400]),
+            ),
+        );
+        device.always(
+            Kind::ReadBalanceCurrents,
+            &Action::reply(Kind::BalanceCurrents, snapshot_payload(2, [10, 20, 30, 40])),
+        );
+        device.always(
+            Kind::ReadRails,
+            &Action::reply(Kind::Rails, rails_payload([1, 2, 3, 4, 5, 6, 7, 8])),
+        );
+        device.always(
+            Kind::ReadTemperatures,
+            &Action::reply(Kind::Temperatures, temps_payload()),
+        );
+        device.always(
+            Kind::ReadBalancerStatus,
+            &Action::reply(Kind::BalancerStatus, status_payload()),
+        );
+    }
+
+    #[tokio::test]
+    async fn staleness_emits_again_after_a_reconnect() {
+        let event_bus = EventBus::new();
+        // First device: rails answers once, then goes silent. After the
+        // staleness event the link dies and a second device appears whose
+        // rails kind never answers at all: the second episode must emit
+        // again.
+        let mut first = DeviceState::default();
+        answering(&mut first);
+        first.always(Kind::ReadRails, &Action::Silence);
+        first.always(
+            Kind::ReadDeviceId,
+            &Action::reply(Kind::DeviceId, device_id_payload()),
+        );
+        first.always(
+            Kind::ReadSerialNumber,
+            &Action::reply(Kind::SerialNumber, serial_payload()),
+        );
+        first.always(
+            Kind::ReadCellVoltages,
+            &Action::reply(
+                Kind::CellVoltages,
+                snapshot_payload(1, [100, 200, 300, 400]),
+            ),
+        );
+        first.always(
+            Kind::ReadTemperatures,
+            &Action::reply(Kind::Temperatures, temps_payload()),
+        );
+        first.always(
+            Kind::ReadBalancerStatus,
+            &Action::reply(Kind::BalancerStatus, status_payload()),
+        );
+        // The balance currents read dies on the sixth round, after the
+        // first staleness episode.
+        for (kind, queue) in &mut first.replies {
+            if *kind == Kind::ReadBalanceCurrents {
+                let good =
+                    || Action::reply(Kind::BalanceCurrents, snapshot_payload(2, [10, 20, 30, 40]));
+                *queue = VecDeque::from([good(), good(), good(), good(), good(), Action::Die]);
+            }
+        }
+        let first = Arc::new(Mutex::new(first));
+
+        let mut second = DeviceState::default();
+        second.always(
+            Kind::ReadDeviceId,
+            &Action::reply(Kind::DeviceId, device_id_payload()),
+        );
+        second.always(
+            Kind::ReadSerialNumber,
+            &Action::reply(Kind::SerialNumber, serial_payload()),
+        );
+        second.always(
+            Kind::ReadCellVoltages,
+            &Action::reply(
+                Kind::CellVoltages,
+                snapshot_payload(1, [100, 200, 300, 400]),
+            ),
+        );
+        second.always(
+            Kind::ReadBalanceCurrents,
+            &Action::reply(Kind::BalanceCurrents, snapshot_payload(2, [10, 20, 30, 40])),
+        );
+        second.always(Kind::ReadRails, &Action::Silence);
+        second.always(
+            Kind::ReadTemperatures,
+            &Action::reply(Kind::Temperatures, temps_payload()),
+        );
+        second.always(
+            Kind::ReadBalancerStatus,
+            &Action::reply(Kind::BalancerStatus, status_payload()),
+        );
+        let second = Arc::new(Mutex::new(second));
+
+        let factory = FakeFactory::new(VecDeque::from([
+            Ok(first),
+            absent(),
+            absent(),
+            absent(),
+            absent(),
+            Ok(second),
+        ]));
+        let connected_events = collect_events::<DeviceConnected>(&event_bus);
+        let disconnected_events = collect_events::<DeviceDisconnected>(&event_bus);
+        let stale_events = collect_events::<SnapshotStale>(&event_bus);
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async {
+                let events = stale_events.lock().await;
+                events.len() == 2 && events.iter().all(|event| event.kind == "rails")
+            })
+            .await,
+            "rails must go stale once per connection episode"
+        );
+
+        assert_eq!(connected_events.lock().await.len(), 2);
+        assert_eq!(disconnected_events.lock().await.len(), 1);
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn silence_on_a_live_link_disconnects() {
+        let event_bus = EventBus::new();
+        // One healthy round, then the device stops answering while the
+        // port stays open: the disconnect must come from the staleness
+        // threshold, not from a port error.
+        let mut device = DeviceState::default();
+        answering(&mut device);
+        for request in [
+            Kind::ReadDeviceId,
+            Kind::ReadSerialNumber,
+            Kind::ReadCellVoltages,
+            Kind::ReadBalanceCurrents,
+            Kind::ReadRails,
+            Kind::ReadTemperatures,
+            Kind::ReadBalancerStatus,
+        ] {
+            device.always(request, &Action::Silence);
+        }
+        let device = Arc::new(Mutex::new(device));
+        let factory = FakeFactory::new(VecDeque::from([Ok(device)]));
+        let connected_events = collect_events::<DeviceConnected>(&event_bus);
+        let disconnected_events = collect_events::<DeviceDisconnected>(&event_bus);
+        let stale_events = collect_events::<SnapshotStale>(&event_bus);
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async {
+                let disconnected = disconnected_events.lock().await;
+                let snapshot = inner.snapshots.load_full();
+                disconnected.len() == 1 && !snapshot.connected
+            })
+            .await,
+            "the silent device must hit the disconnect path"
+        );
+
+        assert_eq!(connected_events.lock().await.len(), 1);
+        // The disconnect transition resets the staleness episodes, so no
+        // stale events fire alongside it.
+        assert!(stale_events.lock().await.is_empty());
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn one_byte_nack_reason_keeps_the_device_alive() {
+        let event_bus = EventBus::new();
+        // A routed request that died on the way reports a one-byte reason
+        // code: the shape must parse as a rejection, not break the device
+        // state.
+        let mut device = DeviceState::default();
+        for request in [
+            Kind::ReadDeviceId,
+            Kind::ReadSerialNumber,
+            Kind::ReadCellVoltages,
+            Kind::ReadBalanceCurrents,
+            Kind::ReadRails,
+            Kind::ReadTemperatures,
+            Kind::ReadBalancerStatus,
+        ] {
+            device.always(request, &Action::Nack(vec![0x21]));
+        }
+        let device = Arc::new(Mutex::new(device));
+        let factory = FakeFactory::new(VecDeque::from([Ok(device)]));
+        let connected_events = collect_events::<DeviceConnected>(&event_bus);
+        let stale_events = collect_events::<SnapshotStale>(&event_bus);
+        let disconnected_events = collect_events::<DeviceDisconnected>(&event_bus);
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async {
+                let snapshot = inner.snapshots.load_full();
+                snapshot.connected && snapshot.cellcore.identity.is_none()
+            })
+            .await,
+            "nacks with a reason byte must count as contact"
+        );
+
+        let connected = connected_events.lock().await;
+        assert_eq!(connected.len(), 1);
+        assert!(connected[0].identity.is_none());
+        drop(connected);
+        assert!(stale_events.lock().await.is_empty());
+        assert!(disconnected_events.lock().await.is_empty());
+        let snapshot = inner.snapshots.load_full();
+        assert!(snapshot.cellcore.cell_voltages.is_none());
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
     }
 }

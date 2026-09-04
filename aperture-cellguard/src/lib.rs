@@ -10,13 +10,14 @@
 //!
 //! - the transport: COBS-framed packet exchange over a [`BusLink`], opened
 //!   through a [`LinkFactory`] with retry backoff (the device may appear late)
-//! - the poll loop: identity queries once per connection, then one round of
-//!   telemetry reads per [`CellguardConfig::poll_interval`], with reply
-//!   timeouts and stop-and-wait ordering like `cellguard-cli`
+//! - the poll loop: identity queries at first contact, retried on later rounds
+//!   until they answer, then one round of telemetry reads per
+//!   [`CellguardConfig::poll_interval`], with reply timeouts and stop-and-wait
+//!   ordering like `cellguard-cli`
 //! - the staleness model: a kind that stops answering for
-//!   [`CellguardConfig::stale_after`] intervals is stale, a device that stops
-//!   answering entirely is disconnected. Both transitions emit domain events on
-//!   the [`EventBus`].
+//!   [`CellguardConfig::stale_after`] intervals is stale, a device whose last
+//!   valid reply is older than that is disconnected. Both transitions emit
+//!   domain events on the [`EventBus`].
 //!
 //! Snapshots stay in memory. Persistence and per-MCU inventory arrive with
 //! the entity model.

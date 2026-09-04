@@ -55,7 +55,8 @@ pub struct Cached<T> {
     pub updated_at: Timestamp,
     /// The kind stopped answering within the staleness window. A `Nack`
     /// does not clear this flag: a rejection is an answer but brings no
-    /// data.
+    /// data. A kind that answers `Nack` forever never goes stale at all,
+    /// so judge the age of the data with `updated_at` as well.
     pub stale: bool,
 }
 
