@@ -29,8 +29,9 @@
 //!   events) and then backpressure indefinitely. Once a recorder connected and
 //!   its channel was dropped, `emit` fails with `EventError::RecorderClosed`.
 //! - A failing recorder flush is retried with backoff for up to 30 s while the
-//!   recorder runs, and for up to 5 s more once shutdown begins. Then the batch
-//!   is dropped and the loss is logged with the id range.
+//!   recorder runs. Once shutdown begins, the whole drain shares one 20 s retry
+//!   budget. When the active window passes, the remaining events are dropped
+//!   and the loss is logged with the id range.
 //! - Subscriber delivery is at-most-once. A slow subscriber's events are
 //!   dropped, and the next `recv` reports `Delivery::Lagged(n)` before the next
 //!   event.
