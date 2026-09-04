@@ -9,7 +9,6 @@ use crate::error::{Result, StorageError};
 use crate::macros::sql;
 
 mod m0001_initial;
-mod m0002_events;
 
 /// Schema version that exists before the first migration in [`MIGRATIONS`].
 ///
@@ -20,7 +19,7 @@ const BASE_VERSION: i64 = 0;
 
 /// Ordered list of migrations. Index `i` upgrades the schema from version
 /// `BASE_VERSION + i` to `BASE_VERSION + i + 1`.
-const MIGRATIONS: &[&[&str]] = &[m0001_initial::STATEMENTS, m0002_events::STATEMENTS];
+const MIGRATIONS: &[&[&str]] = &[m0001_initial::STATEMENTS];
 
 /// Applies all pending migrations to the database.
 ///
