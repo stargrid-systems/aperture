@@ -630,6 +630,126 @@
         ]
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "summary": "Lists domain events with optional filtering.",
+        "operationId": "listEvents",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrderParam"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "description": "Filter by exact key, e.g. `os.hostname_applied`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key_prefix",
+            "in": "query",
+            "description": "Filter by key prefix, e.g. `os` matches all OS events.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only events at or after this timestamp.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only events before or at this timestamp.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Domain events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_EventResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-required-permission": "event:read"
+      }
+    },
+    "/api/v1/events/{id}": {
+      "get": {
+        "summary": "Returns a single event by id.",
+        "operationId": "getEvent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Event id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/EventId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown event"
+          }
+        },
+        "x-required-permission": "event:read"
+      }
+    },
     "/api/v1/logs": {
       "get": {
         "summary": "Lists log events with optional filtering.",
@@ -2282,7 +2402,39 @@
       },
       "EventId": {
         "type": "string",
-        "description": "Primary key of a row in the `log_events` table."
+        "description": "Primary key of a row in the `events` table."
+      },
+      "EventResponse": {
+        "type": "object",
+        "description": "A domain event, returned by `GET /api/v1/events`.",
+        "required": [
+          "id",
+          "key",
+          "data",
+          "actor",
+          "timestamp"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/ActorId",
+            "description": "Actor that triggered the event."
+          },
+          "data": {
+            "description": "Event-specific payload."
+          },
+          "id": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "key": {
+            "type": "string",
+            "description": "Event key, e.g. `os.hostname_applied`."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the event was emitted."
+          }
+        }
       },
       "Interval": {
         "type": "string",
@@ -2305,6 +2457,10 @@
           "warn",
           "error"
         ]
+      },
+      "LogEventId": {
+        "type": "string",
+        "description": "Primary key of a row in the `log_events` table."
       },
       "LogEventResponse": {
         "type": "object",
@@ -2339,8 +2495,8 @@
             "description": "Source file, if available."
           },
           "id": {
-            "$ref": "#/components/schemas/EventId",
-            "description": "Event id."
+            "$ref": "#/components/schemas/LogEventId",
+            "description": "`LogEvent` id."
           },
           "level": {
             "$ref": "#/components/schemas/LevelResponse",
@@ -2807,6 +2963,65 @@
           }
         }
       },
+      "Page_EventResponse": {
+        "type": "object",
+        "description": "A page of results plus the cursors for the neighbouring pages.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A domain event, returned by `GET /api/v1/events`.",
+              "required": [
+                "id",
+                "key",
+                "data",
+                "actor",
+                "timestamp"
+              ],
+              "properties": {
+                "actor": {
+                  "$ref": "#/components/schemas/ActorId",
+                  "description": "Actor that triggered the event."
+                },
+                "data": {
+                  "description": "Event-specific payload."
+                },
+                "id": {
+                  "$ref": "#/components/schemas/EventId"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Event key, e.g. `os.hostname_applied`."
+                },
+                "timestamp": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When the event was emitted."
+                }
+              }
+            },
+            "description": "The rows in this page."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the next page. Null at the end."
+          },
+          "prev_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor to pass as `?cursor=` for the previous page. Null at the start."
+          }
+        }
+      },
       "Page_LogEventResponse": {
         "type": "object",
         "description": "A page of results plus the cursors for the neighbouring pages.",
@@ -2849,8 +3064,8 @@
                   "description": "Source file, if available."
                 },
                 "id": {
-                  "$ref": "#/components/schemas/EventId",
-                  "description": "Event id."
+                  "$ref": "#/components/schemas/LogEventId",
+                  "description": "`LogEvent` id."
                 },
                 "level": {
                   "$ref": "#/components/schemas/LevelResponse",
