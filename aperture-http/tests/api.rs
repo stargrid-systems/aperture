@@ -571,8 +571,17 @@ async fn records_and_serves_events() {
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().expect("paged items");
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["key"], "artifact.written");
-    let id = items[0]["id"].as_str().expect("string id").to_owned();
+    // The listing is newest first, but same-microsecond ties break on the
+    // random uuid suffix, so only membership and non-strict order hold.
+    let mut keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["artifact.written", "setting.changed"]);
+    assert_non_strictly_newest_first(items);
+    let written = items
+        .iter()
+        .find(|e| e["key"] == "artifact.written")
+        .expect("a written event");
+    let id = written["id"].as_str().expect("string id").to_owned();
     assert!(id.parse::<uuid::Uuid>().is_ok(), "ids are UUIDs: {id}");
 
     let (status, json) = get_json(&app, &token, &format!("/api/v1/events/{id}")).await;
@@ -587,6 +596,25 @@ async fn records_and_serves_events() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Asserts `items` are ordered newest first, allowing equal timestamps:
+/// the uuid tiebreak between same-microsecond events is random.
+fn assert_non_strictly_newest_first(items: &[Value]) {
+    let listed: Vec<i64> = items
+        .iter()
+        .filter_map(|e| e["timestamp"].as_str())
+        .filter_map(|ts| ts.parse::<Timestamp>().ok())
+        .map(Timestamp::as_microsecond)
+        .collect();
+    assert_eq!(listed.len(), items.len(), "every item has a timestamp");
+    let mut sorted = listed.clone();
+    sorted.sort_unstable();
+    sorted.reverse();
+    assert_eq!(
+        listed, sorted,
+        "listing must be non-strictly ordered newest first"
+    );
 }
 
 /// Builds an app with one `setting.changed` and two `artifact.*` events
@@ -610,11 +638,13 @@ async fn filters_events_by_key_and_timestamp() {
     let (status, all) = get_json(&app, &token, "/api/v1/events").await;
     assert_eq!(status, StatusCode::OK);
     let items = all["items"].as_array().expect("paged items");
-    let keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    let mut keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    keys.sort_unstable();
     assert_eq!(
         keys,
         ["artifact.removed", "artifact.written", "setting.changed"]
     );
+    assert_non_strictly_newest_first(items);
     let newest = items[0]["timestamp"].as_str().unwrap().to_owned();
     let oldest = items[2]["timestamp"].as_str().unwrap().to_owned();
     // Timestamps are not guaranteed unique, so the boundary checks below
@@ -638,8 +668,10 @@ async fn filters_events_by_key_and_timestamp() {
     let (status, json) = get_json(&app, &token, "/api/v1/events?key_prefix=artifact").await;
     assert_eq!(status, StatusCode::OK);
     let items = json["items"].as_array().expect("paged items");
-    let keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    let mut keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    keys.sort_unstable();
     assert_eq!(keys, ["artifact.removed", "artifact.written"]);
+    assert_non_strictly_newest_first(items);
 
     // Unknown key: an empty page, not a 404.
     let (status, json) = get_json(&app, &token, "/api/v1/events?key=nonexistent.kind").await;
@@ -1467,7 +1499,7 @@ async fn no_role_token_is_denied_on_all_mutations() {
 
     // (method, uri, json body)
     let pw = test_password();
-    let matrix: [(&str, &str, Value); 10] = [
+    let matrix: [(&str, &str, Value); 11] = [
         ("PUT", "/api/v1/artifacts/firmware", Value::Null),
         (
             "POST",
@@ -1482,6 +1514,11 @@ async fn no_role_token_is_denied_on_all_mutations() {
         ),
         ("PATCH", "/api/v1/task-schedules/1", json!({})),
         ("DELETE", "/api/v1/task-schedules/1", Value::Null),
+        (
+            "PUT",
+            "/api/v1/settings/avatar_style",
+            json!({"value": "planets"}),
+        ),
         (
             "POST",
             "/api/v1/users",
