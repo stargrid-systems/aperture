@@ -134,6 +134,12 @@ pub const LIST_EVENTS: &str = "listEvents";
 /// `GET /api/v1/events/{id}`
 pub const GET_EVENT: &str = "getEvent";
 
+/// `GET /api/v1/event-definitions`
+pub const LIST_EVENT_DEFINITIONS: &str = "listEventDefinitions";
+
+/// `GET /api/v1/event-definitions/{key}`
+pub const GET_EVENT_DEFINITION: &str = "getEventDefinition";
+
 /// `GET /api/v1/setting-definitions`
 pub const LIST_SETTING_DEFINITIONS: &str = "listSettingDefinitions";
 

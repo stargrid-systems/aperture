@@ -3,7 +3,7 @@
 use std::error::Error as StdError;
 use std::time::{Duration, Instant};
 
-use aperture_events::{EventBus, TypedEventStream};
+use aperture_events::{Delivery, EventBus, TypedEventStream};
 use aperture_runtime::{Stop, Worker};
 use aperture_settings::{SettingChange, SettingChangeError};
 use aperture_storage::ActorId;
@@ -100,7 +100,7 @@ impl Worker for OsWorker {
                         () = stop.cancelled() => break,
                         () = sleep(delay) => false,
                         event = self.setting_changes.recv() => match event {
-                            Some(event) => {
+                            Some(Delivery::Event(event)) => {
                                 self.on_setting_change(
                                     event.payload,
                                     &mut publisher,
@@ -109,6 +109,13 @@ impl Worker for OsWorker {
                                 )
                                 .await
                             }
+                            Some(Delivery::Lagged(dropped)) => {
+                                tracing::warn!(
+                                    dropped,
+                                    "setting change stream lagged, hostname changes may be missed"
+                                );
+                                false
+                            }
                             None => break,
                         },
                     };
@@ -116,9 +123,9 @@ impl Worker for OsWorker {
                         break;
                     }
                 }
-                event = self.setting_changes.recv() => {
-                    match event {
-                        Some(event) => {
+                delivery = self.setting_changes.recv() => {
+                    match delivery {
+                        Some(Delivery::Event(event)) => {
                             self.on_setting_change(
                                 event.payload,
                                 &mut publisher,
@@ -126,6 +133,12 @@ impl Worker for OsWorker {
                                 &mut debounce,
                             )
                             .await;
+                        }
+                        Some(Delivery::Lagged(dropped)) => {
+                            tracing::warn!(
+                                dropped,
+                                "setting change stream lagged, hostname changes may be missed"
+                            );
                         }
                         None => break,
                     }

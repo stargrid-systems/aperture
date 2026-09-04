@@ -16,7 +16,7 @@ pub use self::api_key::{ApiKey, ApiKeyId, ApiKeyRepository};
 pub use self::artifact::{Artifact, ArtifactId, ArtifactKeyEntry, ArtifactRepository, VersionSort};
 pub use self::digest::{Digest, DigestAlgorithm, InvalidDigest};
 pub use self::error::{Result, StorageError};
-pub use self::event::{Event, EventFilter, EventId, EventRepository, NewEvent};
+pub use self::event::{Event, EventBatch, EventFilter, EventId, EventRepository, NewEvent};
 pub use self::interval::{Interval, InvalidInterval};
 pub use self::key::{ArtifactKey, InvalidArtifactKey, MAX_LEN as ARTIFACT_KEY_MAX_LEN};
 pub use self::log::{

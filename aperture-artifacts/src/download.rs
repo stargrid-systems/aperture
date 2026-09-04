@@ -96,7 +96,7 @@ impl TaskDefinition for DownloadDefinition {
         let artifact = tokio::select! {
             biased;
             () = ctx.cancellation_token().cancelled() => return Err(RunError::Cancelled),
-            result = self.artifacts.download(request, ctx.progress()) => {
+            result = self.artifacts.download(request, ctx.progress(), ctx.initiator()) => {
                 result.map_err(|err| RunError::Failed(err.into()))?
             }
         };

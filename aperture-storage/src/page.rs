@@ -74,7 +74,7 @@ impl CursorValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
     value: CursorValue,
-    id: i64,
+    id: CursorValue,
     step: Step,
 }
 
@@ -121,49 +121,90 @@ impl Cursor {
         &self.value
     }
 
-    fn encode(value: CursorValue, id: i64, step: Step, listing: Listing) -> String {
+    fn encode(value: CursorValue, id: CursorValue, step: Step, listing: Listing) -> String {
         let mut flags = listing.tag() << 3;
         if matches!(value, CursorValue::Text(_)) {
-            flags |= 0b01;
+            flags |= 0b001;
+        }
+        if matches!(id, CursorValue::Text(_)) {
+            flags |= 0b010;
         }
         if matches!(step, Step::Before) {
-            flags |= 0b10;
+            flags |= 0b100;
         }
         let mut buf = vec![flags];
-        buf.extend_from_slice(&id.to_be_bytes());
-        match value {
-            CursorValue::Int(int) => buf.extend_from_slice(&int.to_be_bytes()),
-            CursorValue::Text(text) => buf.extend_from_slice(text.as_bytes()),
-        }
+        write_field(&mut buf, value);
+        write_field(&mut buf, id);
         to_hex(&buf)
     }
 
     fn decode(encoded: &str, listing: Listing) -> Result<Self> {
         let invalid = || StorageError::InvalidCursor(encoded.to_owned());
         let buf = from_hex(encoded).ok_or_else(invalid)?;
-        if buf.len() < 9 {
+        let Some((&flags, rest)) = buf.split_first() else {
             return Err(invalid());
-        }
-        let flags = buf[0];
+        };
         if flags >> 3 != listing.tag() {
             return Err(invalid());
         }
-        let id = i64::from_be_bytes(buf[1..9].try_into().expect("8 bytes"));
-        let step = if flags & 0b10 != 0 {
+        let (value, rest) = if flags & 0b001 != 0 {
+            let (text, rest) = read_text(rest).ok_or_else(invalid)?;
+            (CursorValue::Text(text), rest)
+        } else {
+            let (int, rest) = read_int(rest).ok_or_else(invalid)?;
+            (CursorValue::Int(int), rest)
+        };
+        let (id, rest) = if flags & 0b010 != 0 {
+            let (text, rest) = read_text(rest).ok_or_else(invalid)?;
+            (CursorValue::Text(text), rest)
+        } else {
+            let (int, rest) = read_int(rest).ok_or_else(invalid)?;
+            (CursorValue::Int(int), rest)
+        };
+        if !rest.is_empty() {
+            return Err(invalid());
+        }
+        let step = if flags & 0b100 != 0 {
             Step::Before
         } else {
             Step::After
         };
-        let value = if flags & 0b01 != 0 {
-            CursorValue::Text(String::from_utf8(buf[9..].to_vec()).map_err(|_| invalid())?)
-        } else {
-            if buf.len() != 17 {
-                return Err(invalid());
-            }
-            CursorValue::Int(i64::from_be_bytes(buf[9..17].try_into().expect("8 bytes")))
-        };
         Ok(Self { value, id, step })
     }
+}
+
+/// Appends one cursor field: 8 big-endian bytes for an int, a 4-byte
+/// big-endian length prefix plus bytes for text.
+fn write_field(buf: &mut Vec<u8>, field: CursorValue) {
+    match field {
+        CursorValue::Int(int) => buf.extend_from_slice(&int.to_be_bytes()),
+        CursorValue::Text(text) => {
+            let len = u32::try_from(text.len()).expect("cursor field shorter than 4 GiB");
+            buf.extend_from_slice(&len.to_be_bytes());
+            buf.extend_from_slice(text.as_bytes());
+        }
+    }
+}
+
+fn read_int(buf: &[u8]) -> Option<(i64, &[u8])> {
+    if buf.len() < 8 {
+        return None;
+    }
+    let (int, rest) = buf.split_at(8);
+    Some((i64::from_be_bytes(int.try_into().expect("8 bytes")), rest))
+}
+
+fn read_text(buf: &[u8]) -> Option<(String, &[u8])> {
+    if buf.len() < 4 {
+        return None;
+    }
+    let (len, rest) = buf.split_at(4);
+    let len = u32::from_be_bytes(len.try_into().expect("4 bytes")) as usize;
+    if rest.len() < len {
+        return None;
+    }
+    let (text, rest) = rest.split_at(len);
+    Some((String::from_utf8(text.to_vec()).ok()?, rest))
 }
 
 /// Describes how a listing is sorted and builds the SQL for it.
@@ -231,7 +272,7 @@ impl Keyset {
                 vec![
                     cursor.value.to_db(),
                     cursor.value.to_db(),
-                    Value::Integer(cursor.id),
+                    cursor.id.to_db(),
                 ],
             )
         } else {
@@ -304,7 +345,7 @@ impl Paginator {
     pub fn finish<T>(
         &self,
         mut rows: Vec<T>,
-        key_of: impl Fn(&T) -> (CursorValue, i64),
+        key_of: impl Fn(&T) -> (CursorValue, CursorValue),
     ) -> Page<T> {
         let has_extra = rows.len() > self.limit as usize;
         if has_extra {
@@ -373,45 +414,77 @@ mod tests {
     #[test]
     fn cursor_roundtrips_int_and_text() {
         for step in [Step::After, Step::Before] {
-            let encoded = Cursor::encode(CursorValue::Int(-42), 7, step, Listing::LogEvents);
-            let decoded = Cursor::decode(&encoded, Listing::LogEvents).unwrap();
+            let encoded = Cursor::encode(
+                CursorValue::Int(-42),
+                CursorValue::Int(7),
+                step,
+                Listing::Events,
+            );
+            let decoded = Cursor::decode(&encoded, Listing::Events).unwrap();
             assert_eq!(decoded.value, CursorValue::Int(-42));
-            assert_eq!(decoded.id, 7);
+            assert_eq!(decoded.id, CursorValue::Int(7));
             assert_eq!(decoded.step, step);
 
             let encoded = Cursor::encode(
                 CursorValue::Text("tool/avrdude".to_owned()),
-                3,
+                CursorValue::Text("0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c".to_owned()),
                 step,
-                Listing::LogEvents,
+                Listing::Events,
             );
-            let decoded = Cursor::decode(&encoded, Listing::LogEvents).unwrap();
+            let decoded = Cursor::decode(&encoded, Listing::Events).unwrap();
             assert_eq!(decoded.value, CursorValue::Text("tool/avrdude".to_owned()));
+            assert_eq!(
+                decoded.id,
+                CursorValue::Text("0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c".to_owned())
+            );
             assert_eq!(decoded.step, step);
+
+            let encoded = Cursor::encode(
+                CursorValue::Int(99),
+                CursorValue::Text("0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c".to_owned()),
+                step,
+                Listing::Events,
+            );
+            let decoded = Cursor::decode(&encoded, Listing::Events).unwrap();
+            assert_eq!(decoded.value, CursorValue::Int(99));
+            assert_eq!(
+                decoded.id,
+                CursorValue::Text("0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c".to_owned())
+            );
         }
     }
 
     #[test]
     fn decode_rejects_garbage() {
-        assert!(Cursor::decode("zz", Listing::LogEvents).is_err());
-        assert!(Cursor::decode("00", Listing::LogEvents).is_err());
+        assert!(Cursor::decode("zz", Listing::Events).is_err());
+        assert!(Cursor::decode("00", Listing::Events).is_err());
     }
 
     #[test]
     fn rejects_cursor_from_another_listing() {
-        let encoded = Cursor::encode(CursorValue::Int(1), 1, Step::After, Listing::LogEvents);
+        let encoded = Cursor::encode(
+            CursorValue::Int(1),
+            CursorValue::Int(1),
+            Step::After,
+            Listing::Events,
+        );
         let query = ListQuery {
             cursor: Some(encoded),
             ..Default::default()
         };
-        let err = Paginator::new(&query, Order::Desc, Listing::LogTargets).unwrap_err();
+        let err = Paginator::new(&query, Order::Desc, Listing::LogEvents).unwrap_err();
         assert!(matches!(err, StorageError::InvalidCursor(_)));
     }
 
     #[test]
     fn rejects_untagged_cursor() {
         // Pre-tag cursors left the upper five flag bits at zero.
-        let encoded = Cursor::encode(CursorValue::Int(1), 1, Step::After, Listing::LogEvents);
+        let encoded = Cursor::encode(
+            CursorValue::Int(1),
+            CursorValue::Int(1),
+            Step::After,
+            Listing::Events,
+        );
         let mut buf = from_hex(&encoded).unwrap();
         buf[0] &= 0b0000_0111;
         let untagged = to_hex(&buf);
@@ -419,7 +492,7 @@ mod tests {
             cursor: Some(untagged),
             ..Default::default()
         };
-        let err = Paginator::new(&query, Order::Desc, Listing::LogEvents).unwrap_err();
+        let err = Paginator::new(&query, Order::Desc, Listing::Events).unwrap_err();
         assert!(matches!(err, StorageError::InvalidCursor(_)));
     }
 
@@ -429,8 +502,10 @@ mod tests {
             limit: Some(2),
             ..Default::default()
         };
-        let paginator = Paginator::new(&query, Order::Asc, Listing::LogEvents).unwrap();
-        let page = paginator.finish(vec![1i64, 2, 3], |n| (CursorValue::Int(*n), *n));
+        let paginator = Paginator::new(&query, Order::Asc, Listing::Events).unwrap();
+        let page = paginator.finish(vec![1i64, 2, 3], |n| {
+            (CursorValue::Int(*n), CursorValue::Int(*n))
+        });
         assert_eq!(page.items, vec![1, 2]);
         assert!(page.next_cursor.is_some());
         assert!(page.prev_cursor.is_none());
@@ -439,14 +514,19 @@ mod tests {
     #[test]
     fn last_page_has_prev_but_no_next() {
         // Arrived via a forward cursor, fewer rows than the limit.
-        let forward = Cursor::encode(CursorValue::Int(2), 2, Step::After, Listing::LogEvents);
+        let forward = Cursor::encode(
+            CursorValue::Int(2),
+            CursorValue::Int(2),
+            Step::After,
+            Listing::Events,
+        );
         let query = ListQuery {
             limit: Some(2),
             cursor: Some(forward),
             ..Default::default()
         };
-        let paginator = Paginator::new(&query, Order::Asc, Listing::LogEvents).unwrap();
-        let page = paginator.finish(vec![3i64], |n| (CursorValue::Int(*n), *n));
+        let paginator = Paginator::new(&query, Order::Asc, Listing::Events).unwrap();
+        let page = paginator.finish(vec![3i64], |n| (CursorValue::Int(*n), CursorValue::Int(*n)));
         assert_eq!(page.items, vec![3]);
         assert!(page.next_cursor.is_none());
         assert!(page.prev_cursor.is_some());
@@ -454,15 +534,22 @@ mod tests {
 
     #[test]
     fn backward_page_reverses_and_offers_next() {
-        let backward = Cursor::encode(CursorValue::Int(4), 4, Step::Before, Listing::LogEvents);
+        let backward = Cursor::encode(
+            CursorValue::Int(4),
+            CursorValue::Int(4),
+            Step::Before,
+            Listing::Events,
+        );
         let query = ListQuery {
             limit: Some(2),
             cursor: Some(backward),
             ..Default::default()
         };
-        let paginator = Paginator::new(&query, Order::Asc, Listing::LogEvents).unwrap();
+        let paginator = Paginator::new(&query, Order::Asc, Listing::Events).unwrap();
         // Rows fetched in flipped (desc) order. Finish reverses to base order.
-        let page = paginator.finish(vec![3i64, 2, 1], |n| (CursorValue::Int(*n), *n));
+        let page = paginator.finish(vec![3i64, 2, 1], |n| {
+            (CursorValue::Int(*n), CursorValue::Int(*n))
+        });
         assert_eq!(page.items, vec![2, 3]);
         assert!(page.next_cursor.is_some());
         assert!(page.prev_cursor.is_some());

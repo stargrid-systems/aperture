@@ -41,15 +41,108 @@ fn version(key: &'static str, digest: &str, downloaded_at: i64) -> Artifact {
 
 /// Builds a `Settings` whose registry knows about every setting the gateway
 /// registers, so per-request reads fall back to definition defaults.
-fn test_settings(storage: &Storage) -> Settings {
+fn test_settings(storage: &Storage, event_bus: EventBus) -> Settings {
     let mut registry = SettingRegistry::new();
     registry.register(Arc::new(AvatarStyle::default()));
     registry.register(Arc::new(AvatarAnimation::default()));
-    let event_bus = EventBus::new(storage.events().unwrap());
     Settings::new(storage.settings().unwrap(), registry, event_bus)
 }
 
-async fn seeded_app() -> (Router, Artifacts, Storage, String) {
+fn test_event_registry() -> aperture_events::EventRegistry {
+    use aperture_artifacts::{ArtifactRemoved, ArtifactWritten};
+    use aperture_settings::SettingChange;
+
+    let mut registry = aperture_events::EventRegistry::new();
+    registry.register(Arc::new(SettingChange::default()));
+    registry.register(Arc::new(ArtifactWritten::default()));
+    registry.register(Arc::new(ArtifactRemoved::default()));
+    registry
+}
+
+/// Which events are emitted and recorded before the app is assembled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordedEvents {
+    /// Nothing is emitted.
+    None,
+    /// One `setting.changed` plus one `artifact.written`.
+    ChangedAndWritten,
+    /// One `setting.changed` plus an `artifact.written` and an
+    /// `artifact.removed`.
+    ChangedWrittenAndRemoved,
+}
+
+/// A fully wired app plus the handles tests need to poke at it.
+struct TestApp {
+    app: Router,
+    artifacts: Artifacts,
+    storage: Storage,
+    auth: aperture_auth::AuthHandle,
+    event_bus: EventBus,
+    /// Raw token of the minted API key, when one was requested.
+    token: Option<String>,
+    /// Actor owning the minted key, when one was requested.
+    actor: Option<ActorId>,
+}
+
+/// Emits the requested events on `event_bus` and runs the recorder to
+/// completion so they are persisted.
+async fn emit_and_record(
+    events: RecordedEvents,
+    settings: &aperture_settings::Settings,
+    event_bus: &EventBus,
+    storage: &Storage,
+) {
+    if events == RecordedEvents::None {
+        return;
+    }
+    settings
+        .set_value(
+            "avatar_style",
+            serde_json::json!("constellation"),
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+    event_bus
+        .emit(
+            aperture_artifacts::ArtifactWritten {
+                key: "tls_server-cert".to_owned(),
+                digest: None,
+            },
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+    if events == RecordedEvents::ChangedWrittenAndRemoved {
+        event_bus
+            .emit(
+                aperture_artifacts::ArtifactRemoved {
+                    key: "tls_server-cert".to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await
+            .unwrap();
+    }
+
+    // Run the recorder to completion: cancel + await drains and flushes.
+    let recorder = aperture_events::EventRecorder::connect(event_bus, storage.events().unwrap())
+        .expect("recorder");
+    let stop = aperture_runtime::Stop::new();
+    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
+    stop.cancel();
+    worker.await.unwrap();
+}
+
+/// Assembles an app the way the gateway does at boot: one in-memory storage,
+/// one event bus shared by artifacts and settings, and the standard settings
+/// and event registries. The knobs pick the variations the tests need.
+async fn assemble_app(
+    download_task: bool,
+    seed_versions: bool,
+    events: RecordedEvents,
+    key_role: Option<Role>,
+) -> TestApp {
     // Unique per call so parallel tests in the same binary do not stomp on
     // each other's blob store.
     let root = env::temp_dir().join(format!(
@@ -59,30 +152,42 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(
-        storage.clone(),
-        root,
-        EventBus::new(storage.events().unwrap()),
-    );
+    let event_bus = EventBus::new();
+    let artifacts = Artifacts::new(storage.clone(), root, event_bus.clone());
 
-    let repo = storage.artifacts().unwrap();
-    repo.record_version(&version("firmware", "sha256:ffff", 1_000))
-        .await
-        .unwrap();
-    repo.record_version(&version("spectra", "sha256:aaaa", 2_000))
-        .await
-        .unwrap();
-    repo.record_version(&version("spectra", "sha256:bbbb", 3_000))
-        .await
-        .unwrap();
+    if seed_versions {
+        let repo = storage.artifacts().unwrap();
+        repo.record_version(&version("firmware", "sha256:ffff", 1_000))
+            .await
+            .unwrap();
+        repo.record_version(&version("spectra", "sha256:aaaa", 2_000))
+            .await
+            .unwrap();
+        repo.record_version(&version("spectra", "sha256:bbbb", 3_000))
+            .await
+            .unwrap();
+    }
 
-    let mut registry = TaskRegistry::new();
-    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+    let mut task_registry = TaskRegistry::new();
+    if download_task {
+        task_registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
+    }
+    let tasks = Tasks::new(storage.tasks().unwrap(), task_registry);
+
+    let settings = test_settings(&storage, event_bus.clone());
+    emit_and_record(events, &settings, &event_bus, &storage).await;
 
     let auth = aperture_auth::AuthHandle::new(storage.clone())
         .await
         .unwrap();
+
+    let (token, actor) = match key_role {
+        Some(role) => {
+            let (actor, token) = key_for_role(&auth, "test", role).await;
+            (Some(token), Some(actor))
+        }
+        None => (None, None),
+    };
 
     let spectra = Spectra::new(
         artifacts.clone(),
@@ -90,18 +195,6 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         SpectraConfig::default(),
         ActorId::SYSTEM,
     );
-
-    let password = Password::generate();
-    let actor = auth
-        .create_user(&"test".parse::<Username>().unwrap(), &password, None)
-        .await
-        .unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "test-key").await.unwrap();
-    auth.assign_role(Subject::ApiKey(api_key.id), Role::Admin)
-        .await
-        .unwrap();
-
-    let settings = test_settings(&storage);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -109,9 +202,30 @@ async fn seeded_app() -> (Router, Artifacts, Storage, String) {
         spectra,
         tasks,
         settings,
-        auth,
+        test_event_registry(),
+        auth.clone(),
     );
-    (app(state), artifacts, storage, raw_key.as_str().to_owned())
+    TestApp {
+        app: app(state),
+        artifacts,
+        storage,
+        auth,
+        event_bus,
+        token,
+        actor,
+    }
+}
+
+/// Builds an app with the artifact catalog seeded (one firmware and two
+/// spectra versions) and an admin token.
+async fn seeded_app() -> (Router, Artifacts, Storage, String) {
+    let fixture = assemble_app(true, true, RecordedEvents::None, Some(Role::Admin)).await;
+    (
+        fixture.app,
+        fixture.artifacts,
+        fixture.storage,
+        fixture.token.expect("admin key"),
+    )
 }
 
 async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
@@ -386,12 +500,46 @@ async fn gets_setting_definition_schema() {
 }
 
 #[tokio::test]
+async fn lists_event_definitions() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/event-definitions").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    assert!(
+        items.iter().any(|def| def["key"] == "artifact.written"),
+        "artifact.written registered: {json}"
+    );
+    assert!(
+        items.iter().any(|def| def["key"] == "setting.changed"),
+        "setting.changed registered: {json}"
+    );
+}
+
+#[tokio::test]
+async fn gets_event_definition_schema() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    let (status, json) = get_json(&app, &token, "/api/v1/event-definitions/artifact.written").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "artifact.written");
+    assert_eq!(
+        json["payload_schema"]["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+
+    let (status, _) = get_json(&app, &token, "/api/v1/event-definitions/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn serves_definition_routes_without_credentials() {
     let (app, _artifacts, _storage, _token) = seeded_app().await;
 
     for uri in [
         "/api/v1/task-definitions",
         "/api/v1/setting-definitions",
+        "/api/v1/event-definitions",
         "/api/v1/task-definitions/download",
     ] {
         let response = app
@@ -403,6 +551,259 @@ async fn serves_definition_routes_without_credentials() {
             response.status(),
             StatusCode::OK,
             "GET {uri} without credentials"
+        );
+    }
+}
+
+#[tokio::test]
+async fn records_and_serves_events() {
+    let fixture = assemble_app(
+        false,
+        false,
+        RecordedEvents::ChangedAndWritten,
+        Some(Role::Admin),
+    )
+    .await;
+    let app = fixture.app;
+    let token = fixture.token.expect("admin key");
+
+    let (status, json) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    assert_eq!(items.len(), 2);
+    // The listing is newest first, but same-microsecond ties break on the
+    // random uuid suffix, so only membership and non-strict order hold.
+    let mut keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["artifact.written", "setting.changed"]);
+    assert_non_strictly_newest_first(items);
+    let written = items
+        .iter()
+        .find(|e| e["key"] == "artifact.written")
+        .expect("a written event");
+    let id = written["id"].as_str().expect("string id").to_owned();
+    assert!(id.parse::<uuid::Uuid>().is_ok(), "ids are UUIDs: {id}");
+
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["key"], "artifact.written");
+    assert_eq!(json["id"], id.as_str());
+
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/events/0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Asserts `items` are ordered newest first, allowing equal timestamps:
+/// the uuid tiebreak between same-microsecond events is random.
+fn assert_non_strictly_newest_first(items: &[Value]) {
+    let listed: Vec<i64> = items
+        .iter()
+        .filter_map(|e| e["timestamp"].as_str())
+        .filter_map(|ts| ts.parse::<Timestamp>().ok())
+        .map(Timestamp::as_microsecond)
+        .collect();
+    assert_eq!(listed.len(), items.len(), "every item has a timestamp");
+    let mut sorted = listed.clone();
+    sorted.sort_unstable();
+    sorted.reverse();
+    assert_eq!(
+        listed, sorted,
+        "listing must be non-strictly ordered newest first"
+    );
+}
+
+/// Builds an app with one `setting.changed` and two `artifact.*` events
+/// already recorded, and returns it with an admin token.
+async fn app_with_recorded_events() -> (Router, String) {
+    let fixture = assemble_app(
+        false,
+        false,
+        RecordedEvents::ChangedWrittenAndRemoved,
+        Some(Role::Admin),
+    )
+    .await;
+    (fixture.app, fixture.token.expect("admin key"))
+}
+
+#[tokio::test]
+async fn filters_events_by_key_and_timestamp() {
+    let (app, token) = app_with_recorded_events().await;
+
+    // Baseline: three events of two kinds, newest first.
+    let (status, all) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = all["items"].as_array().expect("paged items");
+    let mut keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["artifact.removed", "artifact.written", "setting.changed"]
+    );
+    assert_non_strictly_newest_first(items);
+    let newest = items[0]["timestamp"].as_str().unwrap().to_owned();
+    let oldest = items[2]["timestamp"].as_str().unwrap().to_owned();
+    // Timestamps are not guaranteed unique, so the boundary checks below
+    // expect as many events as share the boundary timestamp.
+    let at_boundary = |ts: &str| {
+        items
+            .iter()
+            .filter(|event| event["timestamp"] == ts)
+            .count()
+    };
+
+    // Exact key match returns only that kind.
+    let (status, json) = get_json(&app, &token, "/api/v1/events?key=artifact.written").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["key"], "artifact.written");
+    assert!(json["next_cursor"].is_null());
+
+    // Key prefix returns artifact kinds only.
+    let (status, json) = get_json(&app, &token, "/api/v1/events?key_prefix=artifact").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    let mut keys: Vec<&str> = items.iter().filter_map(|e| e["key"].as_str()).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["artifact.removed", "artifact.written"]);
+    assert_non_strictly_newest_first(items);
+
+    // Unknown key: an empty page, not a 404.
+    let (status, json) = get_json(&app, &token, "/api/v1/events?key=nonexistent.kind").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(0));
+    assert!(json["next_cursor"].is_null());
+
+    // A since in the future matches nothing.
+    let future = at(Timestamp::now().as_microsecond() + 86_400_000_000).to_string();
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events?since={future}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["items"].as_array().map(Vec::len), Some(0));
+
+    // since and until are inclusive: the boundary event itself is returned.
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events?since={newest}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json["items"].as_array().map(Vec::len),
+        Some(at_boundary(&newest))
+    );
+
+    let (status, json) = get_json(&app, &token, &format!("/api/v1/events?until={oldest}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json["items"].as_array().map(Vec::len),
+        Some(at_boundary(&oldest))
+    );
+}
+
+#[tokio::test]
+async fn rejects_bad_event_cursor() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+    let (status, _) = get_json(&app, &token, "/api/v1/events?cursor=nothex").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn rejects_malformed_event_id() {
+    let (app, _artifacts, _storage, token) = seeded_app().await;
+
+    // The path rejection answers with a plain-text body, so read the status
+    // off the raw response.
+    let status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/not-a-uuid")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Well-formed but unknown: a 404 rather than a bad request.
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/events/0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Artifact events from HTTP uploads and evictions must be recorded with the
+/// acting user as the actor, not the system actor.
+#[tokio::test]
+async fn artifact_events_record_the_acting_user() {
+    let fixture = assemble_app(true, false, RecordedEvents::None, Some(Role::Admin)).await;
+    let app = fixture.app;
+    let token = fixture.token.expect("admin key");
+    let actor_id = fixture.actor.expect("admin actor");
+
+    // Upload a version as the user's API key, then evict it.
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/artifacts/firmware")
+                .header("authorization", format!("Bearer {token}"))
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(&b"user-attributed"[..]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::CREATED);
+    let body = to_bytes(put.into_body(), usize::MAX).await.unwrap();
+    let digest = serde_json::from_slice::<Value>(&body).unwrap()["digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let removed = delete(
+        &app,
+        &token,
+        &format!("/api/v1/artifacts/firmware/versions/{digest}"),
+    )
+    .await;
+    assert_eq!(removed, StatusCode::NO_CONTENT);
+
+    // Run the recorder to completion: cancel + await drains and flushes.
+    let recorder = aperture_events::EventRecorder::connect(
+        &fixture.event_bus,
+        fixture.storage.events().unwrap(),
+    )
+    .expect("recorder");
+    let stop = aperture_runtime::Stop::new();
+    let worker = tokio::spawn(aperture_runtime::Worker::run(recorder, stop.clone()));
+    stop.cancel();
+    worker.await.unwrap();
+
+    let (status, json) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = json["items"].as_array().expect("paged items");
+    let actor_id = actor_id.to_string();
+    for expected in ["artifact.written", "artifact.removed"] {
+        let event = items
+            .iter()
+            .find(|event| event["key"] == expected)
+            .unwrap_or_else(|| panic!("{expected} event recorded: {json}"));
+        assert_eq!(
+            event["actor"], actor_id,
+            "{expected} must be attributed to the acting user"
+        );
+        assert_ne!(
+            event["actor"],
+            ActorId::SYSTEM.to_string(),
+            "{expected} must not be attributed to the system actor"
         );
     }
 }
@@ -885,55 +1286,8 @@ async fn blob_404_when_digest_unknown() {
 /// Builds an app whose single API key carries `role`, with no pre-seeded
 /// artifacts. Used by the authorization tests.
 async fn app_with_role(role: Role) -> (Router, String) {
-    let root = env::temp_dir().join(format!(
-        "aperture-api-{}-{}",
-        process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(
-        storage.clone(),
-        root,
-        EventBus::new(storage.events().unwrap()),
-    );
-
-    let mut registry = TaskRegistry::new();
-    registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    let tasks = Tasks::new(storage.tasks().unwrap(), registry);
-
-    let auth = aperture_auth::AuthHandle::new(storage.clone())
-        .await
-        .unwrap();
-
-    let spectra = Spectra::new(
-        artifacts.clone(),
-        tasks.clone(),
-        SpectraConfig::default(),
-        ActorId::SYSTEM,
-    );
-
-    let password = Password::generate();
-    let actor = auth
-        .create_user(&role.as_str().parse::<Username>().unwrap(), &password, None)
-        .await
-        .unwrap();
-    let (raw_key, api_key) = auth.create_api_key(actor.id, "key").await.unwrap();
-    auth.assign_role(Subject::ApiKey(api_key.id), role)
-        .await
-        .unwrap();
-
-    let settings = test_settings(&storage);
-    let state = AppState::new(
-        "test",
-        Uuid::nil(),
-        storage.clone(),
-        spectra,
-        tasks,
-        settings,
-        auth,
-    );
-    (app(state), raw_key.as_str().to_owned())
+    let fixture = assemble_app(true, false, RecordedEvents::None, Some(role)).await;
+    (fixture.app, fixture.token.expect("role key"))
 }
 
 #[tokio::test]
@@ -979,8 +1333,8 @@ fn test_password() -> String {
 /// Builds a fresh app with no pre-seeded data and returns it alongside the
 /// auth handle and storage so tests can create users and keys directly.
 async fn fresh_app() -> (Router, aperture_auth::AuthHandle, Storage) {
-    let (state, auth, storage) = fresh_state().await;
-    (app(state), auth, storage)
+    let fixture = assemble_app(true, false, RecordedEvents::None, None).await;
+    (fixture.app, fixture.auth, fixture.storage)
 }
 
 /// Same construction as [`fresh_app`] but returns the state before the app
@@ -993,11 +1347,8 @@ async fn fresh_state() -> (AppState, aperture_auth::AuthHandle, Storage) {
     ));
     let _ = fs::remove_dir_all(&root);
     let storage = Storage::open(":memory:").await.unwrap();
-    let artifacts = Artifacts::new(
-        storage.clone(),
-        root,
-        EventBus::new(storage.events().unwrap()),
-    );
+    let event_bus = EventBus::new();
+    let artifacts = Artifacts::new(storage.clone(), root, event_bus.clone());
 
     let mut registry = TaskRegistry::new();
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
@@ -1014,7 +1365,7 @@ async fn fresh_state() -> (AppState, aperture_auth::AuthHandle, Storage) {
         ActorId::SYSTEM,
     );
 
-    let settings = test_settings(&storage);
+    let settings = test_settings(&storage, event_bus);
     let state = AppState::new(
         "test",
         Uuid::nil(),
@@ -1022,29 +1373,10 @@ async fn fresh_state() -> (AppState, aperture_auth::AuthHandle, Storage) {
         spectra,
         tasks,
         settings,
+        test_event_registry(),
         auth.clone(),
     );
     (state, auth, storage)
-}
-
-/// The middleware consults the public paths the state derives from the
-/// spec, so the live set must equal the expected one.
-#[tokio::test]
-async fn app_state_derives_the_expected_public_paths() {
-    let (state, _auth, _storage) = fresh_state().await;
-    assert_eq!(
-        state.public_paths(),
-        &PublicPaths::new(
-            &[
-                "/api/v1/auth/login",
-                "/api/v1/auth/setup",
-                "/api/v1/auth/setup-status",
-                "/api/v1/setting-definitions",
-                "/api/v1/task-definitions"
-            ],
-            &["/api/v1/setting-definitions", "/api/v1/task-definitions"]
-        )
-    );
 }
 
 /// Creates a user and returns an API key carrying `role`.
@@ -1157,9 +1489,9 @@ async fn post_no_auth(app: &Router, uri: &str, body: Value) -> StatusCode {
 
 /// Regression net for the task-schedules class of bug: an authenticated but
 /// unprivileged token must be denied on every mutating endpoint. Adding a new
-/// resource without enforcement makes its mutation succeed here, failing the
-/// test. The `Require` extractor rejects before body extraction, so bodies
-/// only need to be well-formed JSON, but they are kept valid anyway.
+/// resource without a `require()` call makes its mutation succeed here, failing
+/// the test. Bodies are kept valid enough to pass JSON extraction so the
+/// request reaches the authorization check.
 #[tokio::test]
 async fn no_role_token_is_denied_on_all_mutations() {
     let (app, auth, _storage) = fresh_app().await;
@@ -1183,17 +1515,17 @@ async fn no_role_token_is_denied_on_all_mutations() {
         ("PATCH", "/api/v1/task-schedules/1", json!({})),
         ("DELETE", "/api/v1/task-schedules/1", Value::Null),
         (
+            "PUT",
+            "/api/v1/settings/avatar_style",
+            json!({"value": "planets"}),
+        ),
+        (
             "POST",
             "/api/v1/users",
             json!({"username": "x", "password": &pw}),
         ),
         ("DELETE", "/api/v1/users/1", Value::Null),
         ("POST", "/api/v1/api-keys", json!({"name": "k"})),
-        (
-            "PUT",
-            "/api/v1/settings/aperture.http.tls.enabled",
-            json!({"value": true}),
-        ),
         (
             "DELETE",
             "/api/v1/artifacts/firmware/versions/sha256:\
@@ -1227,6 +1559,108 @@ async fn no_role_token_is_denied_on_all_mutations() {
             "{method} {uri}: expected 403 for no-role token"
         );
     }
+}
+
+/// Pins `Object::Event` + `Action::Read` enforcement at runtime: the event
+/// handlers must require the grant, so an authenticated but unprivileged
+/// subject gets 403 on both event read endpoints.
+#[tokio::test]
+async fn no_role_token_is_denied_on_event_reads() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_id, token) = no_role_key(&auth, "nobody").await;
+
+    let (status, _) = get_json(&app, &token, "/api/v1/events").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = get_json(
+        &app,
+        &token,
+        "/api/v1/events/0199d0f5-2ea0-7a17-8a4e-e50f4b0f6a7c",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Deleting an API key must remove its role rows. SQLite reuses rowids, so a
+/// stale row could otherwise hand the dead key's roles to a future key.
+#[tokio::test]
+async fn deleting_an_api_key_removes_its_role_assignments() {
+    let (app, auth, storage) = fresh_app().await;
+    let (_admin_actor, admin_key) = key_for_role(&auth, "admin", Role::Admin).await;
+
+    let (status, body) = post_json(
+        &app,
+        &admin_key,
+        "/api/v1/api-keys",
+        json!({"name": "scoped", "role": "operator"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let key_id: aperture_storage::ApiKeyId = body["id"].as_str().unwrap().parse().unwrap();
+
+    let repo = storage.role_assignments().unwrap();
+    let roles = repo
+        .roles_for(aperture_storage::SubjectKind::ApiKey, key_id.get())
+        .await
+        .unwrap();
+    assert_eq!(roles, vec!["operator".to_owned()]);
+
+    let status = delete(&app, &admin_key, &format!("/api/v1/api-keys/{key_id}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let roles = repo
+        .roles_for(aperture_storage::SubjectKind::ApiKey, key_id.get())
+        .await
+        .unwrap();
+    assert!(
+        roles.is_empty(),
+        "a deleted key must not keep its role rows"
+    );
+}
+
+/// A viewer token can read every read-only endpoint. Guards against a 403
+/// regression on reads, which the mutation matrix does not cover.
+#[tokio::test]
+async fn viewer_can_read_list_endpoints() {
+    let (app, auth, _storage) = fresh_app().await;
+    let (_viewer_actor, viewer_key) = key_for_role(&auth, "viewer", Role::Viewer).await;
+
+    for uri in [
+        "/api/v1/artifacts",
+        "/api/v1/tasks",
+        "/api/v1/task-schedules",
+        "/api/v1/logs",
+        "/api/v1/events",
+        "/api/v1/settings",
+    ] {
+        let (status, _) = get_json(&app, &viewer_key, uri).await;
+        assert_eq!(status, StatusCode::OK, "GET {uri}: expected 200 for viewer");
+    }
+}
+
+/// The middleware consults the public paths the state derives from the
+/// spec, so the live set must equal the expected one.
+#[tokio::test]
+async fn app_state_derives_the_expected_public_paths() {
+    let (state, _auth, _storage) = fresh_state().await;
+    assert_eq!(
+        state.public_paths(),
+        &PublicPaths::new(
+            &[
+                "/api/v1/auth/login",
+                "/api/v1/auth/setup",
+                "/api/v1/auth/setup-status",
+                "/api/v1/event-definitions",
+                "/api/v1/setting-definitions",
+                "/api/v1/task-definitions"
+            ],
+            &[
+                "/api/v1/event-definitions",
+                "/api/v1/setting-definitions",
+                "/api/v1/task-definitions"
+            ]
+        )
+    );
 }
 
 #[tokio::test]
@@ -1426,62 +1860,6 @@ async fn no_role_token_cannot_delete_others_api_key() {
     let (_nobody_actor, nobody_key) = no_role_key(&auth, "nobody").await;
     let status = delete(&app, &nobody_key, &format!("/api/v1/api-keys/{key_id}")).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-}
-
-/// Deleting an API key must remove its role rows. SQLite reuses rowids, so a
-/// stale row could otherwise hand the dead key's roles to a future key.
-#[tokio::test]
-async fn deleting_an_api_key_removes_its_role_assignments() {
-    let (app, auth, storage) = fresh_app().await;
-    let (_admin_actor, admin_key) = key_for_role(&auth, "admin", Role::Admin).await;
-
-    let (status, body) = post_json(
-        &app,
-        &admin_key,
-        "/api/v1/api-keys",
-        json!({"name": "scoped", "role": "operator"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-    let key_id: aperture_storage::ApiKeyId = body["id"].as_str().unwrap().parse().unwrap();
-
-    let repo = storage.role_assignments().unwrap();
-    let roles = repo
-        .roles_for(aperture_storage::SubjectKind::ApiKey, key_id.get())
-        .await
-        .unwrap();
-    assert_eq!(roles, vec!["operator".to_owned()]);
-
-    let status = delete(&app, &admin_key, &format!("/api/v1/api-keys/{key_id}")).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-
-    let roles = repo
-        .roles_for(aperture_storage::SubjectKind::ApiKey, key_id.get())
-        .await
-        .unwrap();
-    assert!(
-        roles.is_empty(),
-        "a deleted key must not keep its role rows"
-    );
-}
-
-/// A viewer token can read every read-only endpoint. Guards against a 403
-/// regression on reads, which the mutation matrix does not cover.
-#[tokio::test]
-async fn viewer_can_read_list_endpoints() {
-    let (app, auth, _storage) = fresh_app().await;
-    let (_viewer_actor, viewer_key) = key_for_role(&auth, "viewer", Role::Viewer).await;
-
-    for uri in [
-        "/api/v1/artifacts",
-        "/api/v1/tasks",
-        "/api/v1/task-schedules",
-        "/api/v1/logs",
-        "/api/v1/settings",
-    ] {
-        let (status, _) = get_json(&app, &viewer_key, uri).await;
-        assert_eq!(status, StatusCode::OK, "GET {uri}: expected 200 for viewer");
-    }
 }
 
 #[tokio::test]

@@ -3,9 +3,9 @@
 use std::error::Error as StdError;
 use std::time::Duration;
 
-use aperture_events::EventBus;
+use aperture_events::{Delivery, EventBus, EventEnvelope};
 use aperture_runtime::{Stop, Worker};
-use aperture_storage::{ActorId, Event, TaskScheduleRepository};
+use aperture_storage::{ActorId, TaskScheduleRepository};
 use serde_json::Value;
 use tokio::time::{MissedTickBehavior, interval};
 
@@ -83,9 +83,15 @@ impl Worker for Automation {
                         tracing::error!(error = &err as &dyn StdError, "scheduler tick failed");
                     }
                 }
-                event = self.events.recv() => {
-                    match event {
-                        Some(event) => self.handle_event(&event).await,
+                delivery = self.events.recv() => {
+                    match delivery {
+                        Some(Delivery::Event(event)) => self.handle_event(&event).await,
+                        Some(Delivery::Lagged(dropped)) => {
+                            tracing::warn!(
+                                dropped,
+                                "automation event stream lagged, events were dropped"
+                            );
+                        }
                         None => break,
                     }
                 }
@@ -97,10 +103,21 @@ impl Worker for Automation {
 }
 
 impl Automation {
-    async fn handle_event(&self, event: &Event) {
+    async fn handle_event(&self, event: &EventEnvelope) {
         for rule in &self.rules {
-            if event.key.as_str() == rule.key {
-                let input = (rule.make_input)(&event.data);
+            if event.key() == rule.key {
+                let data = match event.payload_json() {
+                    Ok(data) => data,
+                    Err(err) => {
+                        tracing::warn!(
+                            error = &err as &dyn StdError,
+                            event_key = event.key(),
+                            "failed to serialize event payload for automation rule"
+                        );
+                        continue;
+                    }
+                };
+                let input = (rule.make_input)(&data);
                 if let Err(err) = self
                     .tasks
                     .create(rule.task_kind, input, ActorId::SYSTEM)
@@ -109,7 +126,7 @@ impl Automation {
                     tracing::warn!(
                         error = &err as &dyn StdError,
                         task_kind = rule.task_kind,
-                        event_key = %event.key,
+                        event_key = event.key(),
                         "automation rule failed to spawn task"
                     );
                 }
@@ -123,10 +140,11 @@ mod tests {
     use std::future::{Future, ready};
     use std::sync::Arc;
 
-    use aperture_events::EventBus;
-    use aperture_storage::{Event, EventId, ListQuery, Storage};
-    use jiff::Timestamp;
+    use aperture_events::{EventBus, EventDefinition};
+    use aperture_storage::{ActorId, ListQuery, Storage};
+    use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
+    use utoipa::ToSchema;
 
     use super::*;
 
@@ -151,30 +169,40 @@ mod tests {
         }
     }
 
-    fn event(key: &str, data: Value) -> Event {
-        Event {
-            id: EventId::from(1),
-            key: key.to_owned(),
-            data,
-            actor: ActorId::SYSTEM,
-            timestamp: Timestamp::from_microsecond(0).unwrap(),
-        }
+    /// The payload the rule matches on.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+    struct SourceEvent {
+        hostname: String,
     }
 
-    async fn automation_with_rule() -> (Automation, Storage) {
+    impl EventDefinition for SourceEvent {
+        const KEY: &'static str = "source.event";
+    }
+
+    /// A payload whose key matches no rule.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+    struct OtherEvent {
+        hostname: String,
+    }
+
+    impl EventDefinition for OtherEvent {
+        const KEY: &'static str = "other.event";
+    }
+
+    async fn automation_with_rule() -> (Automation, Storage, EventBus) {
         let storage = Storage::open(":memory:").await.unwrap();
         let mut registry = crate::TaskRegistry::new();
         registry.register(Arc::new(Ping));
         let tasks = Tasks::new(storage.tasks().unwrap(), registry);
         let schedules = storage.task_schedules().unwrap();
-        let event_bus = EventBus::new(storage.events().unwrap());
+        let event_bus = EventBus::new();
         let mut automation = Automation::new(tasks, schedules, &event_bus);
         automation.on_event(
-            "source.event",
+            SourceEvent::KEY,
             "ping",
             |data| json!({ "hostname": data["hostname"] }),
         );
-        (automation, storage)
+        (automation, storage, event_bus)
     }
 
     async fn spawned_inputs(storage: &Storage) -> Vec<Value> {
@@ -192,11 +220,18 @@ mod tests {
 
     #[tokio::test]
     async fn matching_event_creates_task_with_mapped_input() {
-        let (automation, storage) = automation_with_rule().await;
+        let (automation, storage, bus) = automation_with_rule().await;
+        let envelope = bus
+            .emit(
+                SourceEvent {
+                    hostname: "aperture".to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await
+            .unwrap();
 
-        automation
-            .handle_event(&event("source.event", json!({ "hostname": "aperture" })))
-            .await;
+        automation.handle_event(&envelope).await;
 
         let inputs = spawned_inputs(&storage).await;
         assert_eq!(inputs, [json!({ "hostname": "aperture" })]);
@@ -204,11 +239,18 @@ mod tests {
 
     #[tokio::test]
     async fn non_matching_event_creates_no_task() {
-        let (automation, storage) = automation_with_rule().await;
+        let (automation, storage, bus) = automation_with_rule().await;
+        let envelope = bus
+            .emit(
+                OtherEvent {
+                    hostname: "aperture".to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await
+            .unwrap();
 
-        automation
-            .handle_event(&event("other.event", json!({ "hostname": "aperture" })))
-            .await;
+        automation.handle_event(&envelope).await;
 
         let inputs = spawned_inputs(&storage).await;
         assert!(inputs.is_empty());

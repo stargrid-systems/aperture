@@ -164,7 +164,10 @@ impl TaskScheduleRepository {
             items.push(TaskSchedule::try_from(&row)?);
         }
         Ok(paginator.finish(items, |schedule| {
-            (CursorValue::Int(schedule.id.get()), schedule.id.get())
+            (
+                CursorValue::Int(schedule.id.get()),
+                CursorValue::Int(schedule.id.get()),
+            )
         }))
     }
 

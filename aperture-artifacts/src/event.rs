@@ -27,3 +27,17 @@ pub struct ArtifactRemoved {
 impl EventDefinition for ArtifactRemoved {
     const KEY: &'static str = "artifact.removed";
 }
+
+/// Emitted when an orphan blob is removed during reconciliation.
+///
+/// An orphan blob has no catalog entry, so no artifact key exists for it
+/// and the content digest is the only identifier.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct ArtifactOrphanRemoved {
+    /// Content digest of the removed blob.
+    pub digest: String,
+}
+
+impl EventDefinition for ArtifactOrphanRemoved {
+    const KEY: &'static str = "artifact.orphan-removed";
+}

@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use aperture_events::EventRegistry;
 use aperture_settings::Settings;
 use aperture_storage::{ApiKeyId, ArtifactKey, Storage, UserId};
 use aperture_tasks::Tasks;
@@ -49,12 +50,14 @@ pub struct AppState {
     spectra: Spectra,
     tasks: Tasks,
     settings: Settings,
+    event_registry: Arc<EventRegistry>,
     auth: aperture_auth::AuthHandle,
     login_limiter: aperture_auth::LoginLimiter,
     public_paths: Arc<PublicPaths>,
 }
 
 impl AppState {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         version: &'static str,
         boot_id: Uuid,
@@ -62,6 +65,7 @@ impl AppState {
         spectra: Spectra,
         tasks: Tasks,
         settings: Settings,
+        event_registry: EventRegistry,
         auth: aperture_auth::AuthHandle,
     ) -> Self {
         Self {
@@ -71,6 +75,7 @@ impl AppState {
             spectra,
             tasks,
             settings,
+            event_registry: Arc::new(event_registry),
             auth,
             login_limiter: aperture_auth::LoginLimiter::default(),
             public_paths: Arc::new(PublicPaths::from_spec(&self::openapi())),
@@ -99,6 +104,10 @@ impl AppState {
 
     pub(crate) const fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    pub(crate) fn event_registry(&self) -> &EventRegistry {
+        &self.event_registry
     }
 
     pub(crate) const fn auth(&self) -> &aperture_auth::AuthHandle {
@@ -188,10 +197,15 @@ mod tests {
         "/api/v1/auth/login",
         "/api/v1/auth/setup",
         "/api/v1/auth/setup-status",
+        "/api/v1/event-definitions",
         "/api/v1/setting-definitions",
         "/api/v1/task-definitions",
     ];
-    const PUBLIC_PREFIXES: &[&str] = &["/api/v1/setting-definitions", "/api/v1/task-definitions"];
+    const PUBLIC_PREFIXES: &[&str] = &[
+        "/api/v1/event-definitions",
+        "/api/v1/setting-definitions",
+        "/api/v1/task-definitions",
+    ];
 
     /// Deriving the public paths from the document yields exactly the
     /// expected set. This is the tripwire for annotation and utoipa drift.

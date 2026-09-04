@@ -196,7 +196,12 @@ impl ApiKeyRepository {
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             keys.push(ApiKey::try_from(&row)?);
         }
-        Ok(paginator.finish(keys, |key| (CursorValue::Int(key.id.get()), key.id.get())))
+        Ok(paginator.finish(keys, |key| {
+            (
+                CursorValue::Int(key.id.get()),
+                CursorValue::Int(key.id.get()),
+            )
+        }))
     }
 
     /// Updates the last-used timestamp only if it is unset or older than the

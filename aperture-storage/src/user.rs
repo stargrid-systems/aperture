@@ -199,7 +199,12 @@ impl UserRepository {
         while let Some(row) = rows.next().await.map_err(StorageError::from_turso)? {
             users.push(User::try_from(&row)?);
         }
-        Ok(paginator.finish(users, |user| (CursorValue::Text(user.username.clone()), 0)))
+        Ok(paginator.finish(users, |user| {
+            (
+                CursorValue::Text(user.username.clone()),
+                CursorValue::Int(0),
+            )
+        }))
     }
 
     /// Updates the password hash and the password-change-required timestamp.

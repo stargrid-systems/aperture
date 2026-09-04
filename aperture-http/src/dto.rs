@@ -11,7 +11,9 @@ pub use self::artifact::{
     ArtifactListParams, ArtifactSummaryResponse, ArtifactVersionResponse, VersionListParams,
     VersionSortParam,
 };
-pub use self::event::{EventListParams, EventResponse};
+pub use self::event::{
+    EventDefinitionResponse, EventDefinitionSummary, EventListParams, EventResponse,
+};
 pub use self::log::{
     BootResponse, LevelResponse, LogEventResponse, LogListParams, LogSpanDetailResponse,
     LogSpanListParams, LogSpanResponse, LogTargetListParams,

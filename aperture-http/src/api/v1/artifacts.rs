@@ -3,6 +3,7 @@
 use std::io;
 
 use aperture_artifacts::ArtifactError;
+use aperture_auth::AuthenticatedActor;
 use aperture_auth::authz::{self, Permission};
 use aperture_storage::{ArtifactKey, Digest, MediaType};
 use axum::Json;
@@ -170,6 +171,7 @@ async fn get_version(
     ),
 )]
 async fn delete_version(
+    auth: AuthenticatedActor,
     Require(_permit): Require<authz::artifact::Evict>,
     State(state): State<AppState>,
     Path((key, digest)): Path<(ArtifactKey, Digest)>,
@@ -177,7 +179,7 @@ async fn delete_version(
     let evicted = state
         .spectra()
         .artifacts()
-        .evict_version(&key, &digest)
+        .evict_version(&key, &digest, auth.actor.id)
         .await?;
     if evicted {
         Ok(StatusCode::NO_CONTENT)
@@ -213,6 +215,7 @@ async fn delete_version(
     ),
 )]
 async fn upload_artifact(
+    auth: AuthenticatedActor,
     Require(_permit): Require<authz::artifact::Write>,
     State(state): State<AppState>,
     Path(key): Path<ArtifactKey>,
@@ -241,7 +244,7 @@ async fn upload_artifact(
     let artifact = state
         .spectra()
         .artifacts()
-        .put(&key, media_type.as_ref(), reader)
+        .put(&key, media_type.as_ref(), reader, auth.actor.id)
         .await?;
     // Artifact keys are URL-safe ([a-zA-Z0-9._-]) so they round-trip through
     // a single path segment without percent-encoding.

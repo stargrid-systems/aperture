@@ -4,12 +4,16 @@
 //! Writes within a short debounce window are coalesced. A failed reload is
 //! retried a few times so transient races self-heal. The previous config
 //! keeps serving until a reload succeeds.
+//!
+//! Orphan-blob removals (`artifact.orphan-removed`) deliberately do not
+//! reload: an orphan blob has no catalog entry, so it cannot be the material
+//! the reload loads by key.
 
 use std::error::Error as StdError;
 use std::time::Duration;
 
 use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts};
-use aperture_events::{EventBus, TypedEventStream};
+use aperture_events::{Delivery, EventBus, TypedEvent, TypedEventStream};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
@@ -52,11 +56,11 @@ impl TlsReload {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => return,
-                    Some(event) = self.written.recv() => {
-                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
+                    Some(delivery) = self.written.recv() => {
+                        handle_change(delivery, &mut deadline, &mut retries);
                     }
-                    Some(event) = self.removed.recv() => {
-                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
+                    Some(delivery) = self.removed.recv() => {
+                        handle_change(delivery, &mut deadline, &mut retries);
                     }
                     () = &mut sleep => {
                         match reload_certificates(&self.artifacts, &self.config).await {
@@ -90,14 +94,50 @@ impl TlsReload {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => return,
-                    Some(event) = self.written.recv() => {
-                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
+                    Some(delivery) = self.written.recv() => {
+                        handle_change(delivery, &mut deadline, &mut retries);
                     }
-                    Some(event) = self.removed.recv() => {
-                        check_artifact_key(&event.payload.key, &mut deadline, &mut retries);
+                    Some(delivery) = self.removed.recv() => {
+                        handle_change(delivery, &mut deadline, &mut retries);
                     }
                 }
             }
+        }
+    }
+}
+
+/// Payloads of artifact events that name the artifact key they changed.
+trait ArtifactChange {
+    fn artifact_key(&self) -> &str;
+}
+
+impl ArtifactChange for ArtifactWritten {
+    fn artifact_key(&self) -> &str {
+        &self.key
+    }
+}
+
+impl ArtifactChange for ArtifactRemoved {
+    fn artifact_key(&self) -> &str {
+        &self.key
+    }
+}
+
+/// Applies one artifact event delivery. A lag report means relevant
+/// changes may have been missed, so a reload is scheduled unconditionally.
+fn handle_change<D: ArtifactChange>(
+    delivery: Delivery<TypedEvent<D>>,
+    deadline: &mut Option<Instant>,
+    retries: &mut u32,
+) {
+    match delivery {
+        Delivery::Event(event) => {
+            check_artifact_key(event.payload.artifact_key(), deadline, retries);
+        }
+        Delivery::Lagged(dropped) => {
+            tracing::warn!(dropped, "TLS event stream lagged, scheduling reload");
+            *retries = 0;
+            *deadline = Some(Instant::now() + RELOAD_DEBOUNCE);
         }
     }
 }

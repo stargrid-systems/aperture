@@ -269,7 +269,7 @@ impl ArtifactRepository {
         Ok(paginator.finish(items, |key| {
             (
                 CursorValue::Text(key.latest.key.to_string()),
-                key.latest.id.get(),
+                CursorValue::Int(key.latest.id.get()),
             )
         }))
     }
@@ -325,7 +325,7 @@ impl ArtifactRepository {
                 VersionSort::DownloadedAt => artifact.downloaded_at.as_microsecond(),
                 VersionSort::SizeBytes => i64::try_from(artifact.size_bytes).unwrap_or(i64::MAX),
             };
-            (CursorValue::Int(value), artifact.id.get())
+            (CursorValue::Int(value), CursorValue::Int(artifact.id.get()))
         }))
     }
 

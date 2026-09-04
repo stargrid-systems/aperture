@@ -59,6 +59,7 @@ rustls-pemfile = { version = "2", default-features = false }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 sha2 = { version = "0.11", default-features = false }
+smallbox = { version = "0.8", default-features = false }
 subtle = { version = "2", default-features = false }
 thiserror = { version = "2", default-features = false }
 # rcgen exposes cert validity via `time::OffsetDateTime`; jiff covers the rest.

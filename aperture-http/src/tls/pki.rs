@@ -9,7 +9,7 @@ use std::sync::{Arc, LazyLock};
 
 use anyhow::Context as _;
 use aperture_artifacts::Artifacts;
-use aperture_storage::{ArtifactKey, MediaType};
+use aperture_storage::{ActorId, ArtifactKey, MediaType};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, SanType,
@@ -359,7 +359,11 @@ async fn store_cert_artifact(
     key: &ArtifactKey,
     der: &CertificateDer<'_>,
 ) -> Result<(), TlsError> {
-    artifacts.put(key, Some(&PKIX_CERT), der.as_ref()).await?;
+    // PKI generation and rotation is system-initiated, so its events are
+    // attributed to the system actor.
+    artifacts
+        .put(key, Some(&PKIX_CERT), der.as_ref(), ActorId::SYSTEM)
+        .await?;
     Ok(())
 }
 
@@ -369,7 +373,7 @@ async fn store_key_artifact(
     der: &PrivatePkcs8KeyDer<'_>,
 ) -> Result<(), TlsError> {
     artifacts
-        .put(key, Some(&PKCS8), der.secret_pkcs8_der())
+        .put(key, Some(&PKCS8), der.secret_pkcs8_der(), ActorId::SYSTEM)
         .await?;
     Ok(())
 }
@@ -457,7 +461,7 @@ mod tests {
     async fn fresh_store() -> (Artifacts, aperture_events::EventBus, TempDir) {
         let storage = Storage::open(":memory:").await.unwrap();
         let dir = TempDir::new();
-        let event_bus = aperture_events::EventBus::new(storage.events().unwrap());
+        let event_bus = aperture_events::EventBus::new();
         let artifacts = Artifacts::new(storage, dir.0.clone(), event_bus.clone());
         (artifacts, event_bus, dir)
     }
@@ -520,7 +524,7 @@ mod tests {
         let old_server_key = digest_of(&artifacts, &SERVER_KEY).await;
 
         artifacts
-            .evict_version(&SERVER_CERT, &old_server_cert)
+            .evict_version(&SERVER_CERT, &old_server_cert, ActorId::SYSTEM)
             .await
             .unwrap();
 
@@ -552,7 +556,7 @@ mod tests {
         let old_server_key = digest_of(&artifacts, &SERVER_KEY).await;
 
         artifacts
-            .evict_version(&CA_CERT, &old_ca_cert)
+            .evict_version(&CA_CERT, &old_ca_cert, ActorId::SYSTEM)
             .await
             .unwrap();
 
@@ -598,7 +602,7 @@ mod tests {
         ensure_certificates(&artifacts, addr, None).await.unwrap();
 
         artifacts
-            .put(&SERVER_KEY, Some(&PKCS8), &b"corrupt"[..])
+            .put(&SERVER_KEY, Some(&PKCS8), &b"corrupt"[..], ActorId::SYSTEM)
             .await
             .unwrap();
 
@@ -744,6 +748,49 @@ mod tests {
         assert!(
             observed.is_ok(),
             "watcher did not reload config within {deadline:?} after cert change"
+        );
+    }
+
+    /// An orphan-blob removal cannot affect the serving certificate (the
+    /// catalog entry is already gone), so the watcher must not reload for it.
+    /// The wait outlasts the debounce window, so a wrongly scheduled reload
+    /// would have fired and swapped the config.
+    #[tokio::test]
+    async fn reload_watcher_ignores_orphan_blob_removal() {
+        use std::time::Duration;
+
+        use aperture_artifacts::ArtifactOrphanRemoved;
+        use aperture_storage::ActorId;
+        use tokio::time::sleep;
+        use tokio_util::sync::CancellationToken;
+
+        install_crypto();
+        let (artifacts, bus, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
+
+        let config = load_shared_config(&artifacts).await.unwrap();
+        let before = config.load_full();
+
+        let reload = TlsReload::new(artifacts.clone(), config.clone(), &bus);
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(reload.run(token.clone()));
+
+        bus.emit(
+            ArtifactOrphanRemoved {
+                digest: "sha256:cafe".to_owned(),
+            },
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+
+        sleep(Duration::from_millis(800)).await;
+        token.cancel();
+        handle.await.unwrap();
+        assert!(
+            Arc::ptr_eq(&before, &config.load_full()),
+            "orphan-blob removal must not trigger a TLS reload"
         );
     }
 

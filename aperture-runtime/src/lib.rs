@@ -14,13 +14,15 @@
 
 use std::future::Future;
 
+pub use self::batching::{BatchSink, run_batched};
 pub use self::registry::{
     InvalidCursor, Order, Registry, RegistryEntry, RegistryPage, RegistryQuery,
 };
 pub use self::schema::json_schema;
-pub use self::supervisor::{Stop, Supervisor};
+pub use self::supervisor::{ShutdownOutcome, Stop, Supervisor};
 pub use self::worker_set::WorkerSet;
 
+mod batching;
 mod registry;
 mod schema;
 mod supervisor;
