@@ -1,4 +1,23 @@
 //! Aperture gateway: composes the HTTP layer with the artifact manager.
+//!
+//! # Features
+//!
+//! ## `os-integration`
+//!
+//! Opt-in deep OS integration, compiled in with this feature and enabled at
+//! runtime with the `--os-integration` flag (or the
+//! `APERTURE_OS_INTEGRATION` environment variable). When enabled, the
+//! gateway:
+//!
+//! - publishes its listeners on the local network via mDNS/Avahi (`_https._tcp`
+//!   and, without TLS, `_http._tcp`), including re-publication after hostname
+//!   changes or Avahi restarts
+//! - applies the configured hostname via systemd-hostnamed
+//! - bakes a `<hostname>.local` SAN into its TLS certificate
+//!
+//! Requires a system D-Bus with `org.freedesktop.hostname1`
+//! (systemd-hostnamed) and, for mDNS, `org.freedesktop.Avahi`
+//! (avahi-daemon).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
