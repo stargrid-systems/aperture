@@ -13,7 +13,7 @@ pub use self::artifacts::{Artifacts, FetchRequest, FetchSource, Located, SyncRep
 pub use self::blob::BlobStore;
 pub use self::download::{DownloadDefinition, DownloadInput, DownloadOutput, DownloadSource};
 pub use self::error::{ArtifactError, Result};
-pub use self::event::{ArtifactRemoved, ArtifactWritten};
+pub use self::event::{ArtifactOrphanRemoved, ArtifactRemoved, ArtifactWritten};
 
 mod artifacts;
 mod blob;

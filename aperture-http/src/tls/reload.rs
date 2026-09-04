@@ -4,6 +4,10 @@
 //! Writes within a short debounce window are coalesced. A failed reload is
 //! retried a few times so transient races self-heal. The previous config
 //! keeps serving until a reload succeeds.
+//!
+//! Orphan-blob removals (`artifact.orphan-removed`) deliberately do not
+//! reload: an orphan blob has no catalog entry, so it cannot be the material
+//! the reload loads by key.
 
 use std::error::Error as StdError;
 use std::time::Duration;

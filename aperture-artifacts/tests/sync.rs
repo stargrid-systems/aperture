@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::{env, fs, process};
 
 use aperture_artifacts::{
-    Artifact, ArtifactKey, ArtifactRemoved, Artifacts, ListQuery, Storage, VersionSort,
+    Artifact, ArtifactKey, ArtifactOrphanRemoved, ArtifactRemoved, Artifacts, ListQuery, Storage,
+    VersionSort,
 };
 use aperture_events::{Delivery, EventBus};
 use aperture_storage::{ActorId, ArtifactId};
@@ -73,7 +74,7 @@ async fn sync_removes_blobs_without_entries() {
     let storage = Storage::open(":memory:").await.unwrap();
     let event_bus = EventBus::new();
     let artifacts = Artifacts::new(storage, root.clone(), event_bus.clone());
-    let mut rx = event_bus.subscribe_typed::<ArtifactRemoved>();
+    let mut rx = event_bus.subscribe_typed::<ArtifactOrphanRemoved>();
 
     // A blob no catalog entry references.
     let blob = root.join("blobs").join("sha256").join("cafe");
@@ -88,8 +89,9 @@ async fn sync_removes_blobs_without_entries() {
         Delivery::Event(event) => event,
         Delivery::Lagged(n) => panic!("unexpected lag report: {n}"),
     };
-    // An orphan blob has no key, so the digest identifies it.
-    assert_eq!(event.payload.key, "sha256:cafe");
+    // An orphan blob has no key, so the digest identifies it, on its own
+    // event kind instead of polluting ArtifactRemoved's key field.
+    assert_eq!(event.payload.digest, "sha256:cafe");
     assert_eq!(event.actor, ActorId::SYSTEM);
 
     let _ = fs::remove_dir_all(&root);

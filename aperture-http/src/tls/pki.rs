@@ -745,6 +745,49 @@ mod tests {
         );
     }
 
+    /// An orphan-blob removal cannot affect the serving certificate (the
+    /// catalog entry is already gone), so the watcher must not reload for it.
+    /// The wait outlasts the debounce window, so a wrongly scheduled reload
+    /// would have fired and swapped the config.
+    #[tokio::test]
+    async fn reload_watcher_ignores_orphan_blob_removal() {
+        use std::time::Duration;
+
+        use aperture_artifacts::ArtifactOrphanRemoved;
+        use aperture_storage::ActorId;
+        use tokio::time::sleep;
+        use tokio_util::sync::CancellationToken;
+
+        install_crypto();
+        let (artifacts, bus, _dir) = fresh_store().await;
+        let addr: SocketAddr = "[::1]:8443".parse().unwrap();
+        ensure_certificates(&artifacts, addr, None).await.unwrap();
+
+        let config = load_shared_config(&artifacts).await.unwrap();
+        let before = config.load_full();
+
+        let reload = TlsReload::new(artifacts.clone(), config.clone(), &bus);
+        let token = CancellationToken::new();
+        let handle = tokio::spawn(reload.run(token.clone()));
+
+        bus.emit(
+            ArtifactOrphanRemoved {
+                digest: "sha256:cafe".to_owned(),
+            },
+            ActorId::SYSTEM,
+        )
+        .await
+        .unwrap();
+
+        sleep(Duration::from_millis(800)).await;
+        token.cancel();
+        handle.await.unwrap();
+        assert!(
+            Arc::ptr_eq(&before, &config.load_full()),
+            "orphan-blob removal must not trigger a TLS reload"
+        );
+    }
+
     /// End-to-end TLS handshake with generated PKI.
     #[tokio::test]
     async fn generated_pki_completes_a_real_tls_handshake() {

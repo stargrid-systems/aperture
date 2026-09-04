@@ -24,7 +24,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::blob::BlobStore;
 use crate::error::{ArtifactError, Result};
-use crate::event::{ArtifactRemoved, ArtifactWritten};
+use crate::event::{ArtifactOrphanRemoved, ArtifactRemoved, ArtifactWritten};
 use crate::fetch::{FetchMeta, Fetched, OciFetcher, Resolved};
 use crate::hash_writer::HashWriter;
 use crate::progress::ProgressWriter;
@@ -597,22 +597,32 @@ impl Inner {
             }
         }
 
+        let mut removed_digests: Vec<Digest> = Vec::new();
         for digest in self.blobs.list().await? {
             if !tracked.contains(&digest) {
                 self.blobs.remove(&digest).await?;
                 report.removed_blobs += 1;
-                // An orphan blob carries no artifact key, so the digest is
-                // the only identifier to report.
-                removed_keys.push(digest.to_string());
+                removed_digests.push(digest);
             }
         }
 
         // Emitted after the reconciliation work, outside any repository
-        // call. Sync runs as a system reconciliation, before the recorder
-        // connects in serve, so these buffer and persist once it spawns.
+        // call. serve connects and spawns the recorder before sync runs, so
+        // these emits drain into storage. An orphan blob has no artifact
+        // key: its catalog entry is already gone, so the digest is the only
+        // identifier and gets its own event kind.
         for key in removed_keys {
             self.emit_event(ArtifactRemoved { key }, ActorId::SYSTEM)
                 .await;
+        }
+        for digest in removed_digests {
+            self.emit_event(
+                ArtifactOrphanRemoved {
+                    digest: digest.to_string(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await;
         }
 
         Ok(report)
