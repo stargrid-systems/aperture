@@ -19,9 +19,10 @@ aperture-settings = { workspace = true }
 aperture-storage = { workspace = true }
 aperture-tasks = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
+futures-util = { workspace = true }
 serde = { workspace = true, features = ["std", "derive"] }
 thiserror = { workspace = true, features = ["std"] }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
 utoipa = { workspace = true, features = ["macros"] }
 zbus = { workspace = true, features = ["tokio"] }

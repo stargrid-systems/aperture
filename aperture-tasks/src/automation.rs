@@ -134,3 +134,125 @@ impl Automation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::future::{Future, ready};
+    use std::sync::Arc;
+
+    use aperture_events::{EventBus, EventDefinition};
+    use aperture_storage::{ActorId, ListQuery, Storage};
+    use serde::{Deserialize, Serialize};
+    use serde_json::{Value, json};
+    use utoipa::ToSchema;
+
+    use super::*;
+
+    struct Ping;
+
+    impl crate::TaskDefinition for Ping {
+        const KEY: &'static str = "ping";
+
+        type Input = Value;
+        type Output = ();
+
+        fn capabilities(&self) -> crate::Capabilities {
+            crate::Capabilities::NONE
+        }
+
+        fn run(
+            &self,
+            _input: Self::Input,
+            _ctx: crate::TaskContext,
+        ) -> impl Future<Output = Result<Self::Output, crate::RunError>> + Send {
+            ready(Ok(()))
+        }
+    }
+
+    /// The payload the rule matches on.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+    struct SourceEvent {
+        hostname: String,
+    }
+
+    impl EventDefinition for SourceEvent {
+        const KEY: &'static str = "source.event";
+    }
+
+    /// A payload whose key matches no rule.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+    struct OtherEvent {
+        hostname: String,
+    }
+
+    impl EventDefinition for OtherEvent {
+        const KEY: &'static str = "other.event";
+    }
+
+    async fn automation_with_rule() -> (Automation, Storage, EventBus) {
+        let storage = Storage::open(":memory:").await.unwrap();
+        let mut registry = crate::TaskRegistry::new();
+        registry.register(Arc::new(Ping));
+        let tasks = Tasks::new(storage.tasks().unwrap(), registry);
+        let schedules = storage.task_schedules().unwrap();
+        let event_bus = EventBus::new();
+        let mut automation = Automation::new(tasks, schedules, &event_bus);
+        automation.on_event(
+            SourceEvent::KEY,
+            "ping",
+            |data| json!({ "hostname": data["hostname"] }),
+        );
+        (automation, storage, event_bus)
+    }
+
+    async fn spawned_inputs(storage: &Storage) -> Vec<Value> {
+        storage
+            .tasks()
+            .unwrap()
+            .list(None, Some("ping"), None, &[], &ListQuery::default())
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|task| task.input)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn matching_event_creates_task_with_mapped_input() {
+        let (automation, storage, bus) = automation_with_rule().await;
+        let envelope = bus
+            .emit(
+                SourceEvent {
+                    hostname: "aperture".to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await
+            .unwrap();
+
+        automation.handle_event(&envelope).await;
+
+        let inputs = spawned_inputs(&storage).await;
+        assert_eq!(inputs, [json!({ "hostname": "aperture" })]);
+    }
+
+    #[tokio::test]
+    async fn non_matching_event_creates_no_task() {
+        let (automation, storage, bus) = automation_with_rule().await;
+        let envelope = bus
+            .emit(
+                OtherEvent {
+                    hostname: "aperture".to_owned(),
+                },
+                ActorId::SYSTEM,
+            )
+            .await
+            .unwrap();
+
+        automation.handle_event(&envelope).await;
+
+        let inputs = spawned_inputs(&storage).await;
+        assert!(inputs.is_empty());
+    }
+}

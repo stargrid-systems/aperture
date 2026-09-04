@@ -30,6 +30,7 @@ async fn create_assigns_row_and_get_roundtrips() {
     assert_eq!(fetched.id, event.id);
     assert_eq!(fetched.key, "artifact.written");
     assert_eq!(fetched.data, json!({ "n": 1 }));
+    assert_eq!(fetched.actor, ActorId::SYSTEM);
     assert_eq!(fetched.timestamp, event.timestamp);
 
     assert!(repo.get(EventId::generate()).await.unwrap().is_none());
@@ -69,6 +70,51 @@ async fn batch_rolls_back_on_error() {
     drop(batch);
 
     assert!(repo.get(event.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn list_orders_by_timestamp_desc() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.events().unwrap();
+
+    for n in 1..=3u8 {
+        let event = new_event("artifact.written", n, at(i64::from(n) * 1_000));
+        repo.create(&event).await.unwrap();
+    }
+
+    let page = repo
+        .list(&EventFilter::default(), &ListQuery::default())
+        .await
+        .unwrap();
+    let ns: Vec<u64> = page
+        .items
+        .iter()
+        .map(|event| event.data["n"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ns, [3, 2, 1]);
+}
+
+#[tokio::test]
+async fn list_filters_by_key_prefix() {
+    let storage = Storage::open(":memory:").await.unwrap();
+    let repo = storage.events().unwrap();
+
+    for (key, micros) in [
+        ("artifact.written", 1_000),
+        ("os.hostname_applied", 2_000),
+        ("os.hostname_applied", 3_000),
+    ] {
+        let event = new_event(key, 1, at(micros));
+        repo.create(&event).await.unwrap();
+    }
+
+    let filter = EventFilter {
+        key_prefix: Some("os.".to_owned()),
+        ..Default::default()
+    };
+    let page = repo.list(&filter, &ListQuery::default()).await.unwrap();
+    let keys: Vec<&str> = page.items.iter().map(|event| event.key.as_str()).collect();
+    assert_eq!(keys, ["os.hostname_applied", "os.hostname_applied"]);
 }
 
 #[tokio::test]

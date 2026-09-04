@@ -391,6 +391,37 @@ mod tests {
     use super::*;
     use crate::tls::{TlsReload, load_shared_config};
 
+    fn addr() -> SocketAddr {
+        "[::1]:8443".parse().unwrap()
+    }
+
+    fn dns_sans(sans: &[SanType]) -> Vec<String> {
+        sans.iter()
+            .filter_map(|san| match san {
+                SanType::DnsName(name) => Some(name.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compute_sans_includes_mdns_name_for_hostname() {
+        let sans = compute_sans(addr(), Some("aperture"));
+        let dns = dns_sans(&sans);
+        assert!(
+            dns.contains(&"aperture.local".to_owned()),
+            "expected <hostname>.local SAN, got {dns:?}"
+        );
+        assert!(dns.contains(&"localhost".to_owned()));
+    }
+
+    #[test]
+    fn compute_sans_omits_mdns_name_without_hostname() {
+        let sans = compute_sans(addr(), None);
+        let dns = dns_sans(&sans);
+        assert_eq!(dns, ["localhost"]);
+    }
+
     fn install_crypto() {
         use std::sync::Once;
 

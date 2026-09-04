@@ -259,6 +259,7 @@ dependencies = [
  "aperture-settings",
  "aperture-storage",
  "aperture-tasks",
+ "futures-util",
  "serde",
  "thiserror",
  "tokio",

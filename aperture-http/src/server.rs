@@ -130,6 +130,26 @@ impl HttpServer {
         self
     }
 
+    /// The port the TLS listener is actually bound to. `None` when TLS is
+    /// not configured or the OS-assigned port cannot be determined.
+    ///
+    /// Unlike the configured port this is never `0`, so it is safe to
+    /// advertise.
+    #[must_use]
+    pub fn tls_port(&self) -> Option<u16> {
+        let entry = self.tls.as_ref()?;
+        entry.listener.local_addr().ok().map(|addr| addr.port())
+    }
+
+    /// The port the plain HTTP listener is actually bound to. `None` when
+    /// there is no plain listener or the OS-assigned port cannot be
+    /// determined.
+    #[must_use]
+    pub fn plain_port(&self) -> Option<u16> {
+        let entry = self.http.first()?;
+        entry.listener.local_addr().ok().map(|addr| addr.port())
+    }
+
     /// Runs all listeners and reload watchers until `stop` is cancelled, then
     /// drains in-flight connections.
     pub async fn run(self, stop: CancellationToken) {
