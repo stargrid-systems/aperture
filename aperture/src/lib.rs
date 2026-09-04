@@ -23,7 +23,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition};
+use aperture_artifacts::{
+    ArtifactOrphanRemoved, ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDefinition,
+};
 use aperture_auth::AuthHandle;
 #[cfg(feature = "os-integration")]
 use aperture_events::EventDefinition as _;
@@ -52,14 +54,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Installs `ring` as the process-wide rustls crypto provider.
 ///
-/// Panics if a provider is already installed. The provider drives cipher
-/// suite selection, so silently overriding it could change the security
-/// posture.
+/// The provider drives cipher suite selection, so it is never overridden: if
+/// one is already installed (the serve tests run `serve` concurrently), that
+/// one stays.
 fn init_crypto_provider() {
     use rustls::crypto::ring;
-    ring::default_provider()
-        .install_default()
-        .expect("crypto provider already installed");
+    let _ = ring::default_provider().install_default();
 }
 
 /// Runs the gateway until the process is terminated.
@@ -74,10 +74,6 @@ fn init_crypto_provider() {
 /// address, if storage or artifact initialization fails, if a worker exits
 /// early or hangs during shutdown, or if the server encounters a runtime
 /// error.
-///
-/// # Panics
-///
-/// Panics if the rustls crypto provider is already installed.
 #[expect(clippy::too_many_lines)]
 pub async fn serve(
     tls_addr: Option<SocketAddr>,
@@ -91,9 +87,10 @@ pub async fn serve(
              disable a single listener)"
         );
     }
-    if matches!((tls_addr, plain_addr), (Some(a), Some(b)) if a == b) {
-        let addr = tls_addr.unwrap();
-        anyhow::bail!("--https-addr and --http-addr must differ (both were {addr})");
+    if let (Some(a), Some(b)) = (tls_addr, plain_addr)
+        && a == b
+    {
+        anyhow::bail!("--https-addr and --http-addr must differ (both were {a})");
     }
 
     let deferred_log_worker = logging::init();
@@ -107,10 +104,20 @@ pub async fn serve(
     let log_worker = deferred_log_worker.connect(storage.logs()?, boot_id);
 
     // Every fallible step from here on runs with a repository connected to
-    // the log worker. If one fails, the worker is drained inline so the
-    // buffered startup records reach the database before the error escapes.
-    // On success the worker is spawned on the supervisor below instead.
-    let mut supervisor = match async {
+    // the log worker. If one fails, the workers started so far are drained
+    // inline so the buffered startup records reach the database before the
+    // error escapes. On success everything keeps running on the supervisor.
+    let mut supervisor = Supervisor::new();
+    let started = async {
+        // The recorder must be connected and draining before `sync` runs:
+        // sync emits one removal event per orphan version or blob, and
+        // `emit` blocks once the recorder queue is full with no receiver
+        // draining it.
+        let Some(event_recorder) = EventRecorder::connect(&event_bus, storage.events()?) else {
+            anyhow::bail!("event recorder connected twice");
+        };
+        supervisor.spawn_last("events", event_recorder);
+
         artifacts.sync().await?;
 
         // Auth: permission grants live in code, so the handle only rebuilds
@@ -159,6 +166,18 @@ pub async fn serve(
             automation
         };
 
+        let spectra = Spectra::new(
+            artifacts.clone(),
+            tasks.clone(),
+            SpectraConfig::default(),
+            ActorId::SYSTEM,
+        );
+        spectra.activate_if_present().await?;
+
+        if tls_addr.is_some() {
+            install_default_rotation_schedule(&storage).await?;
+        }
+
         #[cfg(feature = "os-integration")]
         let (hostname, os) = match os_reg {
             Some(reg) => {
@@ -172,18 +191,6 @@ pub async fn serve(
         #[cfg(not(feature = "os-integration"))]
         let hostname: Option<String> = None;
 
-        let spectra = Spectra::new(
-            artifacts.clone(),
-            tasks.clone(),
-            SpectraConfig::default(),
-            ActorId::SYSTEM,
-        );
-        spectra.activate_if_present().await?;
-
-        if tls_addr.is_some() {
-            install_default_rotation_schedule(&storage).await?;
-        }
-
         let state = AppState::new(
             VERSION,
             boot_id,
@@ -196,10 +203,6 @@ pub async fn serve(
         );
         let app = aperture_http::app(state);
 
-        let Some(event_recorder) = EventRecorder::connect(&event_bus, storage.events()?) else {
-            anyhow::bail!("event recorder connected twice");
-        };
-
         let server = HttpServer::start(
             artifacts,
             tls_addr,
@@ -210,8 +213,6 @@ pub async fn serve(
         )
         .await?;
 
-        let mut supervisor = Supervisor::new();
-
         // Read the real bound ports before the server is moved into the
         // supervisor, so mDNS advertises effective ports instead of
         // configured ones (which may be 0 for bind-any-port).
@@ -221,7 +222,6 @@ pub async fn serve(
         supervisor.spawn("http", server);
         supervisor.spawn("automation", automation);
         supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
-        supervisor.spawn_last("events", event_recorder);
 
         #[cfg(feature = "os-integration")]
         if let Some(os) = os {
@@ -232,17 +232,21 @@ pub async fn serve(
             );
         }
 
-        anyhow::Ok(supervisor)
+        anyhow::Ok(())
     }
-    .await
-    {
-        Ok(supervisor) => supervisor,
-        Err(err) => {
-            log_worker.drain().await;
-            return Err(err);
-        }
-    };
-    supervisor.spawn_last("log", log_worker);
+    .await;
+
+    if let Err(err) = started {
+        // Drain the workers started so far (the event recorder) so the
+        // events queued during startup, including destructive sync removals,
+        // are persisted instead of dropped with the process. The log worker
+        // drains afterwards so it still records the recorder's flush.
+        supervisor.shutdown().await;
+        log_worker.drain().await;
+        return Err(err);
+    }
+
+    supervisor.spawn_final("log", log_worker);
 
     let outcome = supervisor.run_until_signal(shutdown_signal()).await;
     match outcome {
@@ -308,6 +312,7 @@ fn register_events(registry: &mut EventRegistry) {
     registry.register(Arc::new(SettingChange::default()));
     registry.register(Arc::new(ArtifactWritten::default()));
     registry.register(Arc::new(ArtifactRemoved::default()));
+    registry.register(Arc::new(ArtifactOrphanRemoved::default()));
 }
 
 /// Resets the password for `username` and prints the new password to stdout.
@@ -355,7 +360,7 @@ mod tests {
     use std::path::PathBuf;
 
     use aperture_events::EventDefinition;
-    use aperture_storage::{ListQuery, LogEventFilter, Storage};
+    use aperture_storage::{EventFilter, ListQuery, LogEventFilter, Storage};
 
     use super::*;
 
@@ -368,6 +373,7 @@ mod tests {
         registered.sort_unstable();
 
         let mut emitted = [
+            ArtifactOrphanRemoved::KEY,
             ArtifactRemoved::KEY,
             ArtifactWritten::KEY,
             SettingChange::KEY,
@@ -420,6 +426,59 @@ mod tests {
             !page.items.is_empty(),
             "buffered startup logs must be persisted when startup fails"
         );
+
+        drop(listener);
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    /// A failed startup must persist the events queued during startup, so
+    /// the destructive sync removals stay auditable. The data dir starts
+    /// with more orphan blobs than the recorder queue can hold: with no
+    /// recorder draining, boot would deadlock once the queue fills. The
+    /// port is occupied so startup fails after sync, and every queued
+    /// removal must still reach the database.
+    #[tokio::test]
+    async fn failed_startup_persists_queued_events() {
+        use std::env::temp_dir;
+        use std::net::TcpListener;
+        use std::process::id;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let dir = temp_dir().join(format!("aperture-failed-startup-events-{}", id()));
+        let _ = fs::remove_dir_all(&dir).await;
+        let blobs = dir.join("store").join("blobs").join("sha256");
+        fs::create_dir_all(&blobs).await.unwrap();
+        for i in 0..1_100u32 {
+            fs::write(blobs.join(format!("{i:064x}")), b"orphan")
+                .await
+                .unwrap();
+        }
+
+        let result = serve(None, Some(addr), dir.clone(), false).await;
+        assert!(
+            result.is_err(),
+            "startup must fail while the port is occupied"
+        );
+
+        let db_path = dir.join("aperture.db");
+        let storage = Storage::open(db_path.to_str().unwrap()).await.unwrap();
+        let events = storage.events().unwrap();
+        let mut query = ListQuery {
+            limit: Some(200),
+            ..Default::default()
+        };
+        let mut total = 0;
+        loop {
+            let page = events.list(&EventFilter::default(), &query).await.unwrap();
+            total += page.items.len();
+            let Some(cursor) = page.next_cursor else {
+                break;
+            };
+            query.cursor = Some(cursor);
+        }
+        assert_eq!(total, 1_100, "every queued removal must be persisted");
 
         drop(listener);
         let _ = fs::remove_dir_all(&dir).await;

@@ -46,10 +46,12 @@ pub fn init() -> DeferredLogWorker {
         .with_target("turso", LevelFilter::INFO);
     let db_layer = db_layer.with_filter(db_filter);
 
-    tracing_subscriber::registry()
+    // Only one global subscriber can exist. The serve tests install their
+    // own, so a second init must degrade to a no-op instead of panicking.
+    let _ = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(db_layer)
-        .init();
+        .try_init();
 
     deferred
 }

@@ -1,5 +1,5 @@
-//! A [`Supervisor`] owns two tiers of [`Worker`]s, drives them with shared
-//! stop signals, and drains each tier on shutdown.
+//! A [`Supervisor`] owns three tiers of [`Worker`]s, drives them with shared
+//! stop signals, and drains each tier on shutdown in tier order.
 
 use std::future::Future;
 use std::time::Duration;
@@ -35,14 +35,18 @@ pub enum ShutdownOutcome {
     Forced,
 }
 
-/// Owns two tiers of [`Worker`]s and orchestrates their shutdown.
+/// Owns three tiers of [`Worker`]s and orchestrates their shutdown.
 ///
 /// Regular workers stop on the supervisor signal and drain concurrently with
 /// a hard timeout. Last-tier workers ([`Supervisor::spawn_last`]) stop only
 /// after the regular tier has fully drained, so they can collect what the
-/// regular workers still produce. Use the last tier for workers that drain a
-/// channel fed by other workers, such as the event recorder and the log
-/// worker.
+/// regular workers still produce. Final-tier workers
+/// ([`Supervisor::spawn_final`]) stop only after the last tier has fully
+/// drained. Use the later tiers for workers that drain a channel fed by
+/// earlier workers, keeping a channel's producer and its final consumer in
+/// adjacent tiers: the event recorder drains after the regular tier, and the
+/// log worker drains after the recorder, so it still records the recorder's
+/// final flush.
 ///
 /// A single stuck worker cannot hang process exit. Once a tier's drain
 /// timeout elapses, the remaining tasks in that tier are detached.
@@ -55,6 +59,8 @@ pub struct Supervisor {
     stop_token: CancellationToken,
     late_workers: WorkerSet,
     late_stop_token: CancellationToken,
+    final_workers: WorkerSet,
+    final_stop_token: CancellationToken,
 }
 
 impl Supervisor {
@@ -65,6 +71,8 @@ impl Supervisor {
             stop_token: CancellationToken::new(),
             late_workers: WorkerSet::new(),
             late_stop_token: CancellationToken::new(),
+            final_workers: WorkerSet::new(),
+            final_stop_token: CancellationToken::new(),
         }
     }
 
@@ -81,11 +89,22 @@ impl Supervisor {
     /// Last-tier workers are stopped only after every regular worker has
     /// stopped and drained, so they can collect what the regular workers
     /// still produce before shutting down. Use for workers that drain a
-    /// channel fed by other workers (the event recorder, the log worker).
+    /// channel fed by other workers (the event recorder).
     pub fn spawn_last<W: Worker>(&mut self, name: &'static str, worker: W) {
         let stop = self.late_stop_token.clone();
         let run = worker.run(stop);
         self.late_workers.spawn(name, run);
+    }
+
+    /// Spawns `worker` in the final shutdown tier.
+    ///
+    /// Final-tier workers are stopped only after every last-tier worker has
+    /// stopped and drained. Use for the worker that must outlast all other
+    /// drains because it persists their log output (the log worker).
+    pub fn spawn_final<W: Worker>(&mut self, name: &'static str, worker: W) {
+        let stop = self.final_stop_token.clone();
+        let run = worker.run(stop);
+        self.final_workers.spawn(name, run);
     }
 
     /// Fires the stop signal of every regular worker. Workers that have
@@ -97,12 +116,13 @@ impl Supervisor {
 
     /// Runs until either `signal` resolves or a worker exits on its own.
     ///
-    /// Shutdown happens in two phases. The regular workers are stopped and
-    /// drain concurrently with a hard timeout. Last-tier workers stop only
-    /// after the regular tier has finished, so they can collect what the
-    /// regular workers still produce.
+    /// Shutdown happens in tier order. The regular workers are stopped and
+    /// drained concurrently with a hard timeout. Last-tier workers stop only
+    /// after the regular tier has finished, final-tier workers only after
+    /// the last tier, so each tier can collect what earlier tiers still
+    /// produce.
     ///
-    /// On `signal`, both tiers drain and the outcome is
+    /// On `signal`, all tiers drain and the outcome is
     /// [`ShutdownOutcome::Signaled`]. On early worker exit, the outcome
     /// carries the worker's name and the operator can interrupt a slow
     /// drain with a second signal, which forces the exit, detaches any
@@ -118,9 +138,10 @@ impl Supervisor {
         let mut early_worker: Option<&'static str> = None;
         let mut forced = false;
 
-        // Wait for either the signal to fire or any worker in either tier to
-        // exit. The last tier branch is gated so an empty set cannot win the
-        // biased select immediately, which would abort the wait.
+        // Wait for either the signal to fire or any worker in any tier to
+        // exit. The last and final tier branches are gated so an empty set
+        // cannot win the biased select immediately, which would abort the
+        // wait.
         tokio::select! {
             biased;
             () = &mut signal => {}
@@ -142,6 +163,15 @@ impl Supervisor {
                     );
                 }
             }
+            name = self.final_workers.wait_for_any_exit(), if !self.final_workers.is_empty() => {
+                early_worker = name;
+                if let Some(name) = name {
+                    tracing::info!(
+                        worker = name,
+                        "final-tier worker exited early, draining workers"
+                    );
+                }
+            }
         }
 
         // Phase 1: stop the regular tier and drain it.
@@ -160,11 +190,17 @@ impl Supervisor {
             }
         }
 
-        // Phase 2: stop the last tier and drain it. On a forced exit the
-        // last-tier tasks detach with the stuck regular tasks.
+        // Phases 2 and 3: stop the last tier, drain it, then do the same
+        // for the final tier. On a forced exit the remaining tasks detach
+        // with the stuck regular tasks.
         self.late_stop_token.cancel();
         if !forced {
             self.late_workers.drain(timeout).await;
+        }
+
+        self.final_stop_token.cancel();
+        if !forced {
+            self.final_workers.drain(timeout).await;
         }
 
         if forced {
@@ -174,6 +210,22 @@ impl Supervisor {
         } else {
             ShutdownOutcome::Signaled
         }
+    }
+
+    /// Stops every tier and drains them in order: regular workers first,
+    /// then last-tier workers, then final-tier workers.
+    ///
+    /// Used on the failed startup path, where no shutdown signal exists:
+    /// workers already spawned must still drain so the records they hold
+    /// reach storage before the error escapes. A tier's drain that exceeds
+    /// the drain timeout detaches its remaining tasks.
+    pub async fn shutdown(self) {
+        self.trigger();
+        self.workers.drain(DRAIN_TIMEOUT).await;
+        self.late_stop_token.cancel();
+        self.late_workers.drain(DRAIN_TIMEOUT).await;
+        self.final_stop_token.cancel();
+        self.final_workers.drain(DRAIN_TIMEOUT).await;
     }
 }
 
@@ -258,6 +310,78 @@ mod tests {
             .await;
         assert!(matches!(outcome, ShutdownOutcome::Signaled));
         assert_eq!(*order.lock().unwrap(), vec!["regular", "late"]);
+    }
+
+    #[tokio::test]
+    async fn final_tier_stops_after_last_tier_drains() {
+        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn_last(
+            "late",
+            Recorder {
+                tag: "late",
+                delay: Duration::from_millis(50),
+                order: Arc::clone(&order),
+            },
+        );
+        supervisor.spawn_final(
+            "final",
+            Recorder {
+                tag: "final",
+                delay: Duration::ZERO,
+                order: Arc::clone(&order),
+            },
+        );
+
+        let (fire, signal) = oneshot::channel();
+        tokio::spawn(async {
+            sleep(Duration::from_millis(20)).await;
+            let _ = fire.send(());
+        });
+        let outcome = supervisor
+            .run_until_signal(async {
+                let _ = signal.await;
+            })
+            .await;
+        assert!(matches!(outcome, ShutdownOutcome::Signaled));
+        assert_eq!(*order.lock().unwrap(), vec!["late", "final"]);
+    }
+
+    /// `shutdown` drains every tier in order without a shutdown signal. This
+    /// is the failed-startup path.
+    #[tokio::test]
+    async fn shutdown_drains_all_tiers_without_a_signal() {
+        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn(
+            "regular",
+            Recorder {
+                tag: "regular",
+                delay: Duration::ZERO,
+                order: Arc::clone(&order),
+            },
+        );
+        supervisor.spawn_last(
+            "late",
+            Recorder {
+                tag: "late",
+                delay: Duration::ZERO,
+                order: Arc::clone(&order),
+            },
+        );
+        supervisor.spawn_final(
+            "final",
+            Recorder {
+                tag: "final",
+                delay: Duration::ZERO,
+                order: Arc::clone(&order),
+            },
+        );
+
+        supervisor.shutdown().await;
+        assert_eq!(*order.lock().unwrap(), vec!["regular", "late", "final"]);
     }
 
     #[tokio::test]
