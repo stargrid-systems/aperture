@@ -51,6 +51,8 @@ mod server {
     pub(super) trait AvahiServer {
         fn entry_group_new(&self) -> zbus::Result<OwnedObjectPath>;
 
+        fn get_host_name_fqdn(&self) -> zbus::Result<String>;
+
         #[zbus(signal)]
         fn state_changed(&self, state: i32, error: String) -> zbus::Result<()>;
     }
@@ -199,7 +201,10 @@ impl ServicePublisher {
 
     /// Drops recreate reasons already buffered by the state streams.
     ///
-    /// Bounded: each stream is polled once without waiting. Used after a
+    /// Bounded: polls each stream until it reports no more buffered
+    /// signals, never waiting for new ones. Best-effort: a trigger arriving
+    /// just after the drain still causes one redundant re-publication,
+    /// which is harmless because re-publication is idempotent. Used after a
     /// deliberate re-publication to discard triggers that predate the fresh
     /// advertisement.
     pub fn drain_stale(&mut self) {
@@ -251,6 +256,25 @@ impl ServicePublisher {
             }
         }
     }
+}
+
+/// Queries the daemon's own mDNS FQDN, e.g. `aperture.local`.
+///
+/// This is the name the daemon actually owns, so it is the only safe SRV
+/// target: the configured hostname can name a peer after a collision
+/// rename.
+///
+/// # Errors
+///
+/// Returns an error if the Avahi D-Bus call fails.
+pub async fn host_fqdn(connection: &zbus::Connection) -> anyhow::Result<String> {
+    let server = AvahiServerProxy::new(connection)
+        .await
+        .context("failed to create avahi server proxy")?;
+    server
+        .get_host_name_fqdn()
+        .await
+        .context("failed to query the avahi host FQDN")
 }
 
 /// Creates, fills, and commits a new entry group.
