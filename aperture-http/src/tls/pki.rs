@@ -3,6 +3,7 @@
 //! Artifacts (all DER): `tls_ca-cert` (pkix-cert), `tls_ca-key` (pkcs8,
 //! secret), `tls_server-cert` (pkix-cert), `tls_server-key` (pkcs8, secret).
 
+use std::error::Error as StdError;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, LazyLock};
 
@@ -149,8 +150,13 @@ fn compute_sans(bind_addr: SocketAddr, hostname: Option<&str>) -> Vec<SanType> {
 
     if let Some(host) = hostname {
         let mdns = format!("{host}.local");
-        if let Ok(dns) = mdns.try_into() {
-            sans.push(SanType::DnsName(dns));
+        match mdns.try_into() {
+            Ok(dns) => sans.push(SanType::DnsName(dns)),
+            Err(err) => tracing::warn!(
+                error = &err as &dyn StdError,
+                dns = format!("{host}.local"),
+                "dropping mDNS SAN"
+            ),
         }
     }
 

@@ -3,12 +3,15 @@
 // The zbus proxy macro generates methods that exceed clippy's argument limit.
 #![expect(clippy::too_many_arguments)]
 
+use std::error::Error as StdError;
 use std::future::{pending, poll_fn};
 use std::pin::Pin;
-use std::task::Poll;
+use std::task::{Poll, Waker};
+use std::time::Duration;
 
 use anyhow::Context;
 use futures_util::Stream;
+use tokio::time::timeout;
 use zbus::zvariant::OwnedObjectPath;
 
 use self::group::AvahiEntryGroupProxy;
@@ -17,6 +20,10 @@ use self::server::AvahiServerProxy;
 const IF_UNSPEC: i32 = -1;
 const PROTO_UNSPEC: i32 = -1;
 const FLAGS_NONE: u32 = 0;
+
+/// Upper bound for freeing the entry group so a dead D-Bus object cannot
+/// stall shutdown or re-publication.
+const FREE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Avahi server states that invalidate a published entry group: a fresh
 /// daemon instance has no groups, and collision/failure stop resolution.
@@ -91,8 +98,11 @@ pub struct ServiceSpec {
 pub enum RecreateReason {
     /// The daemon restarted, or reported a hostname collision or failure.
     Server,
-    /// The entry group collided or failed.
-    Group,
+    /// The entry group collided: another host owns the service instance
+    /// name.
+    GroupCollision,
+    /// The entry group failed.
+    GroupFailure,
 }
 
 /// Publishes services on the local network via a single Avahi entry group.
@@ -108,8 +118,15 @@ pub struct ServicePublisher {
 }
 
 impl ServicePublisher {
-    /// Creates an entry group, advertises `services` under `hostname`, and
-    /// subscribes to the daemon and group state signals.
+    /// Creates an entry group and subscribes to the daemon and group state
+    /// signals.
+    ///
+    /// The group advertises each service under the service instance name
+    /// `instance` and targets the mDNS host `host` (e.g. `aperture.local`),
+    /// which should match the certificate SANs. The daemon state stream is
+    /// subscribed before the group is created so a daemon restart during
+    /// publication is still observed; the group stream can only be
+    /// subscribed after the group exists.
     ///
     /// With an empty `services` slice nothing is published and
     /// [`Self::next_recreate`] parks forever.
@@ -119,40 +136,41 @@ impl ServicePublisher {
     /// Returns an error if any Avahi D-Bus call fails.
     pub async fn start(
         connection: &zbus::Connection,
-        hostname: &str,
+        instance: &str,
+        host: &str,
         services: &[ServiceSpec],
     ) -> anyhow::Result<Self> {
-        let group_path = if services.is_empty() {
-            None
-        } else {
-            Some(create_group(connection, hostname, services).await?)
-        };
-        let (server_states, group_states) = match &group_path {
-            Some(path) => {
-                let server = AvahiServerProxy::new(connection)
-                    .await
-                    .context("failed to create avahi server proxy")?;
-                let server_states = server
-                    .receive_state_changed()
-                    .await
-                    .context("failed to subscribe to avahi server state changes")?;
-                let group = AvahiEntryGroupProxy::new(connection, path.clone())
-                    .await
-                    .context("failed to create entry group proxy")?;
-                let group_states = group
-                    .receive_state_changed()
-                    .await
-                    .context("failed to subscribe to entry group state changes")?;
-                (Some(server_states), Some(group_states))
-            }
-            None => (None, None),
-        };
+        if services.is_empty() {
+            return Ok(Self {
+                connection: connection.clone(),
+                group_path: None,
+                server_states: None,
+                group_states: None,
+            });
+        }
+
+        let server = AvahiServerProxy::new(connection)
+            .await
+            .context("failed to create avahi server proxy")?;
+        let server_states = server
+            .receive_state_changed()
+            .await
+            .context("failed to subscribe to avahi server state changes")?;
+
+        let group_path = create_group(connection, instance, host, services).await?;
+        let group = AvahiEntryGroupProxy::new(connection, group_path.clone())
+            .await
+            .context("failed to create entry group proxy")?;
+        let group_states = group
+            .receive_state_changed()
+            .await
+            .context("failed to subscribe to entry group state changes")?;
 
         Ok(Self {
             connection: connection.clone(),
-            group_path,
-            server_states,
-            group_states,
+            group_path: Some(group_path),
+            server_states: Some(server_states),
+            group_states: Some(group_states),
         })
     }
 
@@ -179,7 +197,32 @@ impl ServicePublisher {
         }
     }
 
+    /// Drops recreate reasons already buffered by the state streams.
+    ///
+    /// Bounded: each stream is polled once without waiting. Used after a
+    /// deliberate re-publication to discard triggers that predate the fresh
+    /// advertisement.
+    pub fn drain_stale(&mut self) {
+        if let Some(states) = self.server_states.as_mut() {
+            while let Some(signal) = try_next_signal(states) {
+                if server_recreate_reason(&signal).is_some() {
+                    tracing::debug!("dropped stale avahi server state signal");
+                }
+            }
+        }
+        if let Some(states) = self.group_states.as_mut() {
+            while let Some(signal) = try_next_signal(states) {
+                if group_recreate_reason(&signal).is_some() {
+                    tracing::debug!("dropped stale avahi group state signal");
+                }
+            }
+        }
+    }
+
     /// Frees the entry group. A no-op when nothing was published.
+    ///
+    /// Bounded by a short timeout and tolerant of stale targets: a daemon
+    /// that restarted since publication has no group left to free.
     ///
     /// # Errors
     ///
@@ -188,21 +231,33 @@ impl ServicePublisher {
         let Some(path) = self.group_path.take() else {
             return Ok(());
         };
-        let group = AvahiEntryGroupProxy::new(&self.connection, path)
-            .await
-            .context("failed to create entry group proxy")?;
-        group
-            .free_group()
-            .await
-            .context("failed to free entry group")?;
-        Ok(())
+        let group = match AvahiEntryGroupProxy::new(&self.connection, path).await {
+            Ok(group) => group,
+            Err(err) => {
+                tracing::debug!(error = &err as &dyn StdError, "entry group already gone");
+                return Ok(());
+            }
+        };
+        match timeout(FREE_TIMEOUT, group.free_group()).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) if is_stale_group(&err) => {
+                tracing::debug!(error = &err as &dyn StdError, "entry group already gone");
+                Ok(())
+            }
+            Ok(Err(err)) => Err(err).context("failed to free entry group"),
+            Err(_) => {
+                tracing::debug!(timeout = ?FREE_TIMEOUT, "timed out freeing entry group");
+                Ok(())
+            }
+        }
     }
 }
 
 /// Creates, fills, and commits a new entry group.
 async fn create_group(
     connection: &zbus::Connection,
-    hostname: &str,
+    instance: &str,
+    host: &str,
     services: &[ServiceSpec],
 ) -> anyhow::Result<OwnedObjectPath> {
     let server = AvahiServerProxy::new(connection)
@@ -222,10 +277,10 @@ async fn create_group(
                 IF_UNSPEC,
                 PROTO_UNSPEC,
                 FLAGS_NONE,
-                hostname,
+                instance,
                 &spec.service_type,
                 "",
-                "",
+                host,
                 spec.port,
                 vec![],
             )
@@ -263,11 +318,28 @@ fn group_recreate_reason(signal: &group::StateChanged) -> Option<RecreateReason>
     let Ok(args) = signal.args() else {
         return None;
     };
-    if matches!(args.state, group_state::COLLISION | group_state::FAILURE) {
-        tracing::debug!(state = args.state, error = %args.error, "avahi entry group state changed");
-        Some(RecreateReason::Group)
-    } else {
-        None
+    let reason = match args.state {
+        group_state::COLLISION => RecreateReason::GroupCollision,
+        group_state::FAILURE => RecreateReason::GroupFailure,
+        _ => return None,
+    };
+    tracing::debug!(state = args.state, error = %args.error, "avahi entry group state changed");
+    Some(reason)
+}
+
+/// True for errors meaning the entry group no longer exists: a daemon
+/// restart dropped it, so there is nothing left to free.
+fn is_stale_group(err: &zbus::Error) -> bool {
+    const INVALID_OBJECT: &str = "org.freedesktop.Avahi.InvalidObjectError";
+    const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
+    const SERVICE_UNKNOWN: &str = "org.freedesktop.DBus.Error.ServiceUnknown";
+
+    match err {
+        zbus::Error::MethodError(name, ..) => matches!(
+            name.as_str(),
+            INVALID_OBJECT | UNKNOWN_OBJECT | SERVICE_UNKNOWN
+        ),
+        _ => false,
     }
 }
 
@@ -284,4 +356,15 @@ where
         Poll::Ready(None) | Poll::Pending => Poll::Pending,
     })
     .await
+}
+
+/// Non-blocking sibling of [`next_signal`]: returns only buffered items.
+fn try_next_signal<S>(stream: &mut S) -> Option<S::Item>
+where
+    S: Stream + Unpin,
+{
+    match Pin::new(&mut *stream).poll_next(&mut std::task::Context::from_waker(Waker::noop())) {
+        Poll::Ready(item) => item,
+        Poll::Pending => None,
+    }
 }

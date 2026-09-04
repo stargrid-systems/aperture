@@ -1,7 +1,7 @@
 //! OS worker: mDNS publishing and hostname change reactions.
 
 use std::error::Error as StdError;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aperture_events::{Delivery, EventBus, TypedEventStream};
 use aperture_runtime::{Stop, Worker};
@@ -10,7 +10,7 @@ use aperture_storage::ActorId;
 use aperture_tasks::Tasks;
 use tokio::time::sleep;
 
-use crate::avahi::{ServicePublisher, ServiceSpec};
+use crate::avahi::{RecreateReason, ServicePublisher, ServiceSpec};
 use crate::event::HostnameApplied;
 use crate::hostname::{ApplyHostnameDefinition, ApplyHostnameInput};
 use crate::setting::{Hostname, HostnameSetting};
@@ -20,11 +20,22 @@ const PUBLISH_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// Upper bound for the mDNS publish retry backoff.
 const PUBLISH_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 
+/// Backoff before the first recreate-driven re-publication.
+const RECREATE_FIRST_DELAY: Duration = Duration::from_secs(1);
+/// Upper bound for the recreate-driven re-publication backoff.
+const RECREATE_MAX_DELAY: Duration = Duration::from_secs(30);
+/// Recreate triggers farther apart than this count as unrelated and reset
+/// the backoff.
+const RECREATE_QUIET_PERIOD: Duration = Duration::from_secs(60);
+
 /// Background worker for mDNS publishing and hostname management.
 pub struct OsWorker {
     tasks: Tasks,
     connection: zbus::Connection,
     hostname: String,
+    /// Service instance name currently published: the hostname plus a
+    /// numeric suffix after collisions.
+    instance: String,
     https_port: Option<u16>,
     plain_port: Option<u16>,
     tls_enabled: bool,
@@ -34,7 +45,7 @@ pub struct OsWorker {
 
 impl OsWorker {
     #[expect(clippy::too_many_arguments)]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         tasks: Tasks,
         connection: zbus::Connection,
         hostname: String,
@@ -44,10 +55,12 @@ impl OsWorker {
         event_bus: EventBus,
         setting_changes: TypedEventStream<SettingChange>,
     ) -> Self {
+        let instance = hostname.clone();
         Self {
             tasks,
             connection,
             hostname,
+            instance,
             https_port,
             plain_port,
             tls_enabled,
@@ -62,12 +75,25 @@ impl Worker for OsWorker {
         let Some(mut publisher) = self.publish(&stop).await else {
             return;
         };
+        let mut debounce = RecreateDebounce::default();
         loop {
             tokio::select! {
                 biased;
                 () = stop.cancelled() => break,
                 reason = publisher.next_recreate() => {
-                    tracing::info!(?reason, "avahi state changed, re-publishing services");
+                    self.instance = next_instance(&self.hostname, &self.instance, &reason);
+                    let delay = debounce.next_delay(Instant::now());
+                    tracing::info!(
+                        ?reason,
+                        instance = %self.instance,
+                        delay = ?delay,
+                        "avahi state changed, re-publishing services"
+                    );
+                    tokio::select! {
+                        biased;
+                        () = stop.cancelled() => break,
+                        () = sleep(delay) => {}
+                    }
                     if !self.republish(&mut publisher, &stop).await {
                         break;
                     }
@@ -105,9 +131,12 @@ impl Worker for OsWorker {
 impl OsWorker {
     /// Publishes the mDNS services for the current hostname.
     ///
-    /// Retries with exponential backoff until publishing succeeds or `stop`
-    /// resolves. Returns `None` when stopped.
+    /// The service instance name is [`Self::instance`]; the advertised host
+    /// is `<hostname>.local` so resolution targets the name the certificate
+    /// SAN covers. Retries with exponential backoff until publishing
+    /// succeeds or `stop` resolves. Returns `None` when stopped.
     async fn publish(&self, stop: &Stop) -> Option<ServicePublisher> {
+        let host = format!("{}.local", self.hostname);
         let services = services_to_publish(
             &self.hostname,
             self.https_port,
@@ -116,9 +145,14 @@ impl OsWorker {
         );
         let mut delay = PUBLISH_RETRY_DELAY;
         loop {
-            match ServicePublisher::start(&self.connection, &self.hostname, &services).await {
+            match ServicePublisher::start(&self.connection, &self.instance, &host, &services).await
+            {
                 Ok(publisher) => {
-                    tracing::info!(hostname = %self.hostname, "mDNS services published");
+                    tracing::info!(
+                        hostname = %self.hostname,
+                        instance = %self.instance,
+                        "mDNS services published"
+                    );
                     return Some(publisher);
                 }
                 Err(err) => {
@@ -149,6 +183,7 @@ impl OsWorker {
     /// Applies the hostname and, on success, re-publishes the services
     /// under it.
     ///
+    /// Skipped entirely when the new hostname equals the current one.
     /// Returns early when `stop` resolves while the apply task runs, so a
     /// hung D-Bus call cannot stall shutdown.
     async fn on_hostname_change(
@@ -157,6 +192,11 @@ impl OsWorker {
         publisher: &mut ServicePublisher,
         stop: &Stop,
     ) {
+        if hostname.as_str() == self.hostname {
+            tracing::debug!(hostname = %hostname, "hostname unchanged, skipping apply");
+            return;
+        }
+
         let Ok(handle) = self
             .tasks
             .spawn::<ApplyHostnameDefinition>(
@@ -201,7 +241,55 @@ impl OsWorker {
         }
 
         hostname.as_str().clone_into(&mut self.hostname);
-        self.republish(publisher, stop).await;
+        hostname.as_str().clone_into(&mut self.instance);
+        if self.republish(publisher, stop).await {
+            // Buffered signals predate the fresh advertisement; without the
+            // drain the daemon's post-apply RUNNING state would trigger a
+            // second redundant republish.
+            publisher.drain_stale();
+        }
+    }
+}
+
+/// Service instance name for the next publish attempt.
+///
+/// A group collision means the name is taken by another host: bump the
+/// numeric suffix, `aperture` -> `aperture-2` -> `aperture-3`. Any other
+/// trigger resets to the plain hostname: a daemon restart freed the old
+/// names, and a failure does not imply the name is taken.
+fn next_instance(base: &str, current: &str, reason: &RecreateReason) -> String {
+    match reason {
+        RecreateReason::GroupCollision => current
+            .rsplit_once('-')
+            .and_then(|(prefix, suffix)| suffix.parse::<u32>().ok().map(|n| (prefix, n)))
+            .map_or_else(
+                || format!("{base}-2"),
+                |(prefix, n)| format!("{prefix}-{}", n.saturating_add(1)),
+            ),
+        RecreateReason::Server | RecreateReason::GroupFailure => base.to_owned(),
+    }
+}
+
+/// Rate-limits recreate-driven re-publication so a signal storm cannot spin
+/// the worker: triggers inside the quiet period double the delay up to a
+/// cap, anything else starts over.
+#[derive(Debug, Default)]
+struct RecreateDebounce {
+    last_trigger: Option<Instant>,
+    delay: Duration,
+}
+
+impl RecreateDebounce {
+    /// Backoff to wait before the next recreate-driven republish.
+    fn next_delay(&mut self, now: Instant) -> Duration {
+        self.delay = match self.last_trigger {
+            Some(last) if now.duration_since(last) < RECREATE_QUIET_PERIOD => {
+                (self.delay * 2).min(RECREATE_MAX_DELAY)
+            }
+            _ => RECREATE_FIRST_DELAY,
+        };
+        self.last_trigger = Some(now);
+        self.delay
     }
 }
 
@@ -279,5 +367,101 @@ mod tests {
     fn empty_hostname_is_not_advertised() {
         let services = services_to_publish("", Some(8443), Some(8080), false);
         assert!(services.is_empty());
+    }
+
+    #[test]
+    fn collision_appends_a_suffix() {
+        assert_eq!(
+            next_instance("aperture", "aperture", &RecreateReason::GroupCollision),
+            "aperture-2"
+        );
+    }
+
+    #[test]
+    fn collision_bumps_the_taken_suffix() {
+        assert_eq!(
+            next_instance("aperture", "aperture-2", &RecreateReason::GroupCollision),
+            "aperture-3"
+        );
+    }
+
+    #[test]
+    fn repeated_collisions_keep_bumping() {
+        let mut instance = "aperture".to_owned();
+        for expected in ["aperture-2", "aperture-3", "aperture-4", "aperture-5"] {
+            instance = next_instance("aperture", &instance, &RecreateReason::GroupCollision);
+            assert_eq!(instance, expected);
+        }
+    }
+
+    #[test]
+    fn collision_bumps_a_base_that_ends_in_a_number() {
+        assert_eq!(
+            next_instance("aperture-2", "aperture-2", &RecreateReason::GroupCollision),
+            "aperture-3"
+        );
+    }
+
+    #[test]
+    fn collision_with_non_numeric_tail_falls_back_to_suffix_two() {
+        assert_eq!(
+            next_instance("my-host", "my-host", &RecreateReason::GroupCollision),
+            "my-host-2"
+        );
+    }
+
+    #[test]
+    fn server_restart_resets_to_the_hostname() {
+        assert_eq!(
+            next_instance("aperture", "aperture-7", &RecreateReason::Server),
+            "aperture"
+        );
+    }
+
+    #[test]
+    fn group_failure_resets_to_the_hostname() {
+        assert_eq!(
+            next_instance("aperture", "aperture-3", &RecreateReason::GroupFailure),
+            "aperture"
+        );
+    }
+
+    #[test]
+    fn debounce_doubles_under_back_to_back_triggers() {
+        let start = Instant::now();
+        let mut debounce = RecreateDebounce::default();
+        assert_eq!(debounce.next_delay(start), RECREATE_FIRST_DELAY);
+        assert_eq!(
+            debounce.next_delay(start + Duration::from_millis(10)),
+            RECREATE_FIRST_DELAY * 2
+        );
+        assert_eq!(
+            debounce.next_delay(start + Duration::from_millis(20)),
+            RECREATE_FIRST_DELAY * 4
+        );
+    }
+
+    #[test]
+    fn debounce_caps_at_the_max_delay() {
+        let start = Instant::now();
+        let mut debounce = RecreateDebounce::default();
+        debounce.next_delay(start);
+        let mut last = RECREATE_FIRST_DELAY;
+        for n in 1..=10 {
+            last = debounce.next_delay(start + Duration::from_secs(n));
+        }
+        assert_eq!(last, RECREATE_MAX_DELAY);
+    }
+
+    #[test]
+    fn debounce_resets_after_a_quiet_period() {
+        let start = Instant::now();
+        let mut debounce = RecreateDebounce::default();
+        debounce.next_delay(start);
+        debounce.next_delay(start + Duration::from_millis(5));
+        assert_eq!(
+            debounce.next_delay(start + RECREATE_QUIET_PERIOD + Duration::from_secs(1)),
+            RECREATE_FIRST_DELAY
+        );
     }
 }
