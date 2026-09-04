@@ -4,9 +4,10 @@
 //! and it does so inside flushes, off the emit path. One transaction per
 //! chunk of up to [`FLUSH_BATCH`] events. A failing chunk is retried with
 //! capped backoff within a retry window: 30 s while the recorder runs, then
-//! 5 s more once stop is cancelled. When the active window passes, the chunk
-//! is dropped and the loss is logged with the id range. Earlier chunks stay
-//! committed and later chunks are still attempted.
+//! a single 20 s budget shared by every chunk of the shutdown drain. When
+//! the active window passes, the chunk is dropped and the loss is logged
+//! with the id range. Earlier chunks stay committed and later chunks are
+//! still attempted while budget remains.
 
 use std::cmp;
 use std::error::Error as StdError;
@@ -21,7 +22,8 @@ use crate::bus::EventBus;
 use crate::payload::EventEnvelope;
 
 /// Flush after this many events, even if the interval has not elapsed.
-/// Doubles as the transaction chunk size, matching the log worker's bound.
+/// Doubles as the transaction chunk size. Not aligned with the log worker's
+/// batch bound; the two workers are tuned independently.
 const FLUSH_BATCH: usize = 64;
 
 /// Flush at latest this long after the first pending event.
@@ -31,9 +33,10 @@ const FLUSH_INTERVAL: Duration = Duration::from_millis(200);
 /// the batch is dropped.
 const RETRY_DEADLINE: Duration = Duration::from_secs(30);
 
-/// How long a failing flush is retried once stop is cancelled before the
-/// batch is dropped.
-const SHUTDOWN_FLUSH_DEADLINE: Duration = Duration::from_secs(5);
+/// Total retry budget for a shutdown drain, shared by every chunk so the
+/// whole queue drains within the supervisor's 30 s drain timeout with
+/// headroom to spare.
+const SHUTDOWN_DRAIN_BUDGET: Duration = Duration::from_secs(20);
 
 /// First backoff between flush attempts. Doubles up to `MAX_BACKOFF`.
 const RETRY_BACKOFF_START: Duration = Duration::from_millis(100);
@@ -73,7 +76,7 @@ impl Worker for EventRecorder {
                 repo: self.repo,
                 stop,
                 retry_deadline: RETRY_DEADLINE,
-                shutdown_deadline: SHUTDOWN_FLUSH_DEADLINE,
+                shutdown_budget: SHUTDOWN_DRAIN_BUDGET,
             },
         )
         .await;
@@ -105,8 +108,8 @@ struct EventSink<R> {
     stop: Stop,
     /// How long a failing flush is retried while the recorder runs.
     retry_deadline: Duration,
-    /// How long a failing flush is retried once stop is cancelled.
-    shutdown_deadline: Duration,
+    /// Total retry budget shared by all chunks of a shutdown drain.
+    shutdown_budget: Duration,
 }
 
 /// Drop deadline for a retry window, or `None` when the clock overflows.
@@ -143,34 +146,56 @@ impl<R: InsertEvents> BatchSink<EventEnvelope> for EventSink<R> {
         // recorder channel's capacity plus one in-flight batch), so flush
         // in chunks of FLUSH_BATCH, one transaction per chunk: a failing
         // chunk loses only itself, and later chunks are still attempted.
+        // All chunks share one shutdown budget so the whole drain fits in
+        // the supervisor's drain timeout.
+        let mut shutdown_budget: Option<Instant> = None;
         while !rows.is_empty() {
+            if shutdown_budget.is_some_and(|at| Instant::now() >= at) {
+                tracing::error!(
+                    count = rows.len(),
+                    first = %rows[0].id,
+                    last = %rows[rows.len() - 1].id,
+                    "event shutdown drain budget exhausted, dropping remaining events"
+                );
+                break;
+            }
             let take = FLUSH_BATCH.min(rows.len());
             let chunk: Vec<NewEvent> = rows.drain(..take).collect();
-            self.flush_chunk(chunk).await;
+            self.flush_chunk(chunk, &mut shutdown_budget).await;
         }
     }
 }
 
 impl<R: InsertEvents> EventSink<R> {
+    /// Drop deadline for the active retry window: the shared shutdown
+    /// budget once stop is cancelled, a fresh running window per chunk
+    /// before that.
+    fn deadline(&self, stopped: bool, shutdown_budget: &mut Option<Instant>) -> Option<Instant> {
+        if !stopped {
+            return deadline_after(self.retry_deadline);
+        }
+        if shutdown_budget.is_none() {
+            // A `None` budget (clock overflow) never expires, matching the
+            // running window above.
+            *shutdown_budget = deadline_after(self.shutdown_budget);
+        }
+        *shutdown_budget
+    }
+
     /// Flushes one chunk in a single transaction. On failure the chunk is
     /// retried with capped backoff within the active window and dropped with
     /// its id range when the window passes.
-    async fn flush_chunk(&self, rows: Vec<NewEvent>) {
+    async fn flush_chunk(&self, rows: Vec<NewEvent>, shutdown_budget: &mut Option<Instant>) {
         if rows.is_empty() {
             return;
         }
         let first = rows[0].id;
         let last = rows[rows.len() - 1].id;
 
-        // Once stop is cancelled the shutdown window replaces the running
-        // one: the drain flush is the chunk's last chance, and the
-        // supervisor's drain budget outlasts this window.
+        // Once stop is cancelled every chunk drains against the one shared
+        // shutdown budget, so a slow chunk cannot starve the rest.
         let mut stopped = self.stop.is_cancelled();
-        let mut deadline = deadline_after(if stopped {
-            self.shutdown_deadline
-        } else {
-            self.retry_deadline
-        });
+        let mut deadline = self.deadline(stopped, shutdown_budget);
         let mut backoff = RETRY_BACKOFF_START;
         loop {
             match self.repo.insert(&rows).await {
@@ -178,7 +203,7 @@ impl<R: InsertEvents> EventSink<R> {
                 Err(err) => {
                     if !stopped && self.stop.is_cancelled() {
                         stopped = true;
-                        deadline = deadline_after(self.shutdown_deadline);
+                        deadline = self.deadline(true, shutdown_budget);
                     }
                     if deadline.is_none_or(|at| Instant::now() >= at) {
                         tracing::error!(
@@ -334,7 +359,7 @@ mod tests {
                 repo: storage.events().unwrap(),
                 stop: stop.clone(),
                 retry_deadline: Duration::from_millis(50),
-                shutdown_deadline: Duration::from_millis(50),
+                shutdown_budget: Duration::from_millis(50),
             },
         );
         stop.cancel();
@@ -373,7 +398,7 @@ mod tests {
             },
             stop: aperture_runtime::Stop::new(),
             retry_deadline: RETRY_DEADLINE,
-            shutdown_deadline: SHUTDOWN_FLUSH_DEADLINE,
+            shutdown_budget: SHUTDOWN_DRAIN_BUDGET,
         };
         BatchSink::flush(&mut sink, &mut batch).await;
 
@@ -418,7 +443,7 @@ mod tests {
                 },
                 stop: stop.clone(),
                 retry_deadline: RETRY_DEADLINE,
-                shutdown_deadline: Duration::from_millis(500),
+                shutdown_budget: Duration::from_millis(500),
             },
         );
         stop.cancel();
@@ -436,6 +461,80 @@ mod tests {
             .await
             .unwrap();
         // Every attempt failed, so the batch was dropped and logged.
+        assert!(page.items.is_empty());
+    }
+
+    /// Fails every insert of a full chunk, delegates smaller ones. Records
+    /// the time of every insert attempt.
+    struct FullChunkFails {
+        repo: EventRepository,
+        attempts: Arc<Mutex<Vec<Instant>>>,
+    }
+
+    impl InsertEvents for FullChunkFails {
+        async fn insert(&self, rows: &[NewEvent]) -> Result<(), StorageError> {
+            self.attempts
+                .lock()
+                .expect("attempts lock poisoned")
+                .push(Instant::now());
+            if rows.len() >= FLUSH_BATCH {
+                return Err(StorageError::InvalidCursor(String::from(
+                    "synthetic insert failure",
+                )));
+            }
+            self.repo.insert(rows).await
+        }
+    }
+
+    /// The shutdown drain's retry budget is shared by all chunks: once an
+    /// earlier chunk exhausts it, the remaining chunks are dropped instead
+    /// of getting a fresh window that would outlast the supervisor's drain
+    /// timeout.
+    #[tokio::test]
+    async fn shutdown_drain_budget_is_shared_across_chunks() {
+        let bus = EventBus::new();
+        let storage = Storage::open(":memory:").await.unwrap();
+
+        // Two chunks: the first fails on every attempt, the second would
+        // succeed immediately.
+        let count = u32::try_from(FLUSH_BATCH).unwrap() + 1;
+        for n in 0..count {
+            bus.emit(Probe { n }, ActorId::SYSTEM).await.unwrap();
+        }
+        let rx = bus.take_recorder().expect("recorder available");
+        let stop = aperture_runtime::Stop::new();
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let sink = run_batched(
+            rx,
+            stop.clone(),
+            FLUSH_INTERVAL,
+            FLUSH_BATCH,
+            EventSink {
+                repo: FullChunkFails {
+                    repo: storage.events().unwrap(),
+                    attempts: attempts.clone(),
+                },
+                stop: stop.clone(),
+                retry_deadline: RETRY_DEADLINE,
+                shutdown_budget: Duration::from_millis(200),
+            },
+        );
+        stop.cancel();
+        sink.await;
+
+        let attempts = attempts.lock().expect("attempts lock poisoned").clone();
+        // The failing first chunk was retried until the shared budget ran
+        // out, not dropped after a single attempt.
+        assert!(attempts.len() >= 2, "the failing chunk must be retried");
+
+        let page = storage
+            .events()
+            .unwrap()
+            .list(&EventFilter::default(), &ListQuery::default())
+            .await
+            .unwrap();
+        // The healthy second chunk got no fresh window: it was dropped with
+        // the exhausted budget.
         assert!(page.items.is_empty());
     }
 }
