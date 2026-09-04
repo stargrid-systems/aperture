@@ -19,13 +19,17 @@ use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
 use self::api::router as api_routes;
+pub use self::auth::PublicPaths;
 use self::auth::SecurityAddon;
 pub use self::avatar::{AvatarAnimation, AvatarStyle};
 use self::dto::{JsonQueryString, LevelResponse, OrderParam, TaskStatusParam, VersionSortParam};
 pub use self::server::HttpServer;
 use self::spectra::fallback as spectra_fallback;
 pub use self::spectra::{Spectra, SpectraConfig, SpectraWorker};
-pub use self::tls::{RotateCertificateDefinition, install_default_rotation_schedule};
+pub use self::tls::{
+    RegenerateCertificateDefinition, RegenerateCertificateInput, RotateCertificateDefinition,
+    install_default_rotation_schedule,
+};
 
 mod api;
 mod auth;
@@ -49,6 +53,7 @@ pub struct AppState {
     event_registry: Arc<EventRegistry>,
     auth: aperture_auth::AuthHandle,
     login_limiter: aperture_auth::LoginLimiter,
+    public_paths: Arc<PublicPaths>,
 }
 
 impl AppState {
@@ -73,6 +78,7 @@ impl AppState {
             event_registry: Arc::new(event_registry),
             auth,
             login_limiter: aperture_auth::LoginLimiter::default(),
+            public_paths: Arc::new(PublicPaths::from_spec(&self::openapi())),
         }
     }
 
@@ -110,6 +116,12 @@ impl AppState {
 
     pub(crate) const fn login_limiter(&self) -> &aperture_auth::LoginLimiter {
         &self.login_limiter
+    }
+
+    /// The public path set the auth middleware consults. Derived once from
+    /// the `OpenAPI` document, shared so cloning the state stays cheap.
+    pub fn public_paths(&self) -> &PublicPaths {
+        &self.public_paths
     }
 }
 
@@ -161,6 +173,7 @@ pub fn app(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
+    use aperture_auth::authz::{self, Permission};
     use serde_json::Value;
 
     use super::*;
@@ -175,22 +188,66 @@ mod tests {
         "changePassword",
     ];
 
-    /// Operations that need no authentication at all.
-    const PUBLIC: &[&str] = &[
-        "login",
-        "setup",
-        "getSetupStatus",
-        "listTaskDefinitions",
-        "getTaskDefinition",
-        "listSettingDefinitions",
-        "getSettingDefinition",
-        "listEventDefinitions",
-        "getEventDefinition",
+    /// Exact paths and covering prefixes the `security(())` annotations must
+    /// currently derive to. The definition list routes are parameter free
+    /// templates, so they show up as exact matches next to the prefixes
+    /// their by-key routes add. A changed set has to be a conscious
+    /// decision, not annotation or utoipa drift.
+    const PUBLIC_EXACT: &[&str] = &[
+        "/api/v1/auth/login",
+        "/api/v1/auth/setup",
+        "/api/v1/auth/setup-status",
+        "/api/v1/event-definitions",
+        "/api/v1/setting-definitions",
+        "/api/v1/task-definitions",
     ];
+    const PUBLIC_PREFIXES: &[&str] = &[
+        "/api/v1/event-definitions",
+        "/api/v1/setting-definitions",
+        "/api/v1/task-definitions",
+    ];
+
+    /// Deriving the public paths from the document yields exactly the
+    /// expected set. This is the tripwire for annotation and utoipa drift.
+    #[test]
+    fn spec_derives_the_expected_public_paths() {
+        assert_eq!(
+            PublicPaths::from_spec(&openapi()),
+            PublicPaths::new(PUBLIC_EXACT, PUBLIC_PREFIXES)
+        );
+    }
 
     #[test]
     fn spec_documents_permissions_per_operation() {
         let spec = serde_json::to_value(openapi()).expect("spec must serialize");
+
+        // Every permission marker's `object:action` string. The annotation
+        // values come from the same marker types the Require extractor
+        // enforces, so membership here pins spec coverage to the PDP
+        // vocabulary.
+        let all_permissions = [
+            authz::artifact::Read::PERMISSION,
+            authz::artifact::Download::PERMISSION,
+            authz::artifact::Write::PERMISSION,
+            authz::artifact::Evict::PERMISSION,
+            authz::task::Read::PERMISSION,
+            authz::task::Create::PERMISSION,
+            authz::task::Cancel::PERMISSION,
+            authz::task_schedule::Read::PERMISSION,
+            authz::task_schedule::Create::PERMISSION,
+            authz::task_schedule::Update::PERMISSION,
+            authz::task_schedule::Delete::PERMISSION,
+            authz::log::Read::PERMISSION,
+            authz::event::Read::PERMISSION,
+            authz::user::Read::PERMISSION,
+            authz::user::Create::PERMISSION,
+            authz::user::Delete::PERMISSION,
+            authz::api_key::Create::PERMISSION,
+            authz::api_key::Delete::PERMISSION,
+            authz::setting::Read::PERMISSION,
+            authz::setting::Update::PERMISSION,
+        ];
+
         for (_, item) in spec["paths"].as_object().expect("paths") {
             for method in ["get", "post", "put", "patch", "delete"] {
                 let Some(op) = item.get(method) else {
@@ -199,30 +256,19 @@ mod tests {
                 let op_id = op["operationId"].as_str().expect("operation id").to_owned();
                 let is_public = op["security"] == Value::Array(vec![serde_json::json!({})]);
 
-                assert_eq!(
-                    is_public,
-                    PUBLIC.contains(&op_id.as_str()),
-                    "{op_id} public flag mismatch"
-                );
-
                 // Looked up by the shared constant, so every annotation
                 // literal is pinned to it: a different name fails coverage.
-                let Some(permission) = op.get(aperture_auth::REQUIRED_PERMISSION_EXTENSION) else {
+                let Some(permission) = op.get(authz::REQUIRED_PERMISSION_EXTENSION) else {
                     assert!(
                         is_public || SESSION_ONLY.contains(&op_id.as_str()),
                         "{op_id} documents no required permission"
                     );
                     continue;
                 };
-                // The values come from Object and Action through
-                // required_permission, so the compiler already guarantees the
-                // vocabulary. Only the object:action shape needs checking.
+                let permission = permission.as_str().expect("permission is a string");
                 assert!(
-                    permission
-                        .as_str()
-                        .and_then(|perm| perm.split_once(':'))
-                        .is_some_and(|(object, action)| !object.is_empty() && !action.is_empty()),
-                    "{op_id} permission is not object:action: {permission}"
+                    all_permissions.contains(&permission),
+                    "{op_id} documents unknown permission {permission}"
                 );
             }
         }

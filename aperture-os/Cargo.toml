@@ -1,7 +1,7 @@
 [package]
-name = "aperture-auth"
+name = "aperture-os"
 version.workspace = true
-description = "Authentication and authorization for the Aperture gateway."
+description = "OS integration for Aperture: mDNS service publication and hostname management."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,18 +13,15 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+aperture-events = { workspace = true }
+aperture-runtime = { workspace = true }
+aperture-settings = { workspace = true }
 aperture-storage = { workspace = true }
+aperture-tasks = { workspace = true }
 anyhow = { workspace = true, features = ["std"] }
-argon2 = { workspace = true, features = ["alloc", "password-hash"] }
-axum = { workspace = true, features = ["json"] }
-jiff = { workspace = true, features = ["std"] }
-serde = { workspace = true, features = ["std"] }
-sha2 = { workspace = true }
-subtle = { workspace = true }
+serde = { workspace = true, features = ["std", "derive"] }
 thiserror = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true, features = ["std", "attributes"] }
-utoipa = { workspace = true }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
+utoipa = { workspace = true, features = ["macros"] }
+zbus = { workspace = true, features = ["tokio"] }

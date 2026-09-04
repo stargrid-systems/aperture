@@ -6,6 +6,7 @@ members = [
     "aperture-auth",
     "aperture-events",
     "aperture-http",
+    "aperture-os",
     "aperture-runtime",
     "aperture-settings",
     "aperture-storage",
@@ -27,6 +28,7 @@ aperture-artifacts = { version = "0.1.0", path = "aperture-artifacts" }
 aperture-auth = { version = "0.1.0", path = "aperture-auth" }
 aperture-events = { version = "0.1.0", path = "aperture-events" }
 aperture-http = { version = "0.1.0", path = "aperture-http" }
+aperture-os = { version = "0.1.0", path = "aperture-os" }
 aperture-runtime = { version = "0.1.0", path = "aperture-runtime" }
 aperture-settings = { version = "0.1.0", path = "aperture-settings" }
 aperture-storage = { version = "0.1.0", path = "aperture-storage" }
@@ -36,11 +38,9 @@ dicebear-lite = { version = "0.1.0", path = "dicebear-lite" }
 anyhow = { version = "1", default-features = false }
 arc-swap = { version = "1", default-features = false }
 argon2 = { version = "0.5", default-features = false }
-async-trait = { version = "0.1", default-features = false }
 axum = { version = "0.8", default-features = false }
 backhand = { version = "0.25", default-features = false }
 bytes = { version = "1", default-features = false }
-casbin = { version = "2.20", default-features = false }
 clap = { version = "4", default-features = false }
 cookie = { version = "0.18", default-features = false }
 futures-util = { version = "0.3", default-features = false }
@@ -77,6 +77,7 @@ uuid = { version = "1", default-features = false }
 utoipa = { version = "5", default-features = false }
 utoipa-axum = { version = "0.2", default-features = false }
 x509-parser = { version = "0.18", default-features = false }
+zbus = { version = "5", default-features = false }
 
 [workspace.lints.clippy]
 cargo = { level = "warn", priority = -1 }

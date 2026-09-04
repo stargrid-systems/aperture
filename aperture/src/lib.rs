@@ -8,20 +8,20 @@ use aperture_artifacts::{ArtifactRemoved, ArtifactWritten, Artifacts, DownloadDe
 use aperture_auth::AuthHandle;
 use aperture_events::{EventBus, EventRecorder, EventRegistry};
 use aperture_http::{
-    AppState, AvatarAnimation, AvatarStyle, HttpServer, RotateCertificateDefinition, Spectra,
-    SpectraConfig, SpectraWorker, install_default_rotation_schedule,
+    AppState, AvatarAnimation, AvatarStyle, HttpServer, RegenerateCertificateDefinition,
+    RotateCertificateDefinition, Spectra, SpectraConfig, SpectraWorker,
+    install_default_rotation_schedule,
 };
 use aperture_runtime::{ShutdownOutcome, Supervisor};
 use aperture_settings::{SettingChange, SettingRegistry, Settings};
 use aperture_storage::{ActorId, Storage};
-use aperture_tasks::{Scheduler, TaskRegistry, Tasks};
+use aperture_tasks::{Automation, TaskDefinition, TaskRegistry, Tasks};
+use serde_json::json;
+use tokio::sync::Mutex;
 use tokio::{fs, signal};
 use uuid::Uuid;
 
-use self::runtime::TasksWorker;
-
 mod logging;
-mod runtime;
 
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -54,10 +54,12 @@ fn init_crypto_provider() {
 /// # Panics
 ///
 /// Panics if the rustls crypto provider is already installed.
+#[expect(clippy::too_many_lines)]
 pub async fn serve(
     tls_addr: Option<SocketAddr>,
     plain_addr: Option<SocketAddr>,
     data_dir: PathBuf,
+    os_integration: bool,
 ) -> anyhow::Result<()> {
     if tls_addr.is_none() && plain_addr.is_none() {
         anyhow::bail!(
@@ -87,21 +89,66 @@ pub async fn serve(
     let mut supervisor = match async {
         artifacts.sync().await?;
 
-        // Auth: build enforcer and seed default policies.
+        // Auth: permission grants live in code, so the handle only rebuilds
+        // the role index from storage.
         let auth = AuthHandle::new(storage.clone()).await?;
 
-        let mut registry = TaskRegistry::new();
-        register_tasks(&mut registry, artifacts.clone());
-        let tasks = Tasks::new(storage.tasks()?, registry);
-
+        let mut task_registry = TaskRegistry::new();
         let mut setting_registry = SettingRegistry::new();
-        register_settings(&mut setting_registry);
-        let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
-
         let mut event_registry = EventRegistry::new();
+
+        #[cfg(feature = "os-integration")]
+        let os_reg = if os_integration {
+            Some(
+                aperture_os::register(
+                    &mut task_registry,
+                    &mut setting_registry,
+                    &mut event_registry,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        #[cfg(not(feature = "os-integration"))]
+        let _ = os_integration;
+
+        register_tasks(&mut task_registry, artifacts.clone(), tls_addr);
+        register_settings(&mut setting_registry);
         register_events(&mut event_registry);
 
-        let scheduler = Scheduler::new(storage.task_schedules()?, tasks.clone());
+        let tasks = Tasks::new(storage.tasks()?, task_registry);
+        let settings = Settings::new(storage.settings()?, setting_registry, event_bus.clone());
+        let mut automation = Automation::new(tasks.clone(), storage.task_schedules()?, &event_bus);
+
+        if tls_addr.is_some() {
+            automation.on_event(
+                "os.hostname_applied",
+                RegenerateCertificateDefinition::KEY,
+                |data| json!({ "hostname": data["hostname"] }),
+            );
+        }
+
+        #[cfg(feature = "os-integration")]
+        let (hostname, os_worker) = match os_reg {
+            Some(reg) => {
+                let (h, w) = aperture_os::bootstrap(
+                    reg,
+                    &settings,
+                    &tasks,
+                    tls_addr.map(|a| a.port()),
+                    plain_addr.map(|a| a.port()),
+                    event_bus.clone(),
+                )
+                .await?;
+                (Some(h), Some(w))
+            }
+            None => (None, None),
+        };
+
+        #[cfg(not(feature = "os-integration"))]
+        let hostname: Option<String> = None;
 
         let spectra = Spectra::new(
             artifacts.clone(),
@@ -131,13 +178,27 @@ pub async fn serve(
             anyhow::bail!("event recorder connected twice");
         };
 
-        let server = HttpServer::start(artifacts, tls_addr, plain_addr, app, &event_bus).await?;
+        let server = HttpServer::start(
+            artifacts,
+            tls_addr,
+            plain_addr,
+            hostname.as_deref(),
+            app,
+            &event_bus,
+        )
+        .await?;
 
         let mut supervisor = Supervisor::new();
         supervisor.spawn("http", server);
-        supervisor.spawn("tasks", TasksWorker::new(scheduler, tasks.clone()));
+        supervisor.spawn("automation", automation);
         supervisor.spawn("spectra", SpectraWorker::new(spectra.clone()));
         supervisor.spawn_last("events", event_recorder);
+
+        #[cfg(feature = "os-integration")]
+        if let Some(worker) = os_worker {
+            supervisor.spawn("os", worker);
+        }
+
         anyhow::Ok(supervisor)
     }
     .await
@@ -187,9 +248,20 @@ async fn shutdown_signal() {
 }
 
 /// Registers every task definition the gateway supports.
-fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts) {
+fn register_tasks(registry: &mut TaskRegistry, artifacts: Artifacts, tls_addr: Option<SocketAddr>) {
+    let cert_lock = Arc::new(Mutex::new(()));
+
     registry.register(Arc::new(DownloadDefinition::new(artifacts.clone())));
-    registry.register(Arc::new(RotateCertificateDefinition::new(artifacts)));
+    registry.register(Arc::new(RotateCertificateDefinition::new(
+        artifacts.clone(),
+        cert_lock.clone(),
+    )));
+
+    if let Some(addr) = tls_addr {
+        registry.register(Arc::new(RegenerateCertificateDefinition::new(
+            artifacts, addr, cert_lock,
+        )));
+    }
 }
 
 /// Registers every setting the gateway supports.
@@ -274,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_rejects_when_no_listeners_configured() {
-        let err = serve(None, None, PathBuf::from("/nonexistent"))
+        let err = serve(None, None, PathBuf::from("/nonexistent"), false)
             .await
             .unwrap_err();
         assert!(
@@ -297,7 +369,7 @@ mod tests {
 
         let dir = temp_dir().join(format!("aperture-failed-startup-{}", id()));
         let _ = fs::remove_dir_all(&dir).await;
-        let result = serve(None, Some(addr), dir.clone()).await;
+        let result = serve(None, Some(addr), dir.clone(), false).await;
         assert!(
             result.is_err(),
             "startup must fail while the port is occupied"

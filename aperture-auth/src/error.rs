@@ -1,6 +1,5 @@
 //! Errors returned by the auth layer.
 
-use std::error::Error as StdError;
 use std::result::Result as StdResult;
 
 /// Errors from the auth layer.
@@ -8,9 +7,6 @@ use std::result::Result as StdResult;
 pub enum AuthError {
     #[error("database error: {0}")]
     Storage(#[from] aperture_storage::StorageError),
-
-    #[error("policy error: {0}")]
-    Policy(#[source] anyhow::Error),
 
     #[error("internal error")]
     Internal(#[source] anyhow::Error),
@@ -56,24 +52,6 @@ pub enum AuthError {
 
     #[error("too many login attempts, try again later")]
     TooManyAttempts,
-}
-
-impl AuthError {
-    /// Converts a casbin error into an [`AuthError`]. If the casbin error
-    /// wraps a [`aperture_storage::StorageError`] (the common case, since our
-    /// adapter boxes storage errors into casbin's `AdapterError`), the
-    /// original storage error is recovered so callers see the real cause.
-    /// Everything else is wrapped opaquely as [`AuthError::Policy`].
-    pub(crate) fn from_casbin(err: casbin::Error) -> Self {
-        if let casbin::Error::AdapterError(adapter_err) = err {
-            let boxed: Box<dyn StdError + Send + Sync> = adapter_err.0;
-            return match boxed.downcast::<aperture_storage::StorageError>() {
-                Ok(storage_err) => Self::Storage(*storage_err),
-                Err(other) => Self::Policy(anyhow::Error::from_boxed(other)),
-            };
-        }
-        Self::Policy(err.into())
-    }
 }
 
 pub type Result<T> = StdResult<T, AuthError>;
