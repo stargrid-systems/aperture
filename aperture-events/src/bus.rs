@@ -20,7 +20,7 @@ const CHANNEL_CAPACITY: usize = 64;
 /// Capacity of the channel feeding the event recorder. `emit` applies
 /// backpressure once this many events are still unrecorded, so the queue
 /// absorbs bursts without ever dropping events.
-const RECORDER_CAPACITY: usize = 1024;
+pub const RECORDER_CAPACITY: usize = 1024;
 
 /// Central event bus for domain events.
 ///
@@ -95,7 +95,7 @@ impl EventBus {
     ///
     /// Subscribers are dispatched to before the recorder queue is awaited, so
     /// a slow recorder never delays live subscribers. Blocks while the
-    /// recorder queue is full (see `RECORDER_CAPACITY`). Until then emission
+    /// recorder queue is full (see [`RECORDER_CAPACITY`]). Until then emission
     /// is allocation-cheap for payloads up to 64 bytes.
     ///
     /// # Errors

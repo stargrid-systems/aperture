@@ -24,7 +24,9 @@ pub struct CellguardConfig {
     /// is disconnected once this many intervals have elapsed since its
     /// last valid reply: that threshold is elapsed time, so the
     /// open-retry backoff cadence does not shift when the disconnect
-    /// fires.
+    /// fires. On a silent-but-open link the effective disconnect latency
+    /// is dominated by the round duration, because each silent slot burns
+    /// `2 * reply_timeout` (the wait plus the resync grace after it).
     pub stale_after: u32,
     /// Delay before the first port-open retry.
     pub open_retry_delay: Duration,

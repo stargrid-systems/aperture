@@ -25,9 +25,10 @@
 //!   pending event waits at most 200 ms for its flush. A failing flush stalls
 //!   draining for as long as it is retried.
 //! - The recorder queue never drops events. When it is full, `emit` applies
-//!   backpressure. Before any recorder connects, emits fill the queue (1024
-//!   events) and then backpressure indefinitely. Once a recorder connected and
-//!   its channel was dropped, `emit` fails with `EventError::RecorderClosed`.
+//!   backpressure. Before any recorder connects, emits fill the queue
+//!   ([`RECORDER_CAPACITY`] events) and then backpressure indefinitely. Once a
+//!   recorder connected and its channel was dropped, `emit` fails with
+//!   `EventError::RecorderClosed`.
 //! - A failing recorder flush is retried with backoff for up to 30 s while the
 //!   recorder runs. Once shutdown begins, the whole drain shares one 20 s retry
 //!   budget. When the active window passes, the remaining events are dropped
@@ -38,7 +39,7 @@
 //! - Ordering is per consumer. Concurrent emits may reach a subscriber in a
 //!   different order than the recorder persists them.
 
-pub use self::bus::EventBus;
+pub use self::bus::{EventBus, RECORDER_CAPACITY};
 pub use self::definition::EventDefinition;
 pub use self::erased::ErasedEventDefinition;
 pub use self::error::EventError;

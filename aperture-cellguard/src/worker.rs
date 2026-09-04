@@ -261,6 +261,15 @@ impl WorkingState {
             }
         }
     }
+
+    /// Marks the link as fresh: identity runs again, and any half-answered
+    /// identity cached from the old link is dropped so it cannot pair with
+    /// a swapped-in device's other half.
+    const fn mark_link_fresh(&mut self) {
+        self.identity_pending = true;
+        self.partial_device_id = None;
+        self.partial_serial = None;
+    }
 }
 
 /// Outcome of one slot's exchange within a round.
@@ -357,7 +366,7 @@ impl<F: LinkFactory> Worker for CellguardWorker<F> {
                 match opened {
                     Ok(link) => {
                         open_backoff = self.inner.config.open_retry_delay;
-                        self.state.identity_pending = true;
+                        self.state.mark_link_fresh();
                         framed = Some(Framed::new(link));
                     }
                     Err(err) => {
@@ -384,7 +393,7 @@ impl<F: LinkFactory> Worker for CellguardWorker<F> {
             self.finish_round(&mut round, &mut link, &stop).await;
             if round.link_dead {
                 drop(link);
-                self.state.identity_pending = true;
+                self.state.mark_link_fresh();
             } else {
                 framed = Some(link);
             }
@@ -764,7 +773,7 @@ mod tests {
     use std::future::Future;
     use std::io;
 
-    use aperture_events::{Delivery, EventBus, TypedEventStream};
+    use aperture_events::{Delivery, EventBus, RECORDER_CAPACITY, TypedEventStream};
     use aperture_runtime::{ShutdownOutcome, Supervisor};
     use cellguard_protocol::{
         Decoder, Packet, RAILS, SERIAL_LEN, TEMP_INVALID, TEMP_ORDER, encode_frame, max_encoded_len,
@@ -998,18 +1007,26 @@ mod tests {
     }
 
     fn device_id_payload() -> Vec<u8> {
+        device_id_payload_for(0x1234, 0x56, 7)
+    }
+
+    fn device_id_payload_for(model: u16, revision: u8, fw: u32) -> Vec<u8> {
         let id = DeviceId {
-            board_model: 0x1234,
-            board_revision: 0x56,
-            fw_version: 7,
+            board_model: model,
+            board_revision: revision,
+            fw_version: fw,
         };
         let mut buf = [0; DeviceId::PAYLOAD_LEN];
         id.encode(&mut buf).expect("fits").to_vec()
     }
 
     fn serial_payload() -> Vec<u8> {
+        serial_payload_for(0xAB)
+    }
+
+    fn serial_payload_for(byte: u8) -> Vec<u8> {
         let serial = SerialNumber {
-            serial: [0xAB; SERIAL_LEN],
+            serial: [byte; SERIAL_LEN],
         };
         let mut buf = [0; SerialNumber::PAYLOAD_LEN];
         serial.encode(&mut buf).expect("fits").to_vec()
@@ -1535,6 +1552,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn swapped_device_does_not_inherit_partial_identity() {
+        let event_bus = EventBus::new();
+        // The first device answers DeviceId but never the serial number,
+        // so its half of the identity stays cached. The link dies and a
+        // swapped-in device with a different identity appears: the cached
+        // half must not pair with the new device's serial.
+        let mut first = DeviceState::default();
+        first.enqueue(
+            Kind::ReadDeviceId,
+            Action::reply(Kind::DeviceId, device_id_payload()),
+        );
+        first.always(Kind::ReadSerialNumber, &Action::Silence);
+        answering_telemetry_forever(&mut first);
+        for (kind, queue) in &mut first.replies {
+            if *kind == Kind::ReadCellVoltages {
+                *queue = VecDeque::from([
+                    Action::reply(
+                        Kind::CellVoltages,
+                        snapshot_payload(1, [100, 200, 300, 400]),
+                    ),
+                    Action::Die,
+                ]);
+            }
+        }
+        let first = Arc::new(Mutex::new(first));
+
+        let mut second = DeviceState::default();
+        second.always(
+            Kind::ReadDeviceId,
+            &Action::reply(Kind::DeviceId, device_id_payload_for(0x4321, 0x99, 9)),
+        );
+        second.always(
+            Kind::ReadSerialNumber,
+            &Action::reply(Kind::SerialNumber, serial_payload_for(0xCD)),
+        );
+        answering_telemetry_forever(&mut second);
+        let second = Arc::new(Mutex::new(second));
+
+        let factory = FakeFactory::new(VecDeque::from([Ok(first), Ok(second.clone())]));
+        let inner = test_inner(test_config(), &event_bus);
+
+        let mut supervisor = Supervisor::new();
+        supervisor.spawn("cellguard", CellguardWorker::new(inner.clone(), factory));
+        assert!(
+            wait_for(|| async {
+                inner
+                    .snapshots
+                    .load_full()
+                    .cellcore
+                    .identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.board_model == 0x4321)
+            })
+            .await,
+            "the published identity must come from the swapped-in device"
+        );
+
+        let identity = inner
+            .snapshots
+            .load_full()
+            .cellcore
+            .identity
+            .clone()
+            .expect("identity");
+        assert_eq!(identity.board_model, 0x4321);
+        assert_eq!(identity.board_revision, 0x99);
+        assert_eq!(identity.fw_version, 9);
+        assert_eq!(identity.serial, hex::encode([0xCD; SERIAL_LEN]));
+
+        let second = second.lock().await;
+        assert_eq!(
+            second.count(Kind::ReadDeviceId),
+            1,
+            "the swapped-in device must be asked for its own id"
+        );
+
+        supervisor.trigger();
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn open_retries_until_the_device_appears() {
         let event_bus = EventBus::new();
         let device = answering_device();
@@ -1590,23 +1688,23 @@ mod tests {
     #[tokio::test]
     async fn late_reply_lands_in_its_own_slot() {
         let event_bus = EventBus::new();
-        // The rails reply arrives after its own timeout, during the
-        // temperatures wait. The driver must store it under rails, not
-        // corrupt the temperatures slot.
+        // The rails reply arrives after its own exchange timed out and
+        // after the resync drain closed (2 * reply_timeout), so it lands
+        // as a stray during a later exchange. No fallback reply is
+        // scripted: only genuine absorption can fill the rails slot.
         let mut device = DeviceState::default();
         answering(&mut device);
-        device.enqueue(
-            Kind::ReadRails,
-            Action::late_reply(
-                Kind::Rails,
-                rails_payload([7, 7, 7, 7, 7, 7, 7, 7]),
-                Duration::from_millis(70),
-            ),
-        );
-        device.always(
-            Kind::ReadRails,
-            &Action::reply(Kind::Rails, rails_payload([7, 7, 7, 7, 7, 7, 7, 7])),
-        );
+        let rails = device
+            .replies
+            .iter_mut()
+            .find(|(kind, _)| *kind == Kind::ReadRails)
+            .map(|entry| &mut entry.1)
+            .expect("scripted");
+        *rails = VecDeque::from([Action::late_reply(
+            Kind::Rails,
+            rails_payload([7, 7, 7, 7, 7, 7, 7, 7]),
+            Duration::from_millis(130),
+        )]);
         let device = Arc::new(Mutex::new(device));
         let factory = FakeFactory::new(VecDeque::from([Ok(device)]));
         let inner = test_inner(test_config(), &event_bus);
@@ -1751,11 +1849,11 @@ mod tests {
     #[tokio::test]
     async fn events_see_the_published_snapshot() {
         let event_bus = EventBus::new();
-        // Saturate the recorder channel (capacity 1024) so the worker
-        // blocks inside `emit` after dispatching: the subscriber then
-        // reads the snapshot while the emit is still in flight, which
-        // makes the publish-before-emit order observable.
-        for _ in 0..1024 {
+        // Saturate the recorder channel so the worker blocks inside
+        // `emit` after dispatching: the subscriber then reads the
+        // snapshot while the emit is still in flight, which makes the
+        // publish-before-emit order observable.
+        for _ in 0..RECORDER_CAPACITY {
             event_bus.emit(Clog, ActorId::SYSTEM).await.unwrap();
         }
 

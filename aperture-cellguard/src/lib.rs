@@ -14,10 +14,10 @@
 //!   until they answer, then one round of telemetry reads per
 //!   [`CellguardConfig::poll_interval`], with reply timeouts and stop-and-wait
 //!   ordering like `cellguard-cli`
-//! - the staleness model: a kind that stops answering for
-//!   [`CellguardConfig::stale_after`] intervals is stale, a device whose last
-//!   valid reply is older than that is disconnected. Both transitions emit
-//!   domain events on the [`EventBus`].
+//! - the staleness model: a kind is stale after
+//!   [`CellguardConfig::stale_after`] consecutive failed polls, and the device
+//!   is disconnected once the same number of intervals has elapsed since its
+//!   last valid reply. Both transitions emit domain events on the [`EventBus`].
 //!
 //! Snapshots stay in memory. Persistence and per-MCU inventory arrive with
 //! the entity model.

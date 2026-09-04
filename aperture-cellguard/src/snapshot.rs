@@ -53,10 +53,11 @@ pub struct Cached<T> {
     /// When the value was read. It only advances when a poll succeeds, so
     /// the age of the data is `now - updated_at`.
     pub updated_at: Timestamp,
-    /// The kind stopped answering within the staleness window. A `Nack`
-    /// does not clear this flag: a rejection is an answer but brings no
-    /// data. A kind that answers `Nack` forever never goes stale at all,
-    /// so judge the age of the data with `updated_at` as well.
+    /// The kind failed [`crate::CellguardConfig::stale_after`] consecutive
+    /// polls. A `Nack` does not clear this flag: a rejection is an answer
+    /// but brings no data. A kind that answers `Nack` forever never goes
+    /// stale at all, so judge the age of the data with `updated_at` as
+    /// well.
     pub stale: bool,
 }
 
