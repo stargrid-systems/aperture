@@ -40,6 +40,15 @@ struct RunArgs {
     /// Directory for runtime data and cached components.
     #[arg(long, env = "APERTURE_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
+    /// Serial device path of the `CellGuard` bus (e.g. /dev/ttyUSB0).
+    /// Starts the cellguard device driver when set.
+    #[cfg(feature = "cellguard")]
+    #[arg(long, env = "APERTURE_CELLGUARD")]
+    cellguard: Option<PathBuf>,
+    /// Baud rate of the `CellGuard` bus serial device.
+    #[cfg(feature = "cellguard")]
+    #[arg(long, env = "APERTURE_CELLGUARD_BAUD", default_value_t = 115_200)]
+    cellguard_baud: u32,
     /// Enable OS integration (mDNS publishing, hostname management).
     #[cfg(feature = "os-integration")]
     #[arg(long, env = "APERTURE_OS_INTEGRATION", default_value_t = false)]
@@ -94,11 +103,19 @@ fn main() -> anyhow::Result<()> {
             let os_integration = args.os_integration;
             #[cfg(not(feature = "os-integration"))]
             let os_integration = false;
+            #[cfg(feature = "cellguard")]
+            let cellguard = args.cellguard.map(|path| aperture::CellguardOptions {
+                path,
+                baud: args.cellguard_baud,
+            });
+            #[cfg(not(feature = "cellguard"))]
+            let cellguard = None;
             block_on(aperture::serve(
                 args.https_addr.0,
                 args.http_addr.0,
                 args.data_dir,
                 os_integration,
+                cellguard,
             ))
         }
         Command::ResetPassword(args) => {

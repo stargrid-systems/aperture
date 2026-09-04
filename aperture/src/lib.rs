@@ -18,6 +18,15 @@
 //! Requires a system D-Bus with `org.freedesktop.hostname1`
 //! (systemd-hostnamed) and, for mDNS, `org.freedesktop.Avahi`
 //! (avahi-daemon).
+//!
+//! ## `cellguard`
+//!
+//! Opt-in `CellGuard` bus driver, compiled in with this feature and enabled
+//! at runtime with the `--cellguard` flag (or the `APERTURE_CELLGUARD`
+//! environment variable, plus `APERTURE_CELLGUARD_BAUD` for the baud
+//! rate). When enabled, the gateway polls the cellcore node on the bus,
+//! keeps its readings in memory, and emits `cellguard.*` domain events for
+//! the connection lifecycle.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -52,6 +61,16 @@ mod logging;
 /// Version of the Aperture gateway.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// `CellGuard` bus connection settings, taken from the `--cellguard` and
+/// `--cellguard-baud` flags.
+#[derive(Debug, Clone)]
+pub struct CellguardOptions {
+    /// Serial device path of the bus, e.g. `/dev/ttyUSB0`.
+    pub path: PathBuf,
+    /// Bus baud rate. The firmware runs 115200.
+    pub baud: u32,
+}
+
 /// Installs `ring` as the process-wide rustls crypto provider.
 ///
 /// The provider drives cipher suite selection, so it is never overridden: if
@@ -67,6 +86,8 @@ fn init_crypto_provider() {
 /// `tls_addr` and `plain_addr` are independently optional. When both are
 /// set, HTTP redirects to HTTPS. The TLS PKI and rotation schedule are only
 /// touched when `tls_addr` is set. At least one listener must be set.
+/// `cellguard` enables the `CellGuard` bus driver; it is inert without the
+/// `cellguard` feature.
 ///
 /// # Errors
 ///
@@ -80,6 +101,7 @@ pub async fn serve(
     plain_addr: Option<SocketAddr>,
     data_dir: PathBuf,
     os_integration: bool,
+    cellguard: Option<CellguardOptions>,
 ) -> anyhow::Result<()> {
     if tls_addr.is_none() && plain_addr.is_none() {
         anyhow::bail!(
@@ -232,6 +254,15 @@ pub async fn serve(
             );
         }
 
+        #[cfg(feature = "cellguard")]
+        if let Some(options) = cellguard {
+            let config = aperture_cellguard::CellguardConfig::new(options.path, options.baud);
+            let driver = aperture_cellguard::Cellguard::new(config, event_bus.clone());
+            supervisor.spawn("cellguard", driver.into_worker());
+        }
+        #[cfg(not(feature = "cellguard"))]
+        let _ = cellguard;
+
         anyhow::Ok(())
     }
     .await;
@@ -313,6 +344,12 @@ fn register_events(registry: &mut EventRegistry) {
     registry.register(Arc::new(ArtifactWritten::default()));
     registry.register(Arc::new(ArtifactRemoved::default()));
     registry.register(Arc::new(ArtifactOrphanRemoved::default()));
+    #[cfg(feature = "cellguard")]
+    {
+        registry.register(Arc::new(aperture_cellguard::DeviceConnected::default()));
+        registry.register(Arc::new(aperture_cellguard::DeviceDisconnected::default()));
+        registry.register(Arc::new(aperture_cellguard::SnapshotStale::default()));
+    }
 }
 
 /// Resets the password for `username` and prints the new password to stdout.
@@ -372,12 +409,18 @@ mod tests {
         let mut registered: Vec<_> = registry.keys().collect();
         registered.sort_unstable();
 
-        let mut emitted = [
+        let mut emitted = vec![
             ArtifactOrphanRemoved::KEY,
             ArtifactRemoved::KEY,
             ArtifactWritten::KEY,
             SettingChange::KEY,
         ];
+        #[cfg(feature = "cellguard")]
+        emitted.extend([
+            aperture_cellguard::DeviceConnected::KEY,
+            aperture_cellguard::DeviceDisconnected::KEY,
+            aperture_cellguard::SnapshotStale::KEY,
+        ]);
         emitted.sort_unstable();
 
         assert_eq!(registered, emitted);
@@ -385,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_rejects_when_no_listeners_configured() {
-        let err = serve(None, None, PathBuf::from("/nonexistent"), false)
+        let err = serve(None, None, PathBuf::from("/nonexistent"), false, None)
             .await
             .unwrap_err();
         assert!(
@@ -426,7 +469,7 @@ mod tests {
                 .unwrap();
         }
 
-        let result = serve(None, Some(addr), dir.clone(), false).await;
+        let result = serve(None, Some(addr), dir.clone(), false, None).await;
         assert!(
             result.is_err(),
             "startup must fail while the port is occupied"
